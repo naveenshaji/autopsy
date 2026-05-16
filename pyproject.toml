@@ -1,0 +1,50 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "autopsy-memory"
+version = "0.1.0"
+description = "Local-first Falkor-backed memory layer and CLI for coding agents."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE.md" }
+authors = [
+  { name = "Naveen Shaji" }
+]
+keywords = ["agents", "memory", "cli", "falkordb", "local-first"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development",
+]
+dependencies = [
+  "falkordb>=1.0.10",
+  "redis>=5.0",
+  "redislite>=6.2.912183",
+]
+
+[project.optional-dependencies]
+ml = [
+  "sentence-transformers>=2.7",
+]
+dev = [
+  "pytest>=8.0",
+]
+all = [
+  "sentence-transformers>=2.7",
+  "pytest>=8.0",
+]
+
+[project.scripts]
+autopsy = "autopsy_memory.cli:main"
+autopsy-memory-worker = "autopsy_memory.worker:main"
+autopsy-memory-mcp = "autopsy_memory.mcp_bridge:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/autopsy_memory"]
