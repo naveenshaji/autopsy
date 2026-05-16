@@ -7,7 +7,7 @@ name = "autopsy-memory"
 version = "0.1.0"
 description = "Local-first Falkor-backed memory layer and CLI for coding agents."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = { file = "LICENSE.md" }
 authors = [
   { name = "Naveen Shaji" }
@@ -18,15 +18,14 @@ classifiers = [
   "Environment :: Console",
   "Intended Audience :: Developers",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.10",
-  "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Topic :: Software Development",
 ]
 dependencies = [
   "falkordb>=1.0.10",
+  "falkordblite>=0.10.0",
   "redis>=5.0",
-  "redislite>=6.2.912183",
 ]
 
 [project.optional-dependencies]
@@ -34,9 +33,11 @@ ml = [
   "sentence-transformers>=2.7",
 ]
 dev = [
+  "build>=1.2",
   "pytest>=8.0",
 ]
 all = [
+  "build>=1.2",
   "sentence-transformers>=2.7",
   "pytest>=8.0",
 ]

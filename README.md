@@ -19,7 +19,7 @@ Use a virtual environment while the package is still pre-release:
 
 ```bash
 cd /Users/naveenshaji/github/codex/projects/autopsy
-python3 -m venv .venv
+python3.12 -m venv .venv
 . .venv/bin/activate
 python -m pip install -U pip
 python -m pip install -e ".[ml,dev]"
@@ -34,10 +34,12 @@ python -m pip install -e .
 ## Quickstart
 
 ```bash
+autopsy version
 autopsy doctor
 autopsy status
 autopsy consult --query "release decisions for this repo"
 autopsy capture-outcome --outcome decision --title "Use Falkor only" --content "Falkor is the authoritative memory backend."
+autopsy backup
 autopsy benchmark --sample-size 5 --include-sync
 ```
 
@@ -58,6 +60,9 @@ autopsy timeline <stable-key>
 autopsy neighbors --stable-key <stable-key>
 autopsy snapshot <stable-key>
 autopsy capture-outcome --outcome decision --title "..." --content "..."
+autopsy export --output ~/Desktop/autopsy-memory-export.json
+autopsy backup
+autopsy instructions
 autopsy benchmark --sample-size 5 --include-sync
 ```
 
@@ -121,6 +126,16 @@ autopsy benchmark --sample-size 5 --include-sync
 Do not claim memory health unless the benchmark passes or failures are explicitly reported.
 
 The current internal benchmark is a product gate, not a public leaderboard. Public-style benchmarking requires seeded corpora, hidden queries, relevance judgments, large-graph latency measurements, and cost reporting. See [docs/benchmarks.md](docs/benchmarks.md).
+
+## Release Checks
+
+Before publishing a release:
+
+```bash
+./scripts/release-check.sh
+```
+
+The release checklist lives at [docs/release-checklist.md](docs/release-checklist.md).
 
 ## Repository Split
 

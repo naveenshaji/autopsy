@@ -2,6 +2,7 @@
 import argparse
 import copy
 import hashlib
+import importlib.metadata
 import json
 import os
 import re
@@ -19,6 +20,34 @@ FALKORDB_LITE_PATH_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "FalkorDB" / "autopsy-mem
 GLOBAL_MEMORY_SETTINGS_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "Config" / "memory-settings.json"
 UNIFIED_MEMORY_ROOT_DEFAULT = Path.home() / "github" / "codex"
 STATUS_WINDOW_DAYS_DEFAULT = 21
+PACKAGE_NAME = "autopsy-memory"
+FALLBACK_VERSION = "0.1.0"
+
+AGENT_INSTRUCTIONS = """## Autopsy Memory Usage
+
+Use Autopsy memory for nontrivial repo work, debugging, releases, architecture questions, and any task where prior decisions may matter.
+
+Before substantial work:
+- Run `autopsy status --current-only`.
+- Run `autopsy consult --current-only --query "<task/context query>"`.
+- Prefer `consult` over `search` when relying on memory.
+
+When reading memory:
+- Inspect `workflow.complete`.
+- If `workflow.complete` is `false`, follow suggested next steps before relying on the result.
+- Use `item`, `timeline`, and `neighbors` for exact fact inspection.
+- Treat memory as evidence, not absolute truth; verify drift-prone facts against code/config/git.
+
+When writing memory:
+- After material work, write durable outcomes with `autopsy capture-outcome`.
+- Use specific outcomes: `decision`, `attempt`, `question`, `preference`, `plan`, `resolved-question`, or `reverted-attempt`.
+- Add explicit relations when possible: `--informed-by`, `--answers`, `--supersedes`, `--reverts`, `--depends-on`, `--implements`, `--constrains`, or `--refines`.
+- For repo work, pass `--repository-root-path <repo-root>` or `--scope repo --repo <repo-root>`.
+
+For memory-system changes:
+- Run `autopsy benchmark --sample-size 5 --include-sync`.
+- Do not claim memory health unless the benchmark passes or failures are explicitly reported.
+"""
 
 SEARCHABLE_KINDS = {
     "decision",
@@ -146,6 +175,13 @@ def fail(message: str, code: int = 1) -> None:
     raise SystemExit(code)
 
 
+def package_version() -> str:
+    try:
+        return importlib.metadata.version(PACKAGE_NAME)
+    except importlib.metadata.PackageNotFoundError:
+        return FALLBACK_VERSION
+
+
 def workflow_step(name: str, reason: str, command: str | None = None) -> dict[str, Any]:
     payload = {"name": name, "reason": reason}
     if command:
@@ -228,7 +264,7 @@ def build_read_workflow(
             ))
         if thread_id:
             suggested.append(workflow_step(
-                "thread-related",
+                "inspect-thread-neighbors",
                 "Check thread-scoped semantic memory before concluding there is no relevant prior context.",
                 f"autopsy neighbors --thread-id {cli_quote(thread_id)}{current_clause}{as_of_clause}",
             ))
@@ -536,7 +572,7 @@ def load_falkordblite():
         from redislite.falkordb_client import FalkorDB
     except ImportError:
         raise RuntimeError(
-            "falkordblite is not installed. Install it with: python3 -m pip install falkordblite"
+            "embedded FalkorDB requires FalkorDBLite. Install it with: python3 -m pip install falkordblite"
         )
     return FalkorDB
 
@@ -1818,15 +1854,16 @@ def build_status_payload(
     first_item = next((item for item in combined if item.get("stable_key")), None)
     if first_item:
         first_key = str(first_item["stable_key"])
+        workspace_arg = cli_quote(workspace["root_path"])
         suggestions.append(tool.workflow_step(
             "inspect-item",
             "Inspect the top current-state item when you need the full underlying fact details.",
-            f'autopsy memory item {first_key} --workspace {workspace["root_path"]}'
+            f"autopsy item {first_key} --workspace {workspace_arg}"
         ))
         suggestions.append(tool.workflow_step(
             "inspect-timeline",
             "Inspect timeline when the current state may depend on recent supersession or invalidation.",
-            f'autopsy memory timeline {first_key} --workspace {workspace["root_path"]}'
+            f"autopsy timeline {first_key} --workspace {workspace_arg}"
         ))
 
     return {
@@ -4465,6 +4502,177 @@ def cmd_delete_item(args: argparse.Namespace) -> None:
     print(json.dumps({"deleted": True, "stable_key": args.stable_key}, indent=2))
 
 
+def export_memory_payload(
+    graph,
+    *,
+    workspace: dict[str, Any],
+    include_operational: bool = False,
+    limit: int = 0,
+) -> dict[str, Any]:
+    max_items = max(0, int(limit or 0))
+    item_query = """
+        MATCH (node:MemoryNode)
+        WHERE $include_operational OR node.kind IN $semantic_kinds
+        RETURN
+          node.entity_id,
+          node.stable_key,
+          node.kind,
+          node.label,
+          node.summary,
+          node.detail_content,
+          node.source_kind,
+          coalesce(node.confidence, 1.0),
+          node.created_at,
+          node.updated_at
+        ORDER BY node.updated_at DESC, node.entity_id DESC
+    """
+    params = {
+        "include_operational": bool(include_operational),
+        "semantic_kinds": sorted(SEARCHABLE_KINDS),
+    }
+    if max_items > 0:
+        item_query += "\n        LIMIT $limit"
+        params["limit"] = max_items
+    rows = result_rows(graph.query(item_query, params=params))
+    items = [
+        {
+            "entity_id": int(row[0]),
+            "stable_key": str(row[1] or ""),
+            "kind": str(row[2] or ""),
+            "title": str(row[3] or ""),
+            "summary": str(row[4] or ""),
+            "content": str(row[5] or ""),
+            "source_kind": str(row[6] or ""),
+            "confidence": 1.0 if row[7] is None else float(row[7]),
+            "created_at": str(row[8] or ""),
+            "updated_at": str(row[9] or ""),
+        }
+        for row in rows
+    ]
+    stable_keys = [item["stable_key"] for item in items if item.get("stable_key")]
+    fact_edges: list[dict[str, Any]] = []
+    structural_edges: list[dict[str, Any]] = []
+    if stable_keys:
+        fact_rows = result_rows(graph.query(
+            """
+            MATCH (source:MemoryNode)-[fact:FACT_EDGE]->(target:MemoryNode)
+            WHERE source.stable_key IN $stable_keys AND target.stable_key IN $stable_keys
+            RETURN
+              source.stable_key,
+              target.stable_key,
+              fact.relation,
+              fact.predicate,
+              fact.fact_text,
+              fact.valid_at,
+              fact.invalid_at,
+              fact.expired_at,
+              fact.updated_at
+            ORDER BY fact.updated_at DESC
+            """,
+            params={"stable_keys": stable_keys},
+        ))
+        fact_edges = [
+            {
+                "from": str(row[0] or ""),
+                "to": str(row[1] or ""),
+                "relation": str(row[2] or ""),
+                "predicate": str(row[3] or ""),
+                "fact_text": str(row[4] or ""),
+                "valid_at": str(row[5] or ""),
+                "invalid_at": str(row[6] or ""),
+                "expired_at": str(row[7] or ""),
+                "updated_at": str(row[8] or ""),
+            }
+            for row in fact_rows
+        ]
+        structural_rows = result_rows(graph.query(
+            """
+            MATCH (source:MemoryNode)-[edge]->(target:MemoryNode)
+            WHERE type(edge) IN $edge_types
+              AND source.stable_key IN $stable_keys
+              AND target.stable_key IN $stable_keys
+            RETURN source.stable_key, target.stable_key, coalesce(edge.relation, toLower(type(edge))), edge.updated_at
+            ORDER BY edge.updated_at DESC
+            """,
+            params={"stable_keys": stable_keys, "edge_types": list(STRUCTURAL_EDGE_TYPES)},
+        ))
+        structural_edges = [
+            {
+                "from": str(row[0] or ""),
+                "to": str(row[1] or ""),
+                "relation": str(row[2] or ""),
+                "updated_at": str(row[3] or ""),
+            }
+            for row in structural_rows
+        ]
+    return {
+        "schema_version": 1,
+        "exported_at": utc_now_iso(),
+        "autopsy_version": package_version(),
+        "workspace": workspace_payload(workspace),
+        "graph_name": str(getattr(graph, "name", "") or ""),
+        "include_operational": bool(include_operational),
+        "items": items,
+        "relations": fact_edges,
+        "structural_edges": structural_edges,
+        "counts": {
+            "items": len(items),
+            "relations": len(fact_edges),
+            "structural_edges": len(structural_edges),
+        },
+    }
+
+
+def write_payload(payload: dict[str, Any], output: str | None = None) -> None:
+    serialized = json.dumps(payload, indent=2)
+    if output:
+        output_path = Path(output).expanduser()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(serialized + "\n", encoding="utf-8")
+        print(json.dumps({"written": str(output_path), "bytes": output_path.stat().st_size}, indent=2))
+        return
+    print(serialized)
+
+
+def cmd_export(args: argparse.Namespace) -> None:
+    _tool, workspace, _config, graph = open_workspace_graph(args)
+    payload = export_memory_payload(
+        graph,
+        workspace=workspace,
+        include_operational=bool(getattr(args, "include_operational", False)),
+        limit=int(getattr(args, "limit", 0) or 0),
+    )
+    write_payload(payload, getattr(args, "output", None))
+
+
+def cmd_backup(args: argparse.Namespace) -> None:
+    output = str(getattr(args, "output", "") or "").strip()
+    if not output:
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        output = str(APP_SUPPORT_DIR_DEFAULT / "Backups" / f"autopsy-memory-{timestamp}.json")
+    args.output = output
+    cmd_export(args)
+
+
+def cmd_version(args: argparse.Namespace) -> None:
+    payload = {
+        "version": package_version(),
+        "package": PACKAGE_NAME,
+        "python": sys.version.split()[0],
+    }
+    if getattr(args, "json", False):
+        print(json.dumps(payload, indent=2))
+    else:
+        print(payload["version"])
+
+
+def cmd_instructions(args: argparse.Namespace) -> None:
+    if getattr(args, "json", False):
+        print(json.dumps({"instructions": AGENT_INSTRUCTIONS}, indent=2))
+    else:
+        print(AGENT_INSTRUCTIONS.rstrip())
+
+
 def import_check(module_name: str, *, required: bool) -> dict[str, Any]:
     try:
         __import__(module_name)
@@ -4542,6 +4750,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    version_parser = subparsers.add_parser("version", help="Print the Autopsy memory package version.")
+    version_parser.add_argument("--json", action="store_true", help="Print version metadata as JSON.")
+    version_parser.set_defaults(func=cmd_version)
+
+    instructions_parser = subparsers.add_parser("instructions", help="Print copy-pasteable agent instructions for Autopsy memory.")
+    instructions_parser.add_argument("--json", action="store_true", help="Print instructions as JSON.")
+    instructions_parser.set_defaults(func=cmd_instructions)
+
     doctor_parser = subparsers.add_parser("doctor", parents=[common], help="Check local runtime dependencies and Autopsy memory paths.")
     doctor_parser.set_defaults(func=cmd_doctor)
 
@@ -4597,6 +4813,18 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark_parser.add_argument("--skip-write-probe", action="store_true")
     benchmark_parser.add_argument("--current-only", action="store_true", help="Accepted for compatibility; benchmark reads the current graph by default.")
     benchmark_parser.set_defaults(func=cmd_benchmark)
+
+    export_parser = subparsers.add_parser("export", parents=[common], help="Export memory items and in-graph relations as JSON.")
+    export_parser.add_argument("--output", "-o", help="Write JSON to this path instead of stdout.")
+    export_parser.add_argument("--limit", type=int, default=0, help="Maximum number of items to export. Default exports all matching items.")
+    export_parser.add_argument("--include-operational", action="store_true", help="Include workspace/repository/thread/worktree/branch nodes.")
+    export_parser.set_defaults(func=cmd_export)
+
+    backup_parser = subparsers.add_parser("backup", parents=[common], help="Write a timestamped JSON memory backup.")
+    backup_parser.add_argument("--output", "-o", help="Write backup JSON to this path instead of the default backups directory.")
+    backup_parser.add_argument("--limit", type=int, default=0, help="Maximum number of items to export. Default exports all matching items.")
+    backup_parser.add_argument("--include-operational", action="store_true", help="Include workspace/repository/thread/worktree/branch nodes.")
+    backup_parser.set_defaults(func=cmd_backup)
 
     create_parser = subparsers.add_parser("create", parents=[common], help="Create a typed Falkor memory note.")
     add_note_write_arguments(create_parser, include_kind=True)
@@ -4655,11 +4883,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     parser = build_parser()
-    raw_args = sys.argv[1:]
-    if raw_args[:1] == ["memory"]:
-        raw_args = raw_args[1:]
-    args = parser.parse_args(raw_args)
+    args = parser.parse_args(normalized_cli_args(sys.argv[1:]))
     args.func(args)
+
+
+def normalized_cli_args(raw_args: list[str]) -> list[str]:
+    if raw_args[:1] == ["memory"]:
+        return raw_args[1:]
+    return raw_args
 
 
 if __name__ == "__main__":

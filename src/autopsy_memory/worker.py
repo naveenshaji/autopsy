@@ -135,13 +135,13 @@ def build_read_workflow(
             suggested.append(workflow_step(
                 'fallback-search',
                 'No strong memory hits were found. Fall back to keyword search before assuming no prior context exists.',
-                f'autopsy memory search {cli_quote(query)}{current_clause}{as_of_clause}',
+                f'autopsy search {cli_quote(query)}{current_clause}{as_of_clause}',
             ))
         if thread_id:
             suggested.append(workflow_step(
-                'thread-related',
+                'inspect-thread-neighbors',
                 'Check thread-scoped semantic memory before concluding there is no relevant prior context.',
-                f'autopsy memory thread-related {cli_quote(thread_id)}{current_clause}{as_of_clause}',
+                f'autopsy neighbors --thread-id {cli_quote(thread_id)}{current_clause}{as_of_clause}',
             ))
         return {
             'status': 'empty',
@@ -158,12 +158,12 @@ def build_read_workflow(
             suggested.append(workflow_step(
                 'inspect-lineage',
                 'If the retrieved memory may have changed over time, inspect its timeline before relying on it.',
-                f'autopsy memory timeline {cli_quote(first_hit_key)}',
+                f'autopsy timeline {cli_quote(first_hit_key)}',
             ))
             suggested.append(workflow_step(
                 'inspect-neighbors',
                 'Use neighbors when the answer depends on nearby related facts or state transitions.',
-                f'autopsy memory neighbors --stable-key {cli_quote(first_hit_key)}',
+                f'autopsy neighbors --stable-key {cli_quote(first_hit_key)}',
             ))
         return {
             'status': 'ok',
@@ -179,7 +179,7 @@ def build_read_workflow(
         suggested.append(workflow_step(
             'inspect-item',
             'Hits were found, but no item details were inspected yet.',
-            f'autopsy memory item {cli_quote(first_hit_key)}',
+            f'autopsy item {cli_quote(first_hit_key)}',
         ))
     return {
         'status': 'weak',

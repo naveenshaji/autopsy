@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e ".[dev]"
+
+      - name: Compile
+        run: python -m compileall -q src tests
+
+      - name: Unit tests
+        run: python -m unittest discover -s tests
+
+      - name: CLI smoke
+        run: |
+          autopsy --help >/dev/null
+          autopsy version --json
+          autopsy doctor
+          autopsy instructions >/dev/null
+
+      - name: Build wheel
+        run: python -m build --wheel

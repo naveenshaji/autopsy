@@ -23,6 +23,18 @@ Do not store secrets, API keys, credentials, private keys, or tokens in memory. 
 
 Back up the FalkorDBLite path if you need durable recovery. Do not copy the DB while a process is actively writing unless you understand the storage engine behavior.
 
+For a portable JSON backup, run:
+
+```bash
+autopsy backup
+```
+
+For a specific path:
+
+```bash
+autopsy export --output ~/Desktop/autopsy-memory-export.json
+```
+
 ## Failure Policy
 
 Autopsy fails loudly when Falkor cannot initialize. It does not silently switch to another local persistence backend.

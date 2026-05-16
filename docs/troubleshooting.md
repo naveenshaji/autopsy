@@ -4,6 +4,7 @@
 
 ```bash
 autopsy doctor
+autopsy version --json
 ```
 
 Required modules:
@@ -73,4 +74,18 @@ Then inspect:
 
 ```text
 ~/Library/Application Support/Autopsy/CLI/mcp-worker.stderr.log
+```
+
+## Release Check Fails
+
+Run the release check script from the repository root:
+
+```bash
+./scripts/release-check.sh
+```
+
+The script intentionally avoids writing to a live memory graph. Run the full benchmark separately before claiming memory health:
+
+```bash
+autopsy benchmark --sample-size 5 --include-sync
 ```
