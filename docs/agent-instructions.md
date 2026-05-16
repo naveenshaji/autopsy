@@ -44,6 +44,8 @@ Inspect `workflow.complete`.
 
 If `workflow.complete` is `false`, follow suggested next steps before relying on the result.
 
+If `workflow.status` is `weak_signals_only`, treat relationship/vector candidates as debugging hints, not as a reliable answer.
+
 Use exact inspection commands when the answer depends on a specific memory:
 
 ```bash
@@ -102,11 +104,34 @@ Supported relation flags:
 --refines
 ```
 
+Inspect `write_quality.warnings` after writes. If a write is short, low-signal, or possibly duplicate, expand it, update an existing item, or add explicit relations before relying on it as durable memory.
+
+## Backup And Restore
+
+Before large memory-system changes, run:
+
+```bash
+autopsy backup
+```
+
+Before any restore, validate first:
+
+```bash
+autopsy restore <backup.json> --dry-run
+```
+
+Use replace only when intentionally replacing matching restored keys:
+
+```bash
+autopsy restore <backup.json> --replace --yes
+```
+
 ## Memory-System Changes
 
 Run:
 
 ```bash
+autopsy health
 autopsy benchmark --sample-size 5 --include-sync
 ```
 

@@ -13,9 +13,11 @@ Use this checklist before tagging or publishing Autopsy Memory.
 - `which autopsy` points at the standalone memory CLI wrapper or package entrypoint.
 - `autopsy version --json` prints package metadata.
 - `autopsy doctor` passes in the target release environment.
+- `autopsy health` passes in an isolated release-check graph.
 - `autopsy init --check` reports target instruction state without writing.
 - `autopsy instructions` prints copy-pasteable agent instructions.
 - `autopsy export --limit 1` returns valid JSON.
+- `autopsy restore <export.json> --dry-run` validates without writing.
 - `autopsy benchmark --sample-size 5 --include-sync` passes before any health claim.
 
 ## Packaging
@@ -31,6 +33,7 @@ Use this checklist before tagging or publishing Autopsy Memory.
 - No alternate persistence backend is introduced.
 - No secrets are checked in.
 - Backup/export behavior is documented.
+- Restore defaults to merge, supports dry-run, and requires explicit confirmation for replace.
 - Public claims distinguish internal benchmark gates from public leaderboards.
 
 ## Optional Public Release

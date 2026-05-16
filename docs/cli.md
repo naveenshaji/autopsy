@@ -28,9 +28,12 @@ autopsy init --mcp
 ```bash
 autopsy version
 autopsy doctor
+autopsy health
 autopsy status --current-only
 autopsy benchmark --sample-size 5 --include-sync
 ```
+
+`health` is a lightweight product summary. It checks Falkor reachability, runtime dependencies, graph/index readiness, vector counts, backup freshness, and installed instruction state. It does not replace the benchmark gate.
 
 ## Retrieval
 
@@ -69,9 +72,14 @@ autopsy attempt --title "..." --content "..."
 autopsy export --output ~/Desktop/autopsy-memory-export.json
 autopsy export --include-operational --limit 100
 autopsy backup
+autopsy restore ~/Desktop/autopsy-memory-export.json --dry-run
+autopsy restore ~/Desktop/autopsy-memory-export.json --merge
+autopsy restore ~/Desktop/autopsy-memory-export.json --replace --yes
 ```
 
 `export` writes semantic memory and in-graph relations as JSON. `backup` writes the same export shape to a timestamped file under the Autopsy application-support backups directory unless `--output` is provided.
+
+`restore` validates schema version 1 exports, defaults to safe merge mode, skips operational nodes unless `--include-operational` is set, and refuses replace mode unless `--yes` is provided. Replace mode deletes only matching keys present in the restore file before importing them; unrelated graph data is not wiped.
 
 ## Agent Setup
 

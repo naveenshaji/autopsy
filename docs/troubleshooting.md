@@ -5,6 +5,7 @@
 ```bash
 autopsy doctor
 autopsy version --json
+autopsy health
 ```
 
 Required modules:
@@ -73,6 +74,24 @@ autopsy consult --query "specific unlikely thing"
 ```
 
 If unrelated results still appear, capture the query and benchmark output before changing retrieval thresholds.
+
+If `consult` reports `workflow.status: weak_signals_only`, do not treat the side-channel candidates as a usable answer. Refine the query or inspect exact items with `autopsy item`, `autopsy timeline`, or `autopsy neighbors`.
+
+## Restore Safety
+
+Always validate backup files before importing:
+
+```bash
+autopsy restore <backup.json> --dry-run
+```
+
+Default restore mode is merge. Replace mode is intentionally explicit:
+
+```bash
+autopsy restore <backup.json> --replace --yes
+```
+
+Replace mode deletes only keys present in the restore file before re-importing them.
 
 ## MCP Bridge Cannot Start Worker
 

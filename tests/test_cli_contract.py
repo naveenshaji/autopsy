@@ -48,6 +48,44 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertTrue(args.include_operational)
         self.assertEqual(args.output, "/tmp/out.json")
 
+    def test_restore_parser_accepts_safe_modes(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["restore", "/tmp/export.json", "--dry-run", "--replace", "--include-operational"])
+        self.assertEqual(args.command, "restore")
+        self.assertEqual(args.input, "/tmp/export.json")
+        self.assertTrue(args.dry_run)
+        self.assertTrue(args.replace)
+        self.assertTrue(args.include_operational)
+
+        alias_args = parser.parse_args(["import", "/tmp/export.json", "--merge"])
+        self.assertEqual(alias_args.command, "import")
+        self.assertFalse(alias_args.replace)
+
+    def test_health_parser_is_available(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["health"])
+        self.assertEqual(args.command, "health")
+
+    def test_restore_normalization_skips_operational_by_default(self):
+        payload = {
+            "items": [
+                {"stable_key": "graph-note:1", "kind": "decision", "title": "A", "content": "B"},
+                {"stable_key": "/tmp/repo", "kind": "repository", "title": "Repo", "content": ""},
+                {"kind": "decision", "title": "Missing key"},
+                {"stable_key": "graph-note:1", "kind": "decision", "title": "Duplicate"},
+            ]
+        }
+        items, skipped = cli.normalized_restore_items(payload, include_operational=False)
+        self.assertEqual([item["stable_key"] for item in items], ["graph-note:1"])
+        self.assertEqual(len(skipped), 3)
+        self.assertIn("operational_excluded", {item["reason"] for item in skipped})
+
+    def test_write_quality_warnings_flag_short_duplicate_content(self):
+        warnings = cli.memory_write_quality_warnings(None, kind="decision", title="Use Falkor", content="Use Falkor")
+        codes = {warning["code"] for warning in warnings}
+        self.assertIn("content_too_short", codes)
+        self.assertIn("title_duplicates_content", codes)
+
     def test_init_parser_accepts_cli_first_options(self):
         parser = cli.build_parser()
         args = parser.parse_args(["init", "--global", "--repo", "/tmp/repo", "--agent", "claude", "--dry-run", "--mcp"])

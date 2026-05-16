@@ -15,6 +15,7 @@ from .metadata import AGENT_INSTRUCTIONS
 
 MANAGED_START = "<!-- AUTOPSY_MEMORY_START v1 -->"
 MANAGED_END = "<!-- AUTOPSY_MEMORY_END -->"
+LEGACY_HEADING = "## Autopsy Memory Usage"
 SUPPORTED_AGENTS = ("codex", "claude")
 
 MCP_SNIPPET = """[mcp_servers.autopsy_falkor_memory]
@@ -35,20 +36,52 @@ def managed_instruction_block() -> str:
     return f"{MANAGED_START}\n{AGENT_INSTRUCTIONS.rstrip()}\n{MANAGED_END}\n"
 
 
+def strip_unmanaged_autopsy_sections(text: str) -> tuple[str, bool]:
+    lines = text.splitlines(keepends=True)
+    output: list[str] = []
+    removed = False
+    index = 0
+    while index < len(lines):
+        if lines[index].strip() != LEGACY_HEADING:
+            output.append(lines[index])
+            index += 1
+            continue
+        removed = True
+        index += 1
+        while index < len(lines):
+            stripped = lines[index].strip()
+            if stripped == MANAGED_START:
+                break
+            if stripped.startswith("#"):
+                break
+            index += 1
+        while index < len(lines) and not lines[index].strip():
+            index += 1
+    return "".join(output), removed
+
+
 def patch_managed_block(existing: str, block: str) -> tuple[str, str]:
     start = existing.find(MANAGED_START)
     end = existing.find(MANAGED_END)
     if start >= 0 and end >= start:
         end += len(MANAGED_END)
+        prefix, removed_prefix = strip_unmanaged_autopsy_sections(existing[:start])
+        suffix, removed_suffix = strip_unmanaged_autopsy_sections(existing[end:])
+        existing = prefix + existing[start:end] + suffix
+        start = existing.find(MANAGED_START)
+        end = existing.find(MANAGED_END)
+        end += len(MANAGED_END)
         replacement = block.rstrip()
         new_text = existing[:start] + replacement + existing[end:]
         if not new_text.endswith("\n"):
             new_text += "\n"
-        return new_text, "unchanged" if new_text == existing else "updated"
+        removed_legacy = removed_prefix or removed_suffix
+        return new_text, "unchanged" if new_text == existing and not removed_legacy else "updated"
 
+    existing, removed_legacy = strip_unmanaged_autopsy_sections(existing)
     separator = "" if not existing or existing.endswith("\n") else "\n"
     extra_newline = "" if not existing.strip() else "\n"
-    return f"{existing}{separator}{extra_newline}{block}", "added"
+    return f"{existing}{separator}{extra_newline}{block}", "updated" if removed_legacy else "added"
 
 
 def selected_agents(value: str) -> list[str]:

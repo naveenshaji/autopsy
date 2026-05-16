@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.2 - 2026-05-16
+
+Adds restore, health, and trust guardrails.
+
+- Adds `autopsy restore` and `autopsy import` for schema-versioned backup restores with dry-run validation, safe merge defaults, operational-node opt-in, and explicit `--replace --yes` confirmation.
+- Adds `autopsy health` for runtime, Falkor graph, index, vector, backup, and init-instruction status.
+- Tightens `consult` workflow metadata so weak relationship/vector side channels no longer look like reliable partial answers.
+- Adds write-quality warnings for short, low-signal, duplicate, or title-equals-content memory writes.
+- Updates agent instructions, release checks, and docs for backup/restore and health.
+
 ## 0.1.1 - 2026-05-16
 
 Adds CLI-first first-run setup.

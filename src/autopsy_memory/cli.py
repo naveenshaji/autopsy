@@ -15,7 +15,7 @@ from typing import Any
 
 from .cli_parser import CommandHandlers, build_parser as build_cli_parser, normalized_cli_args
 from .doctor import import_check, installed_autopsy_command_check, python_version_check
-from .init import cmd_init
+from .init import cmd_init, instruction_targets, target_status
 from .metadata import cmd_instructions, cmd_version, package_version
 
 
@@ -2071,6 +2071,71 @@ def create_fact_edge(
             "origin": origin,
         },
     )
+
+
+def upsert_fact_edge(
+    graph,
+    *,
+    from_stable_key: str,
+    to_stable_key: str,
+    relation: str,
+    predicate: str,
+    fact_text: str,
+    timestamp: str,
+    origin: str,
+) -> str:
+    existing = graph.query(
+        """
+        MATCH (src:MemoryNode {stable_key: $from_key})-[fact:FACT_EDGE]->(dst:MemoryNode {stable_key: $to_key})
+        WHERE coalesce(fact.relation, '') = $relation
+          AND coalesce(fact.predicate, '') = $predicate
+        RETURN fact.edge_id
+        LIMIT 1
+        """,
+        params={
+            "from_key": from_stable_key,
+            "to_key": to_stable_key,
+            "relation": relation,
+            "predicate": predicate,
+        },
+    )
+    rows = result_rows(existing)
+    if rows:
+        graph.query(
+            """
+            MATCH (src:MemoryNode {stable_key: $from_key})-[fact:FACT_EDGE]->(dst:MemoryNode {stable_key: $to_key})
+            WHERE coalesce(fact.relation, '') = $relation
+              AND coalesce(fact.predicate, '') = $predicate
+            SET fact.fact_text = $fact_text,
+                fact.updated_at = $timestamp,
+                fact.origin = $origin
+            """,
+            params={
+                "from_key": from_stable_key,
+                "to_key": to_stable_key,
+                "relation": relation,
+                "predicate": predicate,
+                "fact_text": fact_text,
+                "timestamp": timestamp,
+                "origin": origin,
+            },
+        )
+        return "updated"
+    src = lookup_node_by_stable_key(graph, from_stable_key)
+    dst = lookup_node_by_stable_key(graph, to_stable_key)
+    if src is None or dst is None:
+        return "missing_endpoint"
+    create_fact_edge(
+        graph,
+        from_entity_id=int(src["entity_id"]),
+        to_entity_id=int(dst["entity_id"]),
+        relation=relation,
+        predicate=predicate,
+        fact_text=fact_text,
+        timestamp=timestamp,
+        origin=origin,
+    )
+    return "created"
 
 
 def branch_stable_key(repository_root_path: str, branch_name: str) -> str:
@@ -4275,21 +4340,44 @@ def cmd_consult(args: argparse.Namespace) -> None:
         inspect_limit=getattr(args, "inspect_limit", 3),
         route=args.route,
     )
-    workflow_hits = (
-        list(payload.get("hits") or [])
-        or list(payload.get("items") or [])
-        or list(payload.get("relationship_hits") or [])
-        or list(payload.get("lexical_only_hits") or [])
-        or list(payload.get("vector_only_hits") or [])
+    reliable_hits = list(payload.get("hits") or []) or list(payload.get("items") or [])
+    weak_signal_hits = (
+        list(payload.get("relationship_hits") or [])
+        + list(payload.get("lexical_only_hits") or [])
+        + list(payload.get("vector_only_hits") or [])
     )
-    payload["workflow"] = tool.build_read_workflow(
-        workspace["root_path"],
-        command="consult",
-        query=query,
-        hits=workflow_hits,
-        inspected_items=list(payload.get("items") or []),
-        current_only=bool(getattr(args, "current_only", False)),
-    )
+    if reliable_hits:
+        payload["workflow"] = tool.build_read_workflow(
+            workspace["root_path"],
+            command="consult",
+            query=query,
+            hits=reliable_hits,
+            inspected_items=list(payload.get("items") or []),
+            current_only=bool(getattr(args, "current_only", False)),
+        )
+    elif weak_signal_hits:
+        payload["workflow"] = {
+            "status": "weak_signals_only",
+            "coverage": "weak",
+            "complete": False,
+            "next_step": "refine_query",
+            "message": "No reliable memory hits were found. Weak side-channel candidates are shown for debugging only.",
+            "suggested_next_steps": [
+                workflow_step(
+                    "refine-query",
+                    "Use a more specific query or inspect exact items before relying on weak relationship/vector side channels.",
+                )
+            ],
+        }
+    else:
+        payload["workflow"] = tool.build_read_workflow(
+            workspace["root_path"],
+            command="consult",
+            query=query,
+            hits=[],
+            inspected_items=[],
+            current_only=bool(getattr(args, "current_only", False)),
+        )
     print(json.dumps(payload, indent=2))
 
 
@@ -4412,6 +4500,67 @@ def repository_path_from_args(args: argparse.Namespace) -> str | None:
     return value or None
 
 
+def memory_write_quality_warnings(graph, *, kind: str, title: str, content: str) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    trimmed_title = " ".join(str(title or "").split())
+    trimmed_content = " ".join(str(content or "").split())
+    signal_tokens = query_signal_tokens(f"{trimmed_title} {trimmed_content}")
+    if len(trimmed_content) < 80:
+        warnings.append({
+            "code": "content_too_short",
+            "severity": "medium",
+            "message": "Memory content is short; durable memories work better with outcome, rationale, and concrete verification.",
+        })
+    if trimmed_title and trimmed_title == trimmed_content:
+        warnings.append({
+            "code": "title_duplicates_content",
+            "severity": "medium",
+            "message": "Title and content are identical; add details that will help future retrieval and inspection.",
+        })
+    if len(set(signal_tokens)) < 6:
+        warnings.append({
+            "code": "low_signal_terms",
+            "severity": "low",
+            "message": "Memory has few distinctive terms; include repo names, commands, files, commits, or exact decisions when possible.",
+        })
+    duplicates: list[dict[str, Any]] = []
+    try:
+        rows = result_rows(graph.query(
+            """
+            MATCH (node:SemanticItem)
+            WHERE node.kind = $kind
+              AND (
+                toLower(coalesce(node.label, '')) = $title
+                OR toLower(coalesce(node.detail_content, '')) = $content
+              )
+            RETURN node.stable_key, node.kind, node.label, coalesce(node.updated_at, node.created_at)
+            LIMIT 5
+            """,
+            params={
+                "kind": kind,
+                "title": trimmed_title.lower(),
+                "content": trimmed_content.lower(),
+            },
+        ))
+        for row in rows:
+            duplicates.append({
+                "stable_key": str(row[0] or ""),
+                "kind": str(row[1] or ""),
+                "title": str(row[2] or ""),
+                "updated_at": str(row[3] or ""),
+            })
+    except Exception:
+        duplicates = []
+    if duplicates:
+        warnings.append({
+            "code": "possible_duplicate",
+            "severity": "medium",
+            "message": "A memory with the same title or content already exists; consider updating or relating the existing item.",
+            "candidates": duplicates,
+        })
+    return warnings
+
+
 def create_requested_fact_relations(graph, *, source_stable_key: str, args: argparse.Namespace) -> list[dict[str, Any]]:
     source = fetch_item(graph, source_stable_key)
     created = []
@@ -4445,6 +4594,7 @@ def cmd_create_note(args: argparse.Namespace) -> None:
     outcome = str(getattr(args, "outcome", "") or "").strip()
     kind = normalize_note_kind(requested_kind or outcome or command_kind)
     title, content = note_text_from_args(args)
+    quality_warnings = memory_write_quality_warnings(graph, kind=kind, title=title, content=content)
     payload = create_graph_note_payload(
         graph,
         tool=tool,
@@ -4461,6 +4611,10 @@ def cmd_create_note(args: argparse.Namespace) -> None:
         if relations:
             payload = build_graph_item_detail_payload(graph, tool=tool, workspace=workspace, stable_key=stable_key)
             payload["created_relations"] = relations
+    payload["write_quality"] = {
+        "warnings": quality_warnings,
+        "complete": not bool(quality_warnings),
+    }
     print(json.dumps(payload, indent=2))
 
 
@@ -4638,6 +4792,429 @@ def cmd_backup(args: argparse.Namespace) -> None:
     cmd_export(args)
 
 
+def chunked_values(values: list[str], size: int = 500) -> list[list[str]]:
+    return [values[index:index + size] for index in range(0, len(values), max(1, size))]
+
+
+def load_restore_json(path_value: str) -> dict[str, Any]:
+    path = Path(path_value).expanduser()
+    if not path.exists():
+        fail(f"restore input does not exist: {path}", 2)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        fail(f"restore input is not valid JSON: {exc}", 2)
+    if not isinstance(payload, dict):
+        fail("restore input must be a JSON object", 2)
+    return payload
+
+
+def restore_confidence(raw_item: dict[str, Any]) -> float:
+    raw_value = raw_item.get("confidence")
+    if raw_value is None:
+        return 1.0
+    try:
+        return float(raw_value)
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def restore_item_from_raw(raw_item: dict[str, Any], *, fallback_timestamp: str) -> dict[str, Any]:
+    stable_key = str(raw_item.get("stable_key") or raw_item.get("stableKey") or "").strip()
+    content = str(raw_item.get("content") or raw_item.get("detail_content") or raw_item.get("detailContent") or "").strip()
+    summary = str(raw_item.get("summary") or summary_snippet(content)).strip()
+    title = str(raw_item.get("title") or raw_item.get("label") or summary or stable_key).strip()
+    timestamp = str(raw_item.get("updated_at") or raw_item.get("updatedAt") or raw_item.get("created_at") or raw_item.get("createdAt") or fallback_timestamp).strip()
+    return {
+        "stable_key": stable_key,
+        "kind": str(raw_item.get("kind") or "memory_note").strip() or "memory_note",
+        "title": title,
+        "summary": summary,
+        "content": content,
+        "source_kind": str(raw_item.get("source_kind") or raw_item.get("sourceKind") or "restore").strip() or "restore",
+        "confidence": restore_confidence(raw_item),
+        "timestamp": timestamp or fallback_timestamp,
+    }
+
+
+def normalized_restore_items(payload: dict[str, Any], *, include_operational: bool) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    raw_items = payload.get("items")
+    if not isinstance(raw_items, list):
+        fail("restore input must contain an items array", 2)
+    timestamp = utc_now_iso()
+    items: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, raw_item in enumerate(raw_items):
+        if not isinstance(raw_item, dict):
+            skipped.append({"index": index, "reason": "not_object"})
+            continue
+        item = restore_item_from_raw(raw_item, fallback_timestamp=timestamp)
+        stable_key = item["stable_key"]
+        if not stable_key:
+            skipped.append({"index": index, "reason": "missing_stable_key"})
+            continue
+        if stable_key in seen:
+            skipped.append({"index": index, "stable_key": stable_key, "reason": "duplicate_in_input"})
+            continue
+        if item["kind"] in OPERATIONAL_KINDS and not include_operational:
+            skipped.append({"index": index, "stable_key": stable_key, "kind": item["kind"], "reason": "operational_excluded"})
+            continue
+        seen.add(stable_key)
+        items.append(item)
+    return items, skipped
+
+
+def normalized_restore_fact_edges(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_edges = payload.get("relations") or []
+    if not isinstance(raw_edges, list):
+        fail("restore input relations must be an array when present", 2)
+    edges: list[dict[str, Any]] = []
+    for raw_edge in raw_edges:
+        if not isinstance(raw_edge, dict):
+            continue
+        from_key = str(raw_edge.get("from") or raw_edge.get("from_stable_key") or raw_edge.get("fromStableKey") or "").strip()
+        to_key = str(raw_edge.get("to") or raw_edge.get("to_stable_key") or raw_edge.get("toStableKey") or "").strip()
+        relation = str(raw_edge.get("relation") or "").strip()
+        if not from_key or not to_key or not relation:
+            continue
+        predicate = str(raw_edge.get("predicate") or relation.upper()).strip() or relation.upper()
+        edges.append({
+            "from": from_key,
+            "to": to_key,
+            "relation": relation,
+            "predicate": predicate,
+            "fact_text": str(raw_edge.get("fact_text") or raw_edge.get("factText") or f"{from_key} {relation} {to_key}").strip(),
+            "timestamp": str(raw_edge.get("updated_at") or raw_edge.get("updatedAt") or utc_now_iso()).strip(),
+        })
+    return edges
+
+
+def normalized_restore_structural_edges(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_edges = payload.get("structural_edges") or payload.get("structuralEdges") or []
+    if not isinstance(raw_edges, list):
+        fail("restore input structural_edges must be an array when present", 2)
+    edges: list[dict[str, Any]] = []
+    for raw_edge in raw_edges:
+        if not isinstance(raw_edge, dict):
+            continue
+        from_key = str(raw_edge.get("from") or raw_edge.get("from_stable_key") or raw_edge.get("fromStableKey") or "").strip()
+        to_key = str(raw_edge.get("to") or raw_edge.get("to_stable_key") or raw_edge.get("toStableKey") or "").strip()
+        relation = str(raw_edge.get("relation") or "").strip()
+        if from_key and to_key and relation:
+            edges.append({
+                "from": from_key,
+                "to": to_key,
+                "relation": relation,
+                "timestamp": str(raw_edge.get("updated_at") or raw_edge.get("updatedAt") or utc_now_iso()).strip(),
+            })
+    return edges
+
+
+def existing_restore_keys(graph, stable_keys: list[str]) -> set[str]:
+    existing: set[str] = set()
+    for chunk in chunked_values(stable_keys):
+        rows = result_rows(graph.query(
+            """
+            MATCH (node:MemoryNode)
+            WHERE node.stable_key IN $stable_keys
+            RETURN node.stable_key
+            """,
+            params={"stable_keys": chunk},
+        ))
+        existing.update(str(row[0] or "") for row in rows if row and row[0])
+    return existing
+
+
+def restore_memory_payload(
+    graph,
+    *,
+    workspace: dict[str, Any],
+    input_path: str,
+    payload: dict[str, Any],
+    dry_run: bool,
+    replace: bool,
+    include_operational: bool,
+) -> dict[str, Any]:
+    schema_version = payload.get("schema_version")
+    if schema_version != 1:
+        fail(f"unsupported restore schema_version: {schema_version!r}", 2)
+    items, skipped_items = normalized_restore_items(payload, include_operational=include_operational)
+    fact_edges = normalized_restore_fact_edges(payload)
+    structural_edges = normalized_restore_structural_edges(payload)
+    item_keys = [item["stable_key"] for item in items]
+    item_key_set = set(item_keys)
+    existing_keys = existing_restore_keys(graph, item_keys) if item_keys else set()
+    available_keys = existing_keys | item_key_set
+    missing_fact_edges = [
+        edge for edge in fact_edges
+        if edge["from"] not in available_keys or edge["to"] not in available_keys
+    ]
+    missing_structural_edges = [
+        edge for edge in structural_edges
+        if edge["from"] not in available_keys or edge["to"] not in available_keys
+    ]
+    report: dict[str, Any] = {
+        "restored": not dry_run,
+        "dry_run": dry_run,
+        "mode": "replace" if replace else "merge",
+        "replace_scope": "restored_keys" if replace else None,
+        "input": str(Path(input_path).expanduser()),
+        "schema_version": schema_version,
+        "workspace": workspace_payload(workspace),
+        "source": {
+            "exported_at": payload.get("exported_at"),
+            "autopsy_version": payload.get("autopsy_version"),
+            "graph_name": payload.get("graph_name"),
+        },
+        "counts": {
+            "input_items": len(payload.get("items") or []),
+            "restorable_items": len(items),
+            "skipped_items": len(skipped_items),
+            "existing_items": len(existing_keys),
+            "new_items": len(item_key_set - existing_keys),
+            "input_relations": len(fact_edges),
+            "input_structural_edges": len(structural_edges),
+            "skipped_relations_missing_endpoint": len(missing_fact_edges),
+            "skipped_structural_edges_missing_endpoint": len(missing_structural_edges),
+        },
+        "skipped_items": skipped_items[:50],
+        "warnings": [],
+    }
+    if replace:
+        report["warnings"].append("replace deletes only keys present in the restore file before re-importing them; unrelated graph data is not wiped.")
+    if dry_run:
+        report["counts"].update({
+            "would_create_items": len(item_key_set - existing_keys) + (len(existing_keys) if replace else 0),
+            "would_update_items": 0 if replace else len(existing_keys),
+            "would_upsert_relations": len(fact_edges) - len(missing_fact_edges),
+            "would_upsert_structural_edges": len(structural_edges) - len(missing_structural_edges),
+        })
+        report["workflow"] = {
+            "status": "dry_run",
+            "complete": True,
+            "next_step": "rerun_without_dry_run",
+            "message": "Restore input validated without writing to Falkor.",
+        }
+        return report
+
+    if replace and existing_keys:
+        for key in sorted(existing_keys):
+            delete_graph_item_payload(graph, stable_key=key)
+
+    created_items = 0
+    updated_items = 0
+    for item in items:
+        existed = item["stable_key"] in existing_keys
+        upsert_memory_node(
+            graph,
+            kind=item["kind"],
+            stable_key=item["stable_key"],
+            label=item["title"],
+            summary=item["summary"],
+            detail_content=item["content"],
+            confidence=item["confidence"],
+            source_kind=item["source_kind"],
+            timestamp=item["timestamp"],
+            origin="restore",
+        )
+        if replace or not existed:
+            created_items += 1
+        else:
+            updated_items += 1
+
+    fact_created = 0
+    fact_updated = 0
+    fact_skipped = 0
+    for edge in fact_edges:
+        if edge["from"] not in available_keys or edge["to"] not in available_keys:
+            fact_skipped += 1
+            continue
+        result = upsert_fact_edge(
+            graph,
+            from_stable_key=edge["from"],
+            to_stable_key=edge["to"],
+            relation=edge["relation"],
+            predicate=edge["predicate"],
+            fact_text=edge["fact_text"],
+            timestamp=edge["timestamp"],
+            origin="restore",
+        )
+        if result == "created":
+            fact_created += 1
+        elif result == "updated":
+            fact_updated += 1
+        else:
+            fact_skipped += 1
+
+    structural_upserted = 0
+    structural_skipped = 0
+    for edge in structural_edges:
+        if edge["from"] not in available_keys or edge["to"] not in available_keys:
+            structural_skipped += 1
+            continue
+        upsert_structural_edge(
+            graph,
+            from_stable_key=edge["from"],
+            to_stable_key=edge["to"],
+            relation=edge["relation"],
+            timestamp=edge["timestamp"],
+            origin="restore",
+        )
+        structural_upserted += 1
+
+    invalidate_graph_caches(graph)
+    report["counts"].update({
+        "created_items": created_items,
+        "updated_items": updated_items,
+        "replaced_items": len(existing_keys) if replace else 0,
+        "created_relations": fact_created,
+        "updated_relations": fact_updated,
+        "skipped_relations": fact_skipped,
+        "upserted_structural_edges": structural_upserted,
+        "skipped_structural_edges": structural_skipped,
+    })
+    report["workflow"] = {
+        "status": "ok",
+        "complete": True,
+        "next_step": "verify_restore",
+        "message": "Restore completed. Run consult/item checks for restored facts before relying on them.",
+    }
+    return report
+
+
+def cmd_restore(args: argparse.Namespace) -> None:
+    if bool(getattr(args, "replace", False)) and not bool(getattr(args, "dry_run", False)) and not bool(getattr(args, "yes", False)):
+        fail("restore --replace is destructive for matching keys and requires --yes unless --dry-run is used", 2)
+    _tool, workspace, _config, graph = open_workspace_graph(args)
+    ensure_runtime_indexes(graph)
+    input_path = str(getattr(args, "input", "") or "").strip()
+    payload = load_restore_json(input_path)
+    report = restore_memory_payload(
+        graph,
+        workspace=workspace,
+        input_path=input_path,
+        payload=payload,
+        dry_run=bool(getattr(args, "dry_run", False)),
+        replace=bool(getattr(args, "replace", False)),
+        include_operational=bool(getattr(args, "include_operational", False)),
+    )
+    print(json.dumps(report, indent=2))
+
+
+def latest_backup_status() -> dict[str, Any]:
+    backup_dir = APP_SUPPORT_DIR_DEFAULT / "Backups"
+    if not backup_dir.exists():
+        return {"directory": str(backup_dir), "latest": None, "count": 0}
+    backups = sorted(backup_dir.glob("autopsy-memory-*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
+    if not backups:
+        return {"directory": str(backup_dir), "latest": None, "count": 0}
+    latest = backups[0]
+    age_seconds = max(0, int(time.time() - latest.stat().st_mtime))
+    return {
+        "directory": str(backup_dir),
+        "latest": str(latest),
+        "count": len(backups),
+        "age_seconds": age_seconds,
+        "age_hours": round(age_seconds / 3600.0, 2),
+        "bytes": latest.stat().st_size,
+    }
+
+
+def build_health_payload(args: argparse.Namespace) -> dict[str, Any]:
+    started = time.perf_counter()
+    tool, workspace, config, graph = open_workspace_graph(args)
+    ensure_runtime_indexes(graph)
+    stats = build_graph_stats_payload(graph)
+    vector_count = int(scalar_query(graph, "MATCH (node:SemanticItem) WHERE node.embedding IS NOT NULL RETURN count(node)") or 0)
+    index_ok = check_runtime_index_probe(graph)
+    checks = [
+        python_version_check(),
+        installed_autopsy_command_check(),
+        import_check("falkordb", required=True),
+        import_check("redis", required=True),
+        import_check("redislite.falkordb_client", required=True),
+        import_check("sentence_transformers", required=False),
+    ]
+    required_ok = all(check["ok"] for check in checks if check["required"])
+    repo_hint = repository_path_from_args(args) or str(Path.cwd().resolve())
+    targets = instruction_targets(
+        home=Path.home(),
+        repo_path=Path(repo_hint).expanduser().resolve(),
+        install_global=True,
+        agent="all",
+    )
+    init_targets = [target_status(target) for target in targets]
+    managed_targets = sum(1 for target in init_targets if target.get("state") == "managed")
+    backup = latest_backup_status()
+    latest_backup_age = backup.get("age_seconds")
+    backup_fresh = latest_backup_age is not None and int(latest_backup_age) <= 7 * 24 * 60 * 60
+    graph_ok = scalar_query(graph, "MATCH (node) RETURN count(node) LIMIT 1") is not None and index_ok
+    ok = required_ok and graph_ok
+    return {
+        "ok": ok,
+        "workspace": tool.workspace_payload(workspace),
+        "graph_name": graph.name,
+        "backend": "falkor",
+        "mode": "native",
+        "counts": {
+            "entities": int(stats.get("entityCount") or 0),
+            "items": int(stats.get("itemCount") or 0),
+            "edges": int(stats.get("edgeCount") or 0),
+            "vectors": vector_count,
+        },
+        "stats": stats,
+        "checks": {
+            "runtime": checks,
+            "required_runtime_ok": required_ok,
+            "indexes_ready": index_ok,
+            "graph_ready": graph_ok,
+            "embeddings_configured": bool(config.get("enabled", True)),
+            "reranker_configured": bool(reranker_config(config).get("enabled", False)),
+            "init_managed_targets": managed_targets,
+            "init_target_count": len(init_targets),
+            "backup_fresh": backup_fresh,
+        },
+        "init_targets": init_targets,
+        "backup": backup,
+        "paths": {
+            "app_support_dir": str(APP_SUPPORT_DIR_DEFAULT),
+            "falkordb_lite_path": str(resolved_lite_path(args) or ""),
+            "memory_settings": str(GLOBAL_MEMORY_SETTINGS_DEFAULT),
+            "unified_memory_root": str(unified_memory_root_path()),
+        },
+        "workflow": {
+            "status": "ok" if ok else "needs_attention",
+            "complete": ok,
+            "next_step": "done" if ok else "inspect_failed_checks",
+            "message": "Autopsy memory health checks passed." if ok else "Autopsy memory health found required checks that need attention.",
+        },
+        "timings": {"health_s": round(time.perf_counter() - started, 3)},
+    }
+
+
+def cmd_health(args: argparse.Namespace) -> None:
+    try:
+        payload = build_health_payload(args)
+    except Exception as exc:
+        print(json.dumps({
+            "ok": False,
+            "backend": "falkor",
+            "mode": "native",
+            "error": str(exc),
+            "workflow": {
+                "status": "error",
+                "complete": False,
+                "next_step": "fix_falkor_runtime",
+                "message": "Falkor health check failed before graph inspection completed.",
+            },
+        }, indent=2))
+        raise SystemExit(1)
+    print(json.dumps(payload, indent=2))
+    if not payload.get("ok"):
+        raise SystemExit(1)
+
+
 def cmd_doctor(args: argparse.Namespace) -> None:
     checks = [
         python_version_check(),
@@ -4685,6 +5262,8 @@ def build_parser() -> argparse.ArgumentParser:
             benchmark=cmd_benchmark,
             export=cmd_export,
             backup=cmd_backup,
+            restore=cmd_restore,
+            health=cmd_health,
             create_note=cmd_create_note,
             update_item=cmd_update_item,
             delete_item=cmd_delete_item,

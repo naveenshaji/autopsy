@@ -11,6 +11,8 @@ This repository is the standalone memory product extraction. It intentionally do
 - Writes typed outcomes with explicit relations such as `refines`, `answers`, `supersedes`, and `depends-on`.
 - Inspects exact facts through `item`, `timeline`, `neighbors`, and `snapshot`.
 - Runs a benchmark gate for recall, abstention, latency, writes, relations, scale readiness, and Falkor health.
+- Reports product health with runtime, graph, index, backup, vector, and init-instruction status.
+- Restores exported backups with dry-run validation, safe merge defaults, and explicit replace confirmation.
 - Exposes the same semantics through an MCP bridge for coding agents.
 
 ## Install
@@ -55,10 +57,12 @@ python -m pip install -e .
 autopsy version
 autopsy doctor
 autopsy init --check
+autopsy health
 autopsy status
 autopsy consult --query "release decisions for this repo"
 autopsy capture-outcome --outcome decision --title "Use Falkor only" --content "Falkor is the authoritative memory backend."
 autopsy backup
+autopsy restore ~/Library/Application\ Support/Autopsy/Backups/<backup>.json --dry-run
 autopsy benchmark --sample-size 5 --include-sync
 ```
 
@@ -81,8 +85,10 @@ autopsy snapshot <stable-key>
 autopsy capture-outcome --outcome decision --title "..." --content "..."
 autopsy export --output ~/Desktop/autopsy-memory-export.json
 autopsy backup
+autopsy restore ~/Desktop/autopsy-memory-export.json --dry-run
 autopsy init --global --repo . --agent all
 autopsy instructions
+autopsy health
 autopsy benchmark --sample-size 5 --include-sync
 ```
 

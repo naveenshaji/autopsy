@@ -25,6 +25,8 @@ class CommandHandlers:
     benchmark: CommandHandler
     export: CommandHandler
     backup: CommandHandler
+    restore: CommandHandler
+    health: CommandHandler
     create_note: CommandHandler
     update_item: CommandHandler
     delete_item: CommandHandler
@@ -165,6 +167,21 @@ def build_parser(
     backup_parser.add_argument("--limit", type=int, default=0, help="Maximum number of items to export. Default exports all matching items.")
     backup_parser.add_argument("--include-operational", action="store_true", help="Include workspace/repository/thread/worktree/branch nodes.")
     backup_parser.set_defaults(func=handlers.backup)
+
+    for restore_command in ("restore", "import"):
+        restore_parser = subparsers.add_parser(restore_command, parents=[common], help="Restore or import a JSON memory export.")
+        restore_parser.add_argument("input", help="Path to an Autopsy memory export or backup JSON file.")
+        mode_group = restore_parser.add_mutually_exclusive_group()
+        mode_group.add_argument("--merge", dest="replace", action="store_false", help="Merge export items into the current graph. This is the default.")
+        mode_group.add_argument("--replace", action="store_true", help="Delete restored keys before importing them. Requires --yes.")
+        restore_parser.set_defaults(replace=False)
+        restore_parser.add_argument("--dry-run", action="store_true", help="Validate and report the restore plan without writing to Falkor.")
+        restore_parser.add_argument("--yes", action="store_true", help="Confirm destructive replace mode.")
+        restore_parser.add_argument("--include-operational", action="store_true", help="Restore workspace/repository/thread/worktree/branch nodes.")
+        restore_parser.set_defaults(func=handlers.restore)
+
+    health_parser = subparsers.add_parser("health", parents=[common], help="Run a product health summary for the local memory layer.")
+    health_parser.set_defaults(func=handlers.health)
 
     create_parser = subparsers.add_parser("create", parents=[common], help="Create a typed Falkor memory note.")
     add_note_write_arguments(create_parser, include_kind=True)

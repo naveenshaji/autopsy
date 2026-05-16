@@ -1,17 +1,5 @@
-"""Package metadata and generated instruction text."""
-
-from __future__ import annotations
-
-import argparse
-import importlib.metadata
-import json
-import sys
-
-
-PACKAGE_NAME = "autopsy-memory"
-FALLBACK_VERSION = "0.1.2"
-
-AGENT_INSTRUCTIONS = """## Autopsy Memory Usage
+<!-- AUTOPSY_MEMORY_START v1 -->
+## Autopsy Memory Usage
 
 Use Autopsy memory for nontrivial repo work, debugging, releases, architecture questions, and any task where prior decisions may matter.
 
@@ -52,30 +40,4 @@ For memory-system changes:
 - Run `autopsy health`.
 - Run `autopsy benchmark --sample-size 5 --include-sync`.
 - Do not claim memory health unless the benchmark passes or failures are explicitly reported.
-"""
-
-
-def package_version() -> str:
-    try:
-        return importlib.metadata.version(PACKAGE_NAME)
-    except importlib.metadata.PackageNotFoundError:
-        return FALLBACK_VERSION
-
-
-def cmd_version(args: argparse.Namespace) -> None:
-    payload = {
-        "version": package_version(),
-        "package": PACKAGE_NAME,
-        "python": sys.version.split()[0],
-    }
-    if getattr(args, "json", False):
-        print(json.dumps(payload, indent=2))
-    else:
-        print(payload["version"])
-
-
-def cmd_instructions(args: argparse.Namespace) -> None:
-    if getattr(args, "json", False):
-        print(json.dumps({"instructions": AGENT_INSTRUCTIONS}, indent=2))
-    else:
-        print(AGENT_INSTRUCTIONS.rstrip())
+<!-- AUTOPSY_MEMORY_END -->

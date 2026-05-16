@@ -16,6 +16,36 @@ class AutopsyInitTests(unittest.TestCase):
         self.assertEqual(updated_action, "unchanged")
         self.assertEqual(updated_text, new_text)
 
+    def test_legacy_unmanaged_block_is_replaced(self):
+        block = init_module.managed_instruction_block()
+        existing = """# Project Instructions
+
+## Autopsy Memory Usage
+
+Old memory instructions.
+
+## Other Section
+
+Keep this.
+"""
+        new_text, action = init_module.patch_managed_block(existing, block)
+        self.assertEqual(action, "updated")
+        self.assertIn(init_module.MANAGED_START, new_text)
+        self.assertNotIn("Old memory instructions", new_text)
+        self.assertIn("## Other Section", new_text)
+
+    def test_managed_update_removes_legacy_duplicate(self):
+        block = init_module.managed_instruction_block()
+        existing = f"""## Autopsy Memory Usage
+
+Old memory instructions.
+
+{block}"""
+        new_text, action = init_module.patch_managed_block(existing, block)
+        self.assertEqual(action, "updated")
+        self.assertEqual(new_text.count(init_module.MANAGED_START), 1)
+        self.assertNotIn("Old memory instructions", new_text)
+
     def test_target_selection_for_global_and_repo_all_agents(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
