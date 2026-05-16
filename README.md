@@ -15,7 +15,24 @@ This repository is the standalone memory product extraction. It intentionally do
 
 ## Install
 
-Use a virtual environment while the package is still pre-release:
+For the local machine, install the standalone CLI into a Homebrew-style prefix:
+
+```bash
+cd /Users/naveenshaji/github/codex/projects/autopsy
+./scripts/install-global.sh
+autopsy version --json
+autopsy doctor
+```
+
+By default this uses `/opt/homebrew` when it is writable, otherwise `~/.local`. The layout is:
+
+```text
+<prefix>/Cellar/autopsy-memory/<version>/
+<prefix>/opt/autopsy-memory -> <prefix>/Cellar/autopsy-memory/<version>
+<prefix>/bin/autopsy
+```
+
+Use a repo-local virtual environment for development:
 
 ```bash
 cd /Users/naveenshaji/github/codex/projects/autopsy

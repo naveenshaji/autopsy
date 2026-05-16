@@ -21,6 +21,8 @@ PY
 
 "$PYTHON" -m compileall -q src tests
 "$PYTHON" -m unittest discover -s tests
+sh -n scripts/install.sh
+sh -n scripts/install-global.sh
 
 TMP_DIR="${TMPDIR:-/tmp}/autopsy-release-check-$$"
 trap 'rm -rf "$TMP_DIR"' EXIT INT TERM HUP

@@ -2,11 +2,13 @@ import contextlib
 import io
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from autopsy_memory import cli
+from autopsy_memory import doctor
 
 
 class AutopsyCLIContractTests(unittest.TestCase):
@@ -45,6 +47,20 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(args.limit, 5)
         self.assertTrue(args.include_operational)
         self.assertEqual(args.output, "/tmp/out.json")
+
+    def test_doctor_rejects_legacy_app_wrapper(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            wrapper = Path(tmp_dir) / "autopsy"
+            wrapper.write_text("#!/bin/sh\nAUTOPSY_BUNDLED_MEMORY_TOOL=/tmp/legacy\n", encoding="utf-8")
+            original_which = doctor.shutil.which
+            doctor.shutil.which = lambda _name: str(wrapper)
+            try:
+                payload = doctor.installed_autopsy_command_check()
+            finally:
+                doctor.shutil.which = original_which
+        self.assertFalse(payload["ok"])
+        self.assertTrue(payload["legacy_wrapper"])
+        self.assertIn("legacy app wrapper", payload["error"])
 
 
 if __name__ == "__main__":

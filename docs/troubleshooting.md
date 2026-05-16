@@ -17,6 +17,18 @@ Optional module:
 
 - `sentence_transformers`
 
+## Installed Command Is Wrong
+
+If `autopsy doctor` reports that `autopsy` is the legacy app wrapper, reinstall the standalone CLI:
+
+```bash
+./scripts/install-global.sh
+which autopsy
+autopsy version --json
+```
+
+The installer backs up the replaced wrapper as `autopsy.legacy-<timestamp>`.
+
 ## Falkor Fails To Start
 
 Check the configured DB path:

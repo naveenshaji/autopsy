@@ -1,5 +1,15 @@
 # CLI
 
+## Global Install
+
+```bash
+./scripts/install-global.sh
+autopsy version --json
+autopsy doctor
+```
+
+The installer creates a versioned Homebrew-style layout under `/opt/homebrew` when writable, or `~/.local` otherwise. It backs up a non-standalone existing `autopsy` command before replacing it.
+
 ## Health
 
 ```bash
