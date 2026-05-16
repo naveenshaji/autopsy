@@ -771,14 +771,44 @@ def ensure_graph(host: str, port: int, graph_name: str, lite_path: str | None = 
         FalkorDBLite = load_falkordblite()
         resolved_path = str(Path(lite_path).expanduser())
         Path(resolved_path).parent.mkdir(parents=True, exist_ok=True)
-        client = _FALKORDB_LITE_CLIENTS.get(resolved_path)
-        if client is None:
+        try:
+            client = _FALKORDB_LITE_CLIENTS.get(resolved_path)
+            if client is None:
+                client = FalkorDBLite(resolved_path)
+                _FALKORDB_LITE_CLIENTS[resolved_path] = client
+            return client.select_graph(graph_name)
+        except Exception as exc:
+            if not is_stale_falkordb_lite_error(exc):
+                raise
+            reset_falkordb_lite_client(resolved_path)
+            backup_stale_falkordb_lite_settings(resolved_path)
             client = FalkorDBLite(resolved_path)
             _FALKORDB_LITE_CLIENTS[resolved_path] = client
-        return client.select_graph(graph_name)
+            return client.select_graph(graph_name)
     FalkorDB = load_falkordb()
     client = FalkorDB(host=host, port=port)
     return client.select_graph(graph_name)
+
+
+def is_stale_falkordb_lite_error(error: Exception | str) -> bool:
+    lowered = str(error).lower()
+    return "redis.socket" in lowered and (
+        "connection refused" in lowered
+        or "no such file" in lowered
+        or "error 2 connecting" in lowered
+        or "stale" in lowered
+    )
+
+
+def backup_stale_falkordb_lite_settings(lite_path: str | None) -> str | None:
+    if not lite_path:
+        return None
+    settings_path = Path(str(Path(lite_path).expanduser()) + ".settings")
+    if not settings_path.exists():
+        return None
+    backup_path = settings_path.with_name(settings_path.name + ".stale-" + time.strftime("%Y%m%d%H%M%S"))
+    settings_path.replace(backup_path)
+    return str(backup_path)
 
 
 def reset_falkordb_lite_client(lite_path: str | None) -> None:

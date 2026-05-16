@@ -31,6 +31,37 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
         finally:
             worker.require_falkor_context = original
 
+    def test_consult_preserves_requested_route(self):
+        worker = load_worker_module()
+        original = worker.run_falkor_operation
+
+        class Tool:
+            def build_read_workflow(self, *_args, **_kwargs):
+                return {"status": "ok", "complete": True}
+
+        class Module:
+            def build_consult_payload(self, *_args, **kwargs):
+                return {
+                    "route": kwargs["route"],
+                    "hits": [],
+                    "items": [],
+                }
+
+        worker.run_falkor_operation = lambda _falkor, operation: operation(object())
+        try:
+            payload = worker.consult_via_falkor(
+                Tool(),
+                {"root_path": "/tmp/autopsy-test"},
+                {},
+                None,
+                {"module": Module(), "graph_name": "autopsy_test"},
+                {"query": "direct falkor", "route": "hybrid"},
+            )
+        finally:
+            worker.run_falkor_operation = original
+
+        self.assertEqual(payload["route"], "hybrid")
+
 
 if __name__ == "__main__":
     unittest.main()

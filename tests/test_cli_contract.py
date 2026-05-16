@@ -107,6 +107,11 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertTrue(cli.query_has_unlikely_identifier("trace 0123456789abcdef"))
         self.assertFalse(cli.query_has_unlikely_identifier("release process decisions"))
 
+    def test_stale_falkordb_lite_socket_errors_are_detected(self):
+        self.assertTrue(cli.is_stale_falkordb_lite_error("Error 2 connecting to /tmp/tmpabc/redis.socket. No such file or directory."))
+        self.assertTrue(cli.is_stale_falkordb_lite_error("Connection refused while connecting to /tmp/tmpabc/redis.socket"))
+        self.assertFalse(cli.is_stale_falkordb_lite_error("authentication failed"))
+
     def test_doctor_rejects_legacy_app_wrapper(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             wrapper = Path(tmp_dir) / "autopsy"

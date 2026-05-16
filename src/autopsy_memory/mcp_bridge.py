@@ -296,6 +296,10 @@ def worker_request(path: str, payload: dict[str, Any], retry_on_stale_socket: bo
         if retry_on_stale_socket and is_stale_falkor_socket_error(message):
             recover_stale_falkor_socket(info)
             return worker_request(path, payload_for_retry(path, request), retry_on_stale_socket=False)
+        if retry_on_stale_socket and is_stale_worker_route_error(message):
+            terminate_pid(info.get("pid"))
+            clear_worker_info()
+            return worker_request(path, payload_for_retry(path, request), retry_on_stale_socket=False)
         raise BridgeError(message)
     except urllib.error.URLError as error:
         if retry_on_stale_socket:
@@ -312,7 +316,21 @@ def payload_for_retry(_path: str, request: urllib.request.Request) -> dict[str, 
 
 def is_stale_falkor_socket_error(message: str) -> bool:
     lowered = message.lower()
-    return "connection refused" in lowered and "redis.socket" in lowered
+    return "redis.socket" in lowered and (
+        "connection refused" in lowered
+        or "no such file" in lowered
+        or "error 2 connecting" in lowered
+        or "stale" in lowered
+    )
+
+
+def is_stale_worker_route_error(message: str) -> bool:
+    lowered = message.strip().lower()
+    return (
+        lowered == "not found"
+        or "404" in lowered
+        or "attempted relative import with no known parent package" in lowered
+    )
 
 
 def recover_stale_falkor_socket(info: dict[str, Any]) -> None:
@@ -373,11 +391,15 @@ def tool_consult(arguments: dict[str, Any]) -> dict[str, Any]:
     query = str(arguments.get("query") or "").strip()
     if not query:
         raise BridgeError("query is required")
+    route = str(arguments.get("route") or "auto").strip().lower()
+    if route not in {"auto", "status", "lexical", "hybrid"}:
+        route = "auto"
     request = {
         "query": query,
         "current_only": bool(arguments.get("current_only", True)),
         "limit": int(arguments.get("limit") or 8),
         "inspect_limit": int(arguments.get("inspect_limit") or 3),
+        "route": route,
     }
     if arguments.get("thread_id"):
         request["thread_id"] = str(arguments["thread_id"])
@@ -542,6 +564,7 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "current_only": {"type": "boolean", "default": True},
                 "limit": {"type": "integer", "default": 8},
                 "inspect_limit": {"type": "integer", "default": 3},
+                "route": {"type": "string", "enum": ["auto", "status", "lexical", "hybrid"], "default": "auto"},
                 "as_of": {"type": "string"},
             },
             "required": ["query"],

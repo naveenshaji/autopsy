@@ -2,6 +2,7 @@
 import argparse
 import copy
 import hashlib
+import importlib
 import importlib.util
 import json
 import os
@@ -409,6 +410,14 @@ def load_falkor_module(tool_path: str):
         module = _TOOL_MODULE_CACHE.get(resolved)
         if module is not None:
             return module
+        resolved_path = Path(resolved)
+        if resolved_path.name == "cli.py" and resolved_path.parent.name == "autopsy_memory":
+            package_root = str(resolved_path.parent.parent)
+            if package_root not in sys.path:
+                sys.path.insert(0, package_root)
+            module = importlib.import_module("autopsy_memory.cli")
+            _TOOL_MODULE_CACHE[resolved] = module
+            return module
         spec = importlib.util.spec_from_file_location("autopsy_falkordb_memory_module", resolved)
         if spec is None or spec.loader is None:
             raise RuntimeError(f"unable to load Falkor memory tool from {resolved}")
@@ -626,7 +635,7 @@ def consult_via_falkor(tool, workspace, embeddings_config, embeddings_status, fa
             query=str(request.get('query') or ''),
             limit=int(request.get('limit') or 8),
             inspect_limit=int(request.get('inspect_limit') or 3),
-            route='auto',
+            route=str(request.get('route') or 'auto'),
         ),
     )
     response.update({
@@ -653,6 +662,83 @@ def consult_via_falkor(tool, workspace, embeddings_config, embeddings_status, fa
         as_of=request.get('as_of'),
     )
     return response
+
+
+def health_via_falkor(tool, workspace, embeddings_config, falkor, request: dict):
+    module = falkor['module']
+    started = time.perf_counter()
+
+    def inspect_graph(graph):
+        module.ensure_runtime_indexes(graph)
+        stats = module.build_graph_stats_payload(graph)
+        vector_count = int(module.scalar_query(graph, "MATCH (node:SemanticItem) WHERE node.embedding IS NOT NULL RETURN count(node)") or 0)
+        index_ok = module.check_runtime_index_probe(graph)
+        graph_ok = module.scalar_query(graph, "MATCH (node) RETURN count(node) LIMIT 1") is not None and index_ok
+        return stats, vector_count, index_ok, graph_ok
+
+    stats, vector_count, index_ok, graph_ok = run_falkor_operation(falkor, inspect_graph)
+    checks = [
+        module.python_version_check(),
+        module.installed_autopsy_command_check(),
+        module.import_check("falkordb", required=True),
+        module.import_check("redis", required=True),
+        module.import_check("redislite.falkordb_client", required=True),
+        module.import_check("sentence_transformers", required=False),
+    ]
+    required_ok = all(check["ok"] for check in checks if check["required"])
+    repo_hint = str(request.get('repo') or workspace.get('root_path') or os.getcwd())
+    targets = module.instruction_targets(
+        home=Path.home(),
+        repo_path=Path(repo_hint).expanduser().resolve(),
+        install_global=True,
+        agent="all",
+    )
+    init_targets = [module.target_status(target) for target in targets]
+    managed_targets = sum(1 for target in init_targets if target.get("state") == "managed")
+    backup = module.latest_backup_status()
+    latest_backup_age = backup.get("age_seconds")
+    backup_fresh = latest_backup_age is not None and int(latest_backup_age) <= 7 * 24 * 60 * 60
+    ok = required_ok and graph_ok
+    return {
+        "ok": ok,
+        "workspace": tool.workspace_payload(workspace),
+        "graph_name": falkor['graph_name'],
+        "backend": "falkor",
+        "mode": "native",
+        "counts": {
+            "entities": int(stats.get("entityCount") or 0),
+            "items": int(stats.get("itemCount") or 0),
+            "edges": int(stats.get("edgeCount") or 0),
+            "vectors": vector_count,
+        },
+        "stats": stats,
+        "checks": {
+            "runtime": checks,
+            "required_runtime_ok": required_ok,
+            "indexes_ready": index_ok,
+            "graph_ready": graph_ok,
+            "embeddings_configured": bool(embeddings_config.get("enabled", True)),
+            "reranker_configured": bool(module.reranker_config(embeddings_config).get("enabled", False)),
+            "init_managed_targets": managed_targets,
+            "init_target_count": len(init_targets),
+            "backup_fresh": backup_fresh,
+        },
+        "init_targets": init_targets,
+        "backup": backup,
+        "paths": {
+            "app_support_dir": str(module.APP_SUPPORT_DIR_DEFAULT),
+            "falkordb_lite_path": str(falkor.get('lite_path') or ""),
+            "memory_settings": str(module.GLOBAL_MEMORY_SETTINGS_DEFAULT),
+            "unified_memory_root": str(module.unified_memory_root_path()),
+        },
+        "workflow": {
+            "status": "ok" if ok else "needs_attention",
+            "complete": ok,
+            "next_step": "done" if ok else "inspect_failed_checks",
+            "message": "Autopsy memory health checks passed." if ok else "Autopsy memory health found required checks that need attention.",
+        },
+        "timings": {"health_s": round(time.perf_counter() - started, 3)},
+    }
 
 
 def status_via_falkor(tool, workspace, embeddings_status, falkor, request: dict):
@@ -707,10 +793,17 @@ def require_falkor_context(payload: dict, *, include_embeddings_status: bool = T
         raise RuntimeError('FalkorDB memory backend is required and not enabled')
     return context
 
+
 def handle_memory_consult(payload: dict) -> dict:
     request = payload.get('request') or {}
     tool, _module, workspace, embeddings_config, embeddings_status, falkor = require_falkor_context(payload)
     return consult_via_falkor(tool, workspace, embeddings_config, embeddings_status, falkor, request)
+
+
+def handle_memory_health(payload: dict) -> dict:
+    request = payload.get('request') or {}
+    tool, _module, workspace, embeddings_config, _embeddings_status, falkor = require_falkor_context(payload, include_embeddings_status=False)
+    return health_via_falkor(tool, workspace, embeddings_config, falkor, request)
 
 
 def handle_memory_status(payload: dict) -> dict:
@@ -997,6 +1090,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if parsed.path == '/memory/consult':
                 self._write_json(200, handle_memory_consult(payload))
+                return
+            if parsed.path == '/memory/health':
+                self._write_json(200, handle_memory_health(payload))
                 return
             if parsed.path == '/memory/status':
                 self._write_json(200, handle_memory_status(payload))
