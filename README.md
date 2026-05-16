@@ -18,7 +18,7 @@ This repository is the standalone memory product extraction. It intentionally do
 Use a virtual environment while the package is still pre-release:
 
 ```bash
-cd /Users/naveenshaji/github/codex/projects/autopsy-memory-extract
+cd /Users/naveenshaji/github/codex/projects/autopsy
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -U pip
@@ -124,6 +124,6 @@ The current internal benchmark is a product gate, not a public leaderboard. Publ
 
 ## Repository Split
 
-This repo is intended to become `naveenshaji/autopsy`.
+This repo is intended to be published as `naveenshaji/autopsy`.
 
 The previous Swift macOS Codex client should live separately as `autopsy-client-legacy`. The client may integrate with this memory layer through the CLI, worker, or MCP bridge, but it should not own the canonical memory implementation.
