@@ -7,6 +7,7 @@
   export let itemPayload: AutopsyPayload | null = null;
   export let neighborsPayload: AutopsyPayload | null = null;
   export let timelinePayload: AutopsyPayload | null = null;
+  export let showLabels = true;
 
   let container: HTMLDivElement;
   let renderer: Sigma | null = null;
@@ -19,7 +20,8 @@
       links: itemPayload?.item?.links?.length ?? 0,
       relations: itemPayload?.item?.relations?.length ?? 0,
       neighbors: neighborsPayload?.neighbors?.length ?? 0,
-      events: timelinePayload?.timeline?.events?.length ?? 0
+      events: timelinePayload?.timeline?.events?.length ?? 0,
+      showLabels
     });
     if (nextSignature === renderSignature) return;
     renderSignature = nextSignature;
@@ -27,10 +29,19 @@
     const graph = buildNeighborhoodGraph(itemPayload, neighborsPayload, timelinePayload);
     renderer = new Sigma(graph, container, {
       allowInvalidContainer: true,
-      renderEdgeLabels: true,
-      labelColor: { color: "#d7d2c4" },
-      edgeLabelColor: { color: "#918b7c" },
-      defaultEdgeType: "arrow"
+      renderLabels: showLabels,
+      renderEdgeLabels: false,
+      labelColor: { color: "rgba(255,255,255,0.56)" },
+      edgeLabelColor: { color: "rgba(255,255,255,0.32)" },
+      defaultEdgeType: "arrow",
+      defaultNodeType: "circle",
+      labelSize: 11,
+      edgeLabelSize: 10,
+      labelDensity: 0.55,
+      labelGridCellSize: 80,
+      labelRenderedSizeThreshold: 9,
+      minCameraRatio: 0.42,
+      maxCameraRatio: 2.4
     });
   }
 

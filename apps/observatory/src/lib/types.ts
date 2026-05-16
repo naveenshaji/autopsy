@@ -12,6 +12,8 @@ export type MemorySummary = {
   updated_at?: string;
   activity_at?: string;
   source_kind?: string;
+  retrieval_reasons?: string[];
+  reranker_score?: number | null;
 };
 
 export type UiEvent = {

@@ -3,21 +3,27 @@ import type { AutopsyPayload } from "./types";
 import { previewOf, stableKeyOf, titleOf } from "./types";
 
 const KIND_COLOR: Record<string, string> = {
-  decision: "#d8b56d",
-  attempt: "#7fa891",
-  plan: "#8ea7c9",
-  preference: "#d19a7a",
-  open_question: "#c97878",
-  question: "#c97878",
-  memory_note: "#a9a7a0",
-  repository: "#79a8a9",
-  workspace: "#a7a083",
-  thread: "#b0a6c4",
-  episode: "#6f7b83"
+  decision: "#e2e2e2",
+  attempt: "#58c7aa",
+  plan: "#9adfd2",
+  preference: "#b8b8b8",
+  open_question: "#d26a6a",
+  question: "#d26a6a",
+  memory_note: "#8f8f8f",
+  repository: "#7d948f",
+  workspace: "#6f7775",
+  thread: "#a4a4a4",
+  episode: "#5f6765"
 };
 
 function colorFor(kind: string | undefined): string {
   return KIND_COLOR[String(kind ?? "").toLowerCase()] ?? "#a9a7a0";
+}
+
+function graphLabel(attrs: AutopsyPayload, center: boolean): string {
+  if (center) return "";
+  const title = titleOf(attrs);
+  return title.length > 42 ? `${title.slice(0, 39)}...` : title;
 }
 
 function addNode(graph: Graph, key: string, attrs: AutopsyPayload, index: number, total: number, center = false) {
@@ -28,8 +34,10 @@ function addNode(graph: Graph, key: string, attrs: AutopsyPayload, index: number
     x: center ? 0 : Math.cos(angle) * radius,
     y: center ? 0 : Math.sin(angle) * radius,
     size: center ? 18 : 9,
-    label: titleOf(attrs),
+    label: graphLabel(attrs, center),
     color: colorFor(attrs.kind ?? attrs.entity_kind),
+    borderColor: center ? "#ffffff" : "#2a2a2a",
+    highlighted: false,
     kind: attrs.kind ?? attrs.entity_kind ?? "memory",
     preview: previewOf(attrs)
   });
@@ -41,8 +49,8 @@ function addEdge(graph: Graph, source: string, target: string, label: string, in
   if (graph.hasEdge(edgeKey)) return;
   graph.addDirectedEdgeWithKey(edgeKey, source, target, {
     label,
-    color: label === "supersedes" || label === "reverts" ? "#c97878" : "#49545c",
-    size: 1.3
+    color: label === "supersedes" || label === "reverts" ? "#d26a6a" : "rgba(255,255,255,0.34)",
+    size: 1.1
   });
 }
 
