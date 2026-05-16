@@ -30,10 +30,11 @@ trap 'rm -rf "$TMP_DIR"' EXIT INT TERM HUP
 "$TMP_DIR/venv/bin/python" -m pip install -U pip >/dev/null
 "$TMP_DIR/venv/bin/python" -m pip install -e ".[dev]" >/dev/null
 
-"$TMP_DIR/venv/bin/autopsy" --help >/dev/null
-"$TMP_DIR/venv/bin/autopsy" version --json >/dev/null
-"$TMP_DIR/venv/bin/autopsy" doctor >/dev/null
-"$TMP_DIR/venv/bin/autopsy" instructions >/dev/null
+PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" --help >/dev/null
+PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" version --json >/dev/null
+PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" doctor >/dev/null
+PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" init --check >/dev/null
+PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" instructions >/dev/null
 "$TMP_DIR/venv/bin/python" -m build --wheel --outdir "$TMP_DIR/dist" >/dev/null
 
 echo "release-check: ok"

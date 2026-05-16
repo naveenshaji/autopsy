@@ -15,6 +15,7 @@ from typing import Any
 
 from .cli_parser import CommandHandlers, build_parser as build_cli_parser, normalized_cli_args
 from .doctor import import_check, installed_autopsy_command_check, python_version_check
+from .init import cmd_init
 from .metadata import cmd_instructions, cmd_version, package_version
 
 
@@ -569,6 +570,17 @@ def query_signal_tokens(value: str) -> list[str]:
         tokens.append(token)
     filtered = [token for token in tokens if token not in COMMON_QUERY_TOKENS]
     return filtered or tokens
+
+
+def query_has_unlikely_identifier(value: str) -> bool:
+    for token in query_signal_tokens(value):
+        if token.startswith("nohit"):
+            return True
+        if len(token) >= 20:
+            return True
+        if re.fullmatch(r"[0-9a-f]{12,}", token):
+            return True
+    return False
 
 
 def title_summary_overlap_score(query: str, *, title: str, summary: str, stable_key: str) -> float:
@@ -3644,6 +3656,8 @@ def build_consult_payload(
             current["updated_at"] = current.get("updated_at") or item.get("updated_at", "")
             current["activity_at"] = current.get("activity_at") or item.get("activity_at", "")
     lexical_items = filter_weak_lexical_hits(query, rerank_lexical_hits(query, list(deduped.values())))
+    if not lexical_items and query_has_unlikely_identifier(query):
+        relationship_hits = []
 
     vector_items: list[dict[str, Any]] = []
     vector_elapsed = 0.0
@@ -3654,6 +3668,8 @@ def build_consult_payload(
     if selected_route == "hybrid":
         if lexical_results_are_strong(lexical_items, limit=limit, config=config):
             hybrid_skipped_reason = "lexical_fast_path"
+        elif not lexical_items and query_has_unlikely_identifier(query):
+            hybrid_skipped_reason = "no_lexical_anchor_for_identifier_query"
         else:
             vector_items, vector_elapsed = fetch_vector_candidates(graph, tool, query, config, limit=limit)
             vector_items = apply_query_sensitive_scoring(query, vector_items)
@@ -4660,6 +4676,7 @@ def build_parser() -> argparse.ArgumentParser:
         CommandHandlers(
             version=cmd_version,
             instructions=cmd_instructions,
+            init=cmd_init,
             doctor=cmd_doctor,
             sync=cmd_sync,
             status=cmd_status,

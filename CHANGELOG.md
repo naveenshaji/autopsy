@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.1 - 2026-05-16
+
+Adds CLI-first first-run setup.
+
+- Adds `autopsy init` for managed persistent instruction installation.
+- Supports Codex global `~/.codex/AGENTS.md`, Claude Code global `~/.claude/CLAUDE.md`, repo `AGENTS.md`, and repo `CLAUDE.md`.
+- Adds `--check`, `--dry-run`, `--print`, `--mcp`, `--agent`, `--global`, `--repo`, and `--smoke-test` modes.
+- Keeps MCP optional and positions persistent instructions plus CLI commands as the default agent integration.
+- Adds init tests, release checks, and documentation.
+
 ## 0.1.0 - 2026-05-16
 
 Initial private release of the standalone Autopsy memory layer.

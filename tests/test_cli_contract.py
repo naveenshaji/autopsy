@@ -48,6 +48,21 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertTrue(args.include_operational)
         self.assertEqual(args.output, "/tmp/out.json")
 
+    def test_init_parser_accepts_cli_first_options(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["init", "--global", "--repo", "/tmp/repo", "--agent", "claude", "--dry-run", "--mcp"])
+        self.assertEqual(args.command, "init")
+        self.assertTrue(args.global_scope)
+        self.assertEqual(args.repo_path, "/tmp/repo")
+        self.assertEqual(args.agent, "claude")
+        self.assertTrue(args.dry_run)
+        self.assertTrue(args.mcp)
+
+    def test_nohit_identifier_queries_are_detected(self):
+        self.assertTrue(cli.query_has_unlikely_identifier("nohit-autopsy-init-smoke-glass-cactus"))
+        self.assertTrue(cli.query_has_unlikely_identifier("trace 0123456789abcdef"))
+        self.assertFalse(cli.query_has_unlikely_identifier("release process decisions"))
+
     def test_doctor_rejects_legacy_app_wrapper(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             wrapper = Path(tmp_dir) / "autopsy"

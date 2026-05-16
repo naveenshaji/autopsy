@@ -6,9 +6,22 @@
 ./scripts/install-global.sh
 autopsy version --json
 autopsy doctor
+autopsy init
 ```
 
 The installer creates a versioned Homebrew-style layout under `/opt/homebrew` when writable, or `~/.local` otherwise. It backs up a non-standalone existing `autopsy` command before replacing it.
+
+## First-Run Agent Setup
+
+```bash
+autopsy init
+autopsy init --check
+autopsy init --dry-run --global --repo . --agent all
+autopsy init --print
+autopsy init --mcp
+```
+
+`init` is CLI-first. It installs managed instruction blocks for Codex and Claude Code in global and repo instruction files. MCP configuration is optional and only printed when `--mcp` is passed.
 
 ## Health
 
@@ -63,10 +76,11 @@ autopsy backup
 ## Agent Setup
 
 ```bash
+autopsy init
 autopsy instructions
 ```
 
-This prints the recommended `AGENTS.md` memory instructions.
+`init` patches persistent agent instruction files. `instructions` only prints the unmanaged instruction text.
 
 Write with repo attribution:
 

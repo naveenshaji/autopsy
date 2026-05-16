@@ -13,6 +13,7 @@ Use this checklist before tagging or publishing Autopsy Memory.
 - `which autopsy` points at the standalone memory CLI wrapper or package entrypoint.
 - `autopsy version --json` prints package metadata.
 - `autopsy doctor` passes in the target release environment.
+- `autopsy init --check` reports target instruction state without writing.
 - `autopsy instructions` prints copy-pasteable agent instructions.
 - `autopsy export --limit 1` returns valid JSON.
 - `autopsy benchmark --sample-size 5 --include-sync` passes before any health claim.

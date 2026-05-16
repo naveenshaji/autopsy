@@ -38,6 +38,7 @@ jobs:
           autopsy --help >/dev/null
           autopsy version --json
           autopsy doctor
+          autopsy init --check >/dev/null
           autopsy instructions >/dev/null
 
       - name: Build wheel

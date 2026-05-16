@@ -16,6 +16,7 @@ CommandHandler = Callable[[argparse.Namespace], None]
 class CommandHandlers:
     version: CommandHandler
     instructions: CommandHandler
+    init: CommandHandler
     doctor: CommandHandler
     sync: CommandHandler
     status: CommandHandler
@@ -83,6 +84,19 @@ def build_parser(
     instructions_parser = subparsers.add_parser("instructions", help="Print copy-pasteable agent instructions for Autopsy memory.")
     instructions_parser.add_argument("--json", action="store_true", help="Print instructions as JSON.")
     instructions_parser.set_defaults(func=handlers.instructions)
+
+    init_parser = subparsers.add_parser("init", help="Install CLI-first persistent instructions for coding agents.")
+    init_parser.add_argument("--global", dest="global_scope", action="store_true", help="Install global instructions for selected agents.")
+    init_parser.add_argument("--repo", dest="repo_path", nargs="?", const="", help="Install repo-local instructions. Defaults to the current directory when no path is provided.")
+    init_parser.add_argument("--agent", choices=("all", "codex", "claude"), default="all", help="Instruction target agent.")
+    init_parser.add_argument("--print", dest="print_instructions", action="store_true", help="Print the managed instruction block without writing files.")
+    init_parser.add_argument("--check", action="store_true", help="Inspect target files without writing changes.")
+    init_parser.add_argument("--dry-run", action="store_true", help="Preview file changes without writing them.")
+    init_parser.add_argument("--yes", action="store_true", help="Apply changes without prompting.")
+    init_parser.add_argument("--smoke-test", action="store_true", help="Run doctor, read, abstention, and temporary write/delete smoke checks.")
+    init_parser.add_argument("--skip-write-smoke", action="store_true", help="Skip temporary write/delete smoke check.")
+    init_parser.add_argument("--mcp", action="store_true", help="Print optional MCP configuration. MCP is not installed by default.")
+    init_parser.set_defaults(func=handlers.init)
 
     doctor_parser = subparsers.add_parser("doctor", parents=[common], help="Check local runtime dependencies and Autopsy memory paths.")
     doctor_parser.set_defaults(func=handlers.doctor)

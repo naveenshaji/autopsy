@@ -22,6 +22,7 @@ cd /Users/naveenshaji/github/codex/projects/autopsy
 ./scripts/install-global.sh
 autopsy version --json
 autopsy doctor
+autopsy init
 ```
 
 By default this uses `/opt/homebrew` when it is writable, otherwise `~/.local`. The layout is:
@@ -53,6 +54,7 @@ python -m pip install -e .
 ```bash
 autopsy version
 autopsy doctor
+autopsy init --check
 autopsy status
 autopsy consult --query "release decisions for this repo"
 autopsy capture-outcome --outcome decision --title "Use Falkor only" --content "Falkor is the authoritative memory backend."
@@ -79,6 +81,7 @@ autopsy snapshot <stable-key>
 autopsy capture-outcome --outcome decision --title "..." --content "..."
 autopsy export --output ~/Desktop/autopsy-memory-export.json
 autopsy backup
+autopsy init --global --repo . --agent all
 autopsy instructions
 autopsy benchmark --sample-size 5 --include-sync
 ```
