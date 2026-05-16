@@ -13,6 +13,7 @@ This repository is the standalone memory product extraction. It intentionally do
 - Runs a benchmark gate for recall, abstention, latency, writes, relations, scale readiness, and Falkor health.
 - Reports product health with runtime, graph, index, backup, vector, and init-instruction status.
 - Restores exported backups with dry-run validation, safe merge defaults, and explicit replace confirmation.
+- Includes a cross-platform Tauri Observatory app for local visual memory inspection.
 - Exposes the same semantics through an MCP bridge for coding agents.
 
 ## Install
@@ -162,6 +163,18 @@ Before publishing a release:
 ```
 
 The release checklist lives at [docs/release-checklist.md](docs/release-checklist.md).
+
+## Observatory
+
+The visual companion app lives in [apps/observatory](apps/observatory). It uses Tauri v2, Rust, Svelte, Bits UI, Sigma.js, and Graphology while keeping the `autopsy` CLI/Falkor graph as the canonical engine.
+
+```bash
+./scripts/observatory-check.sh
+cd apps/observatory
+npm run tauri:dev
+```
+
+See [docs/observatory.md](docs/observatory.md).
 
 ## Repository Split
 

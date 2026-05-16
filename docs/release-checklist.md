@@ -19,6 +19,7 @@ Use this checklist before tagging or publishing Autopsy Memory.
 - `autopsy export --limit 1` returns valid JSON.
 - `autopsy restore <export.json> --dry-run` validates without writing.
 - `autopsy benchmark --sample-size 5 --include-sync` passes before any health claim.
+- `./scripts/observatory-check.sh` passes when shipping Observatory artifacts.
 
 ## Packaging
 
@@ -35,6 +36,7 @@ Use this checklist before tagging or publishing Autopsy Memory.
 - Backup/export behavior is documented.
 - Restore defaults to merge, supports dry-run, and requires explicit confirmation for replace.
 - Public claims distinguish internal benchmark gates from public leaderboards.
+- Observatory stays CLI/Falkor-backed and does not introduce a separate memory store.
 
 ## Optional Public Release
 

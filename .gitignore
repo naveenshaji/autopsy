@@ -4,9 +4,12 @@
 .mypy_cache/
 .venv/
 __pycache__/
+node_modules/
+.npm-cache/
 *.py[cod]
 *.egg-info/
 build/
 dist/
+target/
 htmlcov/
 .coverage
