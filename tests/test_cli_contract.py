@@ -66,6 +66,12 @@ class AutopsyCLIContractTests(unittest.TestCase):
         args = parser.parse_args(["health"])
         self.assertEqual(args.command, "health")
 
+    def test_observatory_parser_is_available(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["observatory", "--print-path"])
+        self.assertEqual(args.command, "observatory")
+        self.assertTrue(args.print_path)
+
     def test_restore_normalization_skips_operational_by_default(self):
         payload = {
             "items": [

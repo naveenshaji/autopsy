@@ -27,6 +27,7 @@ class CommandHandlers:
     backup: CommandHandler
     restore: CommandHandler
     health: CommandHandler
+    observatory: CommandHandler
     create_note: CommandHandler
     update_item: CommandHandler
     delete_item: CommandHandler
@@ -182,6 +183,15 @@ def build_parser(
 
     health_parser = subparsers.add_parser("health", parents=[common], help="Run a product health summary for the local memory layer.")
     health_parser.set_defaults(func=handlers.health)
+
+    observatory_parser = subparsers.add_parser("observatory", help="Run the Tauri Observatory visual memory app.")
+    observatory_parser.add_argument("--dir", dest="observatory_dir", help="Path to an Observatory app source directory.")
+    observatory_parser.add_argument("--dev", action="store_true", help="Run `npm run tauri:dev`.")
+    observatory_parser.add_argument("--build", action="store_true", help="Build a native Observatory app bundle.")
+    observatory_parser.add_argument("--open", dest="open_bundle", action="store_true", help="Open an existing built app bundle.")
+    observatory_parser.add_argument("--no-install", action="store_true", help="Do not run npm install when node_modules is missing.")
+    observatory_parser.add_argument("--print-path", action="store_true", help="Print resolved Observatory paths as JSON.")
+    observatory_parser.set_defaults(func=handlers.observatory)
 
     create_parser = subparsers.add_parser("create", parents=[common], help="Create a typed Falkor memory note.")
     add_note_write_arguments(create_parser, include_kind=True)

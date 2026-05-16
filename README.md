@@ -169,6 +169,12 @@ The release checklist lives at [docs/release-checklist.md](docs/release-checklis
 The visual companion app lives in [apps/observatory](apps/observatory). It uses Tauri v2, Rust, Svelte, Bits UI, Sigma.js, and Graphology while keeping the `autopsy` CLI/Falkor graph as the canonical engine.
 
 ```bash
+autopsy observatory
+```
+
+From a checkout, you can also run the app directly:
+
+```bash
 ./scripts/observatory-check.sh
 cd apps/observatory
 npm run tauri:dev

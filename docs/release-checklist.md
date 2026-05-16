@@ -19,6 +19,7 @@ Use this checklist before tagging or publishing Autopsy Memory.
 - `autopsy export --limit 1` returns valid JSON.
 - `autopsy restore <export.json> --dry-run` validates without writing.
 - `autopsy benchmark --sample-size 5 --include-sync` passes before any health claim.
+- `autopsy observatory --print-path` resolves the installed Observatory app source.
 - `./scripts/observatory-check.sh` passes when shipping Observatory artifacts.
 
 ## Packaging

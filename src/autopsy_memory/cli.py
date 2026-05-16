@@ -6,6 +6,8 @@ import json
 import os
 import re
 import shlex
+import shutil
+import subprocess
 import sys
 import time
 import uuid
@@ -24,6 +26,9 @@ FALKORDB_LITE_PATH_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "FalkorDB" / "autopsy-mem
 GLOBAL_MEMORY_SETTINGS_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "Config" / "memory-settings.json"
 UNIFIED_MEMORY_ROOT_DEFAULT = Path.home() / "github" / "codex"
 STATUS_WINDOW_DAYS_DEFAULT = 21
+OBSERVATORY_RELATIVE_DIR = Path("apps") / "observatory"
+OBSERVATORY_INSTALLED_DIR_NAME = "observatory"
+OBSERVATORY_MACOS_BUNDLE = Path("src-tauri") / "target" / "release" / "bundle" / "macos" / "Autopsy Observatory.app"
 
 SEARCHABLE_KINDS = {
     "decision",
@@ -5215,6 +5220,110 @@ def cmd_health(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def existing_observatory_dir(path: Path | None) -> Path | None:
+    if path and (path / "package.json").exists() and (path / "src-tauri" / "tauri.conf.json").exists():
+        return path
+    return None
+
+
+def observatory_candidate_dirs(args: argparse.Namespace) -> list[Path]:
+    candidates: list[Path] = []
+    if getattr(args, "observatory_dir", None):
+        candidates.append(Path(args.observatory_dir).expanduser())
+    if os.environ.get("AUTOPSY_OBSERVATORY_DIR"):
+        candidates.append(Path(os.environ["AUTOPSY_OBSERVATORY_DIR"]).expanduser())
+
+    cwd = Path.cwd()
+    candidates.extend(parent / OBSERVATORY_RELATIVE_DIR for parent in (cwd, *cwd.parents))
+
+    module_root = Path(__file__).resolve().parents[2]
+    candidates.append(module_root / OBSERVATORY_RELATIVE_DIR)
+
+    executable = Path(sys.executable).resolve()
+    install_roots = [Path(sys.prefix).resolve(), Path(sys.prefix).resolve().parent, executable.parent, *executable.parents[:4]]
+    candidates.extend(root / OBSERVATORY_INSTALLED_DIR_NAME for root in install_roots)
+
+    seen: set[Path] = set()
+    unique: list[Path] = []
+    for candidate in candidates:
+        resolved = candidate.resolve() if candidate.exists() else candidate.absolute()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        unique.append(candidate)
+    return unique
+
+
+def resolve_observatory_dir(args: argparse.Namespace) -> Path:
+    for candidate in observatory_candidate_dirs(args):
+        if existing_observatory_dir(candidate):
+            return candidate
+    searched = "\n".join(f"  - {candidate}" for candidate in observatory_candidate_dirs(args))
+    raise SystemExit(
+        "Autopsy Observatory app source was not found.\n"
+        "Run from the autopsy repo, pass --dir /path/to/apps/observatory, or set AUTOPSY_OBSERVATORY_DIR.\n"
+        f"Searched:\n{searched}"
+    )
+
+
+def run_observatory_process(command: list[str], *, cwd: Path) -> None:
+    try:
+        raise SystemExit(subprocess.call(command, cwd=str(cwd)))
+    except FileNotFoundError as error:
+        raise SystemExit(f"Failed to run {command[0]!r}: {error}") from error
+
+
+def ensure_observatory_node_modules(app_dir: Path, *, no_install: bool) -> None:
+    if (app_dir / "node_modules").exists() or no_install:
+        return
+    if not shutil.which("npm"):
+        raise SystemExit("npm is required to run Observatory, but it was not found on PATH.")
+    result = subprocess.run(["npm", "install", "--cache", ".npm-cache"], cwd=str(app_dir), check=False)
+    if result.returncode != 0:
+        raise SystemExit(result.returncode)
+
+
+def open_observatory_bundle(bundle_path: Path) -> None:
+    if not bundle_path.exists():
+        raise SystemExit(f"Observatory app bundle was not found at {bundle_path}. Run `autopsy observatory --build` first.")
+    if sys.platform == "darwin":
+        run_observatory_process(["open", str(bundle_path)], cwd=bundle_path.parent)
+    elif sys.platform.startswith("win"):
+        os.startfile(str(bundle_path))  # type: ignore[attr-defined]
+    else:
+        run_observatory_process(["xdg-open", str(bundle_path)], cwd=bundle_path.parent)
+
+
+def cmd_observatory(args: argparse.Namespace) -> None:
+    app_dir = resolve_observatory_dir(args)
+    bundle_path = app_dir / OBSERVATORY_MACOS_BUNDLE
+
+    if args.print_path:
+        print(
+            json.dumps(
+                {
+                    "observatory_dir": str(app_dir),
+                    "bundle_path": str(bundle_path),
+                    "bundle_exists": bundle_path.exists(),
+                },
+                indent=2,
+            )
+        )
+        return
+
+    if args.open_bundle or (not args.dev and not args.build and bundle_path.exists()):
+        open_observatory_bundle(bundle_path)
+        return
+
+    if args.build:
+        ensure_observatory_node_modules(app_dir, no_install=args.no_install)
+        run_observatory_process(["npm", "run", "tauri:build", "--", "--bundles", "app"], cwd=app_dir)
+        return
+
+    ensure_observatory_node_modules(app_dir, no_install=args.no_install)
+    run_observatory_process(["npm", "run", "tauri:dev"], cwd=app_dir)
+
+
 def cmd_doctor(args: argparse.Namespace) -> None:
     checks = [
         python_version_check(),
@@ -5264,6 +5373,7 @@ def build_parser() -> argparse.ArgumentParser:
             backup=cmd_backup,
             restore=cmd_restore,
             health=cmd_health,
+            observatory=cmd_observatory,
             create_note=cmd_create_note,
             update_item=cmd_update_item,
             delete_item=cmd_delete_item,

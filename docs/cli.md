@@ -31,9 +31,12 @@ autopsy doctor
 autopsy health
 autopsy status --current-only
 autopsy benchmark --sample-size 5 --include-sync
+autopsy observatory
 ```
 
 `health` is a lightweight product summary. It checks Falkor reachability, runtime dependencies, graph/index readiness, vector counts, backup freshness, and installed instruction state. It does not replace the benchmark gate.
+
+`observatory` launches the Tauri visual inspection app. It opens an existing built bundle when present, otherwise it runs the bundled Svelte/Tauri app in dev mode. Use `autopsy observatory --build` to create a local native app bundle and `autopsy observatory --print-path` to inspect the resolved app paths.
 
 ## Retrieval
 

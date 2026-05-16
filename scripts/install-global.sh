@@ -116,6 +116,23 @@ else
   "$VENV_DIR/bin/python" -m pip install "$WHEEL_PATH" >/dev/null
 fi
 
+if [ -d "$ROOT_DIR/apps/observatory" ]; then
+  mkdir -p "$TMP_DIR/observatory"
+  (
+    cd "$ROOT_DIR/apps/observatory"
+    tar \
+      --exclude node_modules \
+      --exclude .npm-cache \
+      --exclude dist \
+      --exclude target \
+      --exclude src-tauri/target \
+      -cf - .
+  ) | (
+    cd "$TMP_DIR/observatory"
+    tar -xf -
+  )
+fi
+
 rm -rf "$CELLAR_DIR.previous"
 if [ -d "$CELLAR_DIR" ]; then
   mv "$CELLAR_DIR" "$CELLAR_DIR.previous"

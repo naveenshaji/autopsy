@@ -19,6 +19,25 @@ Requirements:
 - FalkorDBLite is healthy enough for `autopsy health` and read commands.
 - Node.js/npm and a Rust toolchain are installed.
 
+Run through the installed CLI:
+
+```bash
+autopsy observatory
+```
+
+Useful launcher modes:
+
+```bash
+autopsy observatory --print-path
+autopsy observatory --dev
+autopsy observatory --build
+autopsy observatory --open
+```
+
+If no built app bundle exists, `autopsy observatory` runs the Tauri dev app from the bundled or repo-local Observatory source. The Homebrew-style installer copies `apps/observatory` into the installed Cellar layout so the launcher does not require staying inside the repo checkout.
+
+Run directly from the repo:
+
 ```bash
 cd apps/observatory
 npm install --cache .npm-cache

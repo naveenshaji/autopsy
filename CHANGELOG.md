@@ -4,6 +4,7 @@
 
 - Adds the Tauri v2 Autopsy Observatory app with a Rust CLI bridge, Svelte/Bits UI frontend, Sigma.js/Graphology neighborhood graph, and tray/menu bar health and backup actions.
 - Keeps the installed `autopsy` CLI and Falkor graph as the canonical engine; Observatory performs read-only inspection and serializes CLI calls to avoid embedded Falkor startup races.
+- Adds `autopsy observatory` so the installed CLI can launch, build, or locate the Observatory app.
 
 ## 0.1.2 - 2026-05-16
 
