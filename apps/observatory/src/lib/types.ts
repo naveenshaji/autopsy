@@ -12,6 +12,7 @@ export type MemorySummary = {
   updated_at?: string;
   activity_at?: string;
   source_kind?: string;
+  repository_name?: string;
   retrieval_reasons?: string[];
   reranker_score?: number | null;
 };

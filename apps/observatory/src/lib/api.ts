@@ -9,8 +9,8 @@ export function autopsyStatus(limit = 8, sectionLimit = 4): Promise<AutopsyPaylo
   return invoke("autopsy_status", { limit, sectionLimit });
 }
 
-export function autopsyConsult(query: string, limit = 6, inspectLimit = 3): Promise<AutopsyPayload> {
-  return invoke("autopsy_consult", { query, limit, inspectLimit });
+export function autopsyConsult(query: string, limit = 6, inspectLimit = 0, route = "lexical"): Promise<AutopsyPayload> {
+  return invoke("autopsy_consult", { query, limit, inspectLimit, route });
 }
 
 export function autopsyItem(stableKey: string): Promise<AutopsyPayload> {

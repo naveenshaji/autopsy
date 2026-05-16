@@ -35,6 +35,8 @@ function addNode(graph: Graph, key: string, attrs: AutopsyPayload, index: number
     y: center ? 0 : Math.sin(angle) * radius,
     size: center ? 18 : 9,
     label: graphLabel(attrs, center),
+    title: titleOf(attrs),
+    stableKey: key,
     color: colorFor(attrs.kind ?? attrs.entity_kind),
     borderColor: center ? "#ffffff" : "#2a2a2a",
     highlighted: false,
