@@ -33,7 +33,7 @@ final class ActivityStore: ObservableObject {
     private var hasLoadedActivity = false
 
     init() {
-        cliPath = UserDefaults.standard.string(forKey: Defaults.cliPath) ?? "autopsy"
+        cliPath = UserDefaults.standard.string(forKey: Defaults.cliPath) ?? Self.defaultCLIPath
         notifyOnWrites = UserDefaults.standard.bool(forKey: Defaults.notifyOnWrites)
         start()
     }
@@ -80,6 +80,23 @@ final class ActivityStore: ObservableObject {
             return "arrow.triangle.2.circlepath"
         }
         return "brain.head.profile"
+    }
+
+    var notificationsAvailable: Bool {
+        Self.notificationsAvailable
+    }
+
+    private static var notificationsAvailable: Bool {
+        guard let bundleIdentifier = Bundle.main.bundleIdentifier else { return false }
+        return !bundleIdentifier.isEmpty
+    }
+
+    private static var defaultCLIPath: String {
+        if let configured = Bundle.main.object(forInfoDictionaryKey: "AutopsyDefaultCLIPath") as? String,
+           !configured.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return configured
+        }
+        return "autopsy"
     }
 
     func start() {
@@ -152,7 +169,7 @@ final class ActivityStore: ObservableObject {
             hasLoadedActivity = true
         }
 
-        guard hasLoadedActivity, newestWriteKey != key, notifyOnWrites else { return }
+        guard hasLoadedActivity, newestWriteKey != key, notifyOnWrites, notificationsAvailable else { return }
         let content = UNMutableNotificationContent()
         content.title = "Autopsy memory written"
         content.body = write.title ?? "New memory captured"
@@ -162,6 +179,7 @@ final class ActivityStore: ObservableObject {
     }
 
     private func requestNotificationAuthorization() {
+        guard notificationsAvailable else { return }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) { _, _ in }
     }
 }

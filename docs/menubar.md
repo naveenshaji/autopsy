@@ -8,6 +8,7 @@ The app is intentionally not a memory browser. The installed `autopsy` CLI and F
 
 - SwiftPM executable target at `apps/menubar`.
 - SwiftUI `MenuBarExtra` with accessory activation.
+- `autopsy menubar` stages a minimal `.app` bundle before launch so macOS services such as notifications have a bundle identity.
 - `autopsy activity` for recent writes, recent consults, status, and attention items.
 - Manual `autopsy health` and `autopsy backup` controls.
 
@@ -34,12 +35,14 @@ autopsy menubar --build
 autopsy menubar --release
 ```
 
-Run directly from the repo:
+For low-level SwiftPM debugging, run directly from the repo:
 
 ```bash
 cd apps/menubar
 swift run AutopsyMenuBar
 ```
+
+Direct `swift run` launches an unbundled executable, so notification APIs are disabled in that mode.
 
 Run checks:
 

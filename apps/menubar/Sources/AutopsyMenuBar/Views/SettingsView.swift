@@ -15,9 +15,15 @@ struct SettingsView: View {
 
             Section("Notifications") {
                 Toggle("Notify when a memory is written", isOn: $store.notifyOnWrites)
+                    .disabled(!store.notificationsAvailable)
                 Text("Successful writes stay quiet by default. Enable this only when you want a visible capture trail.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if !store.notificationsAvailable {
+                    Text("Notifications require launching Autopsy as a macOS app bundle.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .padding(20)

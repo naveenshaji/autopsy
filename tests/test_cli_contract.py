@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import plistlib
 import sys
 import tempfile
 import unittest
@@ -168,6 +169,26 @@ class AutopsyCLIContractTests(unittest.TestCase):
         menubar_args = parser.parse_args(["menubar", "--print-path"])
         self.assertEqual(menubar_args.command, "menubar")
         self.assertTrue(menubar_args.print_path)
+
+    def test_stage_menubar_app_bundle_writes_launchservices_plist(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_dir = Path(temp_dir)
+            binary = app_dir / ".build" / "debug" / cli.MENUBAR_PRODUCT_NAME
+            binary.parent.mkdir(parents=True)
+            binary.write_text("#!/bin/sh\n", encoding="utf-8")
+            binary.chmod(0o755)
+
+            bundle = cli.stage_menubar_app_bundle(app_dir, release=False)
+            staged_binary = bundle / "Contents" / "MacOS" / cli.MENUBAR_PRODUCT_NAME
+            plist_path = bundle / "Contents" / "Info.plist"
+
+            self.assertTrue(staged_binary.exists())
+            with plist_path.open("rb") as handle:
+                plist = plistlib.load(handle)
+            self.assertEqual(plist["CFBundleIdentifier"], "com.naveenshaji.autopsy.menubar")
+            self.assertEqual(plist["CFBundleExecutable"], cli.MENUBAR_PRODUCT_NAME)
+            self.assertTrue(plist["LSUIElement"])
+            self.assertIn("AutopsyDefaultCLIPath", plist)
 
     def test_restore_normalization_skips_operational_by_default(self):
         payload = {

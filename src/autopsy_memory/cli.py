@@ -5,8 +5,10 @@ import hashlib
 import json
 import math
 import os
+import plistlib
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -15110,16 +15112,68 @@ def resolve_menubar_dir(args: argparse.Namespace) -> Path:
     )
 
 
-def run_menubar_process(command: list[str], *, cwd: Path) -> None:
+def call_menubar_process(command: list[str], *, cwd: Path) -> int:
     try:
-        raise SystemExit(subprocess.call(command, cwd=str(cwd)))
+        return subprocess.call(command, cwd=str(cwd))
     except FileNotFoundError as error:
         raise SystemExit(f"Failed to run {command[0]!r}: {error}") from error
+
+
+def run_menubar_process(command: list[str], *, cwd: Path) -> None:
+    raise SystemExit(call_menubar_process(command, cwd=cwd))
 
 
 def menubar_binary_path(app_dir: Path, *, release: bool) -> Path:
     configuration = "release" if release else "debug"
     return app_dir / ".build" / configuration / MENUBAR_PRODUCT_NAME
+
+
+def menubar_app_bundle_path(app_dir: Path, *, release: bool) -> Path:
+    configuration = "release" if release else "debug"
+    return app_dir / ".build" / configuration / f"{MENUBAR_PRODUCT_NAME}.app"
+
+
+def menubar_default_cli_path() -> str:
+    autopsy_path = shutil.which("autopsy")
+    if autopsy_path:
+        return autopsy_path
+    return "autopsy"
+
+
+def stage_menubar_app_bundle(app_dir: Path, *, release: bool) -> Path:
+    binary_path = menubar_binary_path(app_dir, release=release)
+    if not binary_path.exists():
+        raise SystemExit(f"Menu bar binary was not built: {binary_path}")
+
+    bundle_path = menubar_app_bundle_path(app_dir, release=release)
+    contents_dir = bundle_path / "Contents"
+    macos_dir = contents_dir / "MacOS"
+    resources_dir = contents_dir / "Resources"
+    macos_dir.mkdir(parents=True, exist_ok=True)
+    resources_dir.mkdir(parents=True, exist_ok=True)
+
+    bundled_binary = macos_dir / MENUBAR_PRODUCT_NAME
+    shutil.copy2(binary_path, bundled_binary)
+    bundled_binary.chmod(0o755)
+
+    plist = {
+        "AutopsyDefaultCLIPath": menubar_default_cli_path(),
+        "CFBundleDevelopmentRegion": "en",
+        "CFBundleDisplayName": "Autopsy",
+        "CFBundleExecutable": MENUBAR_PRODUCT_NAME,
+        "CFBundleIdentifier": "com.naveenshaji.autopsy.menubar",
+        "CFBundleInfoDictionaryVersion": "6.0",
+        "CFBundleName": "AutopsyMenuBar",
+        "CFBundlePackageType": "APPL",
+        "CFBundleShortVersionString": package_version(),
+        "CFBundleVersion": package_version(),
+        "LSMinimumSystemVersion": "13.0",
+        "LSUIElement": True,
+        "NSPrincipalClass": "NSApplication",
+    }
+    with (contents_dir / "Info.plist").open("wb") as handle:
+        plistlib.dump(plist, handle)
+    return bundle_path
 
 
 def cmd_menubar(args: argparse.Namespace) -> None:
@@ -15129,6 +15183,7 @@ def cmd_menubar(args: argparse.Namespace) -> None:
     release = bool(getattr(args, "release", False))
     configuration = "release" if release else "debug"
     binary_path = menubar_binary_path(app_dir, release=release)
+    bundle_path = menubar_app_bundle_path(app_dir, release=release)
 
     if args.print_path:
         print(
@@ -15139,6 +15194,8 @@ def cmd_menubar(args: argparse.Namespace) -> None:
                     "configuration": configuration,
                     "binary_path": str(binary_path),
                     "binary_exists": binary_path.exists(),
+                    "app_bundle_path": str(bundle_path),
+                    "app_bundle_exists": bundle_path.exists(),
                 },
                 indent=2,
             )
@@ -15146,10 +15203,17 @@ def cmd_menubar(args: argparse.Namespace) -> None:
         return
 
     if args.build:
-        run_menubar_process(["swift", "build", "-c", configuration], cwd=app_dir)
+        build_status = call_menubar_process(["swift", "build", "-c", configuration], cwd=app_dir)
+        if build_status != 0:
+            raise SystemExit(build_status)
+        stage_menubar_app_bundle(app_dir, release=release)
         return
 
-    run_menubar_process(["swift", "run", "-c", configuration, MENUBAR_PRODUCT_NAME], cwd=app_dir)
+    build_status = call_menubar_process(["swift", "build", "-c", configuration], cwd=app_dir)
+    if build_status != 0:
+        raise SystemExit(build_status)
+    bundle_path = stage_menubar_app_bundle(app_dir, release=release)
+    run_menubar_process(["open", "-n", str(bundle_path)], cwd=app_dir)
 
 
 def cmd_doctor(args: argparse.Namespace) -> None:

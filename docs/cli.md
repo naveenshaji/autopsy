@@ -42,7 +42,7 @@ autopsy menubar
 
 `activity` is the lightweight JSON feed for UI clients. It returns recent memory writes, recent consult telemetry, attention items, and current status without exposing the graph-browser surface.
 
-`menubar` launches the native macOS menu bar app from `apps/menubar`. Use `autopsy menubar --build` to build it with SwiftPM and `autopsy menubar --print-path` to inspect the resolved app paths.
+`menubar` builds the native macOS menu bar app from `apps/menubar`, stages a small `.app` bundle, and opens it with LaunchServices. Use `autopsy menubar --build` to build and stage the app without launching it, and `autopsy menubar --print-path` to inspect the resolved app paths.
 
 ## Retrieval
 

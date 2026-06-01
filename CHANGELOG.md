@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.1.4 - 2026-06-01
+
+Fixes native menu bar launch stability.
+
+- Stages `AutopsyMenuBar.app` before launching so macOS services see a real bundle identity.
+- Prevents unbundled SwiftPM debug launches from touching UserNotifications APIs.
+- Adds the staged app bundle path to `autopsy menubar --print-path`.
+
 ## 0.1.3 - 2026-06-01
 
 Replaces Observatory with a native menu bar companion.
