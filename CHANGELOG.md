@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.1.3 - 2026-06-01
+
+Replaces Observatory with a native menu bar companion.
+
 - Removes the Tauri/Svelte Observatory graph browser product surface.
 - Adds a native Swift macOS menu bar utility focused on recent writes, recent consults, health, backup, and quiet attention states.
 - Adds `autopsy activity` as the lightweight JSON feed for UI clients.
