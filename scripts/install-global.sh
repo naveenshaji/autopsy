@@ -128,6 +128,11 @@ if [ -d "$ROOT_DIR/apps/menubar" ]; then
     cd "$TMP_DIR/menubar"
     tar -xf -
   )
+  if [ "$(uname -s)" = "Darwin" ] && command -v swift >/dev/null 2>&1; then
+    "$VENV_DIR/bin/python" -m autopsy_memory.cli menubar --dir "$TMP_DIR/menubar" --build --release >/dev/null
+  else
+    echo "install-global: menu bar app was not prebuilt; it will build on first macOS launch" >&2
+  fi
 fi
 
 rm -rf "$CELLAR_DIR.previous"

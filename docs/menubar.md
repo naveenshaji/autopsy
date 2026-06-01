@@ -40,7 +40,7 @@ autopsy menubar --launch-agent-status
 autopsy menubar --uninstall-launch-agent
 ```
 
-Normal `autopsy menubar` launches the staged app bundle without forcing a rebuild when the bundle is current. `--install-launch-agent` writes a user LaunchAgent at `~/Library/LaunchAgents/com.naveenshaji.autopsy.menubar.plist` so the utility opens at login. The same startup state is visible and editable from Settings under **Open Autopsy at Login**.
+Normal `autopsy menubar` launches the staged app bundle without forcing a rebuild when the bundle is current. Homebrew-style installs default to the release app bundle, and the global installer prestages that bundle on macOS so first launch does not need a debug build. `--install-launch-agent` writes a user LaunchAgent at `~/Library/LaunchAgents/com.naveenshaji.autopsy.menubar.plist` so the utility opens at login. Homebrew-style installs write that LaunchAgent through the stable `<prefix>/opt/autopsy-memory/menubar` path when available, so login startup follows package updates instead of pinning to one Cellar version. The same startup state is visible and editable from Settings under **Open Autopsy at Login**.
 
 For low-level SwiftPM debugging, run directly from the repo:
 

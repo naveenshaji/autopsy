@@ -21,7 +21,7 @@ from typing import Any
 from .cli_parser import CommandHandlers, build_parser as build_cli_parser, normalized_cli_args
 from .doctor import import_check, installed_autopsy_command_check, python_version_check
 from .init import cmd_init, instruction_targets, target_status
-from .metadata import cmd_instructions, cmd_version, package_version
+from .metadata import PACKAGE_NAME, cmd_instructions, cmd_version, package_version
 
 
 APP_SUPPORT_DIR_DEFAULT = Path(os.environ.get("AUTOPSY_APP_SUPPORT_DIR") or Path.home() / "Library" / "Application Support" / "Autopsy")
@@ -15236,6 +15236,31 @@ def menubar_launchctl_domain() -> str:
     return f"gui/{os.getuid()}"
 
 
+def menubar_homebrew_prefix(app_dir: Path) -> Path | None:
+    resolved = app_dir.resolve() if app_dir.exists() else app_dir.absolute()
+    parts = resolved.parts
+    for index, part in enumerate(parts):
+        if part != "Cellar" or index + 3 >= len(parts):
+            continue
+        if parts[index + 1] != PACKAGE_NAME or parts[index + 3] != MENUBAR_INSTALLED_DIR_NAME:
+            continue
+        return Path(*parts[:index])
+    return None
+
+
+def menubar_launch_agent_app_dir(app_dir: Path) -> Path:
+    prefix = menubar_homebrew_prefix(app_dir)
+    if prefix:
+        opt_dir = prefix / "opt" / PACKAGE_NAME / MENUBAR_INSTALLED_DIR_NAME
+        if opt_dir.exists():
+            return opt_dir
+    return app_dir
+
+
+def menubar_default_release(app_dir: Path) -> bool:
+    return menubar_homebrew_prefix(app_dir) is not None
+
+
 def menubar_launcher_arguments(args: argparse.Namespace, app_dir: Path) -> list[str]:
     invoked = Path(sys.argv[0]).expanduser()
     if invoked.name == "autopsy" and invoked.exists():
@@ -15243,7 +15268,7 @@ def menubar_launcher_arguments(args: argparse.Namespace, app_dir: Path) -> list[
     else:
         autopsy_path = shutil.which("autopsy")
         command = [autopsy_path] if autopsy_path else [sys.executable, "-m", "autopsy_memory.cli"]
-    command.extend(["menubar", "--dir", str(app_dir)])
+    command.extend(["menubar", "--dir", str(menubar_launch_agent_app_dir(app_dir))])
     if bool(getattr(args, "release", False)):
         command.append("--release")
     return command
@@ -15251,13 +15276,14 @@ def menubar_launcher_arguments(args: argparse.Namespace, app_dir: Path) -> list[
 
 def menubar_launch_agent_plist(args: argparse.Namespace, app_dir: Path) -> dict[str, Any]:
     log_dir = menubar_log_dir()
+    launch_app_dir = menubar_launch_agent_app_dir(app_dir)
     return {
         "Label": MENUBAR_LAUNCH_AGENT_LABEL,
         "ProgramArguments": menubar_launcher_arguments(args, app_dir),
         "RunAtLoad": True,
         "StandardOutPath": str(log_dir / "menubar-launch-agent.out.log"),
         "StandardErrorPath": str(log_dir / "menubar-launch-agent.err.log"),
-        "WorkingDirectory": str(app_dir),
+        "WorkingDirectory": str(launch_app_dir),
     }
 
 
@@ -15327,7 +15353,7 @@ def cmd_menubar(args: argparse.Namespace) -> None:
         return
 
     app_dir = resolve_menubar_dir(args)
-    release = bool(getattr(args, "release", False))
+    release = bool(getattr(args, "release", False) or menubar_default_release(app_dir))
     configuration = "release" if release else "debug"
     binary_path = menubar_binary_path(app_dir, release=release)
     bundle_path = menubar_app_bundle_path(app_dir, release=release)

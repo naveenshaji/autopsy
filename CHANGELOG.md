@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.1.9 - 2026-06-01
+
+Keeps the menu bar login item stable across Homebrew-style updates.
+
+- Writes the user LaunchAgent with the stable `<prefix>/opt/autopsy-memory/menubar` path when the app is installed from a Homebrew-style Cellar.
+- Uses release builds by default for Homebrew-style menu bar launches and prestages the release app bundle during the global installer on macOS.
+- Keeps explicit custom menu bar directories unchanged for source and development launches.
+
 ## 0.1.8 - 2026-06-01
 
 Restores native action feedback in the menu bar status row.

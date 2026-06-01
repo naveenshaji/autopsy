@@ -204,6 +204,41 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertIn("menubar", payload["ProgramArguments"])
         self.assertIn("--dir", payload["ProgramArguments"])
         self.assertIn("/tmp/autopsy-menubar", payload["ProgramArguments"])
+        self.assertEqual(payload["WorkingDirectory"], "/tmp/autopsy-menubar")
+
+    def test_menubar_launch_agent_prefers_homebrew_opt_path(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["menubar", "--install-launch-agent"])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            prefix = Path(temp_dir)
+            cellar_menubar = prefix / "Cellar" / cli.PACKAGE_NAME / "0.1.9" / cli.MENUBAR_INSTALLED_DIR_NAME
+            cellar_menubar.mkdir(parents=True)
+            opt_root = prefix / "opt" / cli.PACKAGE_NAME
+            opt_root.parent.mkdir(parents=True)
+            opt_root.symlink_to(cellar_menubar.parent, target_is_directory=True)
+            stable_menubar = prefix.resolve() / "opt" / cli.PACKAGE_NAME / cli.MENUBAR_INSTALLED_DIR_NAME
+
+            payload = cli.menubar_launch_agent_plist(args, cellar_menubar)
+
+        self.assertIn(str(stable_menubar), payload["ProgramArguments"])
+        self.assertNotIn(str(cellar_menubar), payload["ProgramArguments"])
+        self.assertEqual(payload["WorkingDirectory"], str(stable_menubar))
+
+    def test_installed_menubar_defaults_to_release_build(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["menubar", "--print-path"])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_dir = Path(temp_dir) / "Cellar" / cli.PACKAGE_NAME / "0.1.9" / cli.MENUBAR_INSTALLED_DIR_NAME
+            app_dir.mkdir(parents=True)
+            stream = io.StringIO()
+            with (
+                mock.patch.object(cli.sys, "platform", "darwin"),
+                mock.patch.object(cli, "resolve_menubar_dir", return_value=app_dir),
+                contextlib.redirect_stdout(stream),
+            ):
+                cli.cmd_menubar(args)
+            payload = json.loads(stream.getvalue())
+        self.assertEqual(payload["configuration"], "release")
 
     def test_menubar_launch_agent_status_does_not_require_app_source(self):
         parser = cli.build_parser()
