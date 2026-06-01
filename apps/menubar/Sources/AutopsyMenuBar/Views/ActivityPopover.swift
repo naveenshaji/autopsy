@@ -5,45 +5,81 @@ struct ActivityPopover: View {
     @ObservedObject var store: ActivityStore
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(spacing: 0) {
             header
-            statusLine
-            activitySnapshot
-
-            if let message = store.errorMessage {
-                AttentionBanner(title: "Autopsy unavailable", summary: message)
-            } else if !store.attentionEvents.isEmpty {
-                ForEach(store.attentionEvents.prefix(2)) { event in
-                    AttentionBanner(title: event.title ?? "Needs attention", summary: event.summary ?? "")
-                }
-            }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
 
             Divider()
 
-            ActivitySection(title: "Recent writes", emptyText: "No memory writes yet", isEmpty: store.recentWrites.isEmpty) {
-                ForEach(store.recentWrites.prefix(4)) { write in
-                    WriteRow(write: write)
+            List {
+                Section {
+                    StatusRow(
+                        title: "Status",
+                        detail: store.statusSummary,
+                        footnote: refreshLabel,
+                        systemImage: store.errorMessage == nil ? "checkmark.circle" : "exclamationmark.triangle",
+                        isError: store.errorMessage != nil
+                    )
+                    StatusRow(
+                        title: "Activity",
+                        detail: activitySummary,
+                        systemImage: "chart.bar"
+                    )
+                    StatusRow(
+                        title: "Login Startup",
+                        detail: store.launchAtLoginStatusText,
+                        systemImage: store.launchAtLoginEnabled ? "checkmark.circle" : "circle",
+                        isError: store.launchAgentError != nil
+                    )
                 }
-            }
 
-            ActivitySection(title: "Recent consults", emptyText: "No consult telemetry yet", isEmpty: store.recentConsults.isEmpty) {
-                ForEach(store.recentConsults.prefix(3)) { consult in
-                    ConsultRow(consult: consult)
+                if !store.attentionEvents.isEmpty {
+                    Section("Attention") {
+                        ForEach(store.attentionEvents.prefix(2)) { event in
+                            AttentionRow(event: event)
+                        }
+                    }
+                }
+
+                Section("Recent Writes") {
+                    if store.recentWrites.isEmpty {
+                        EmptyActivityRow(text: "No memory writes yet")
+                    } else {
+                        ForEach(store.recentWrites.prefix(4)) { write in
+                            WriteRow(write: write)
+                        }
+                    }
+                }
+
+                Section("Recent Consults") {
+                    if store.recentConsults.isEmpty {
+                        EmptyActivityRow(text: "No consult telemetry yet")
+                    } else {
+                        ForEach(store.recentConsults.prefix(3)) { consult in
+                            ConsultRow(consult: consult)
+                        }
+                    }
                 }
             }
+            .listStyle(.inset)
 
             Divider()
+
             controls
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
         }
-        .padding(16)
-        .frame(width: 420)
+        .frame(width: 420, height: 520)
     }
 
     private var header: some View {
         HStack(spacing: 10) {
             Image(systemName: store.menuBarSystemImage)
-                .font(.system(size: 17, weight: .semibold))
+                .font(.title3)
                 .symbolRenderingMode(.hierarchical)
+                .frame(width: 22)
+
             VStack(alignment: .leading, spacing: 2) {
                 Text("Autopsy")
                     .font(.headline)
@@ -53,140 +89,121 @@ struct ActivityPopover: View {
                     .lineLimit(1)
                     .help(store.workspacePath.isEmpty ? store.workspaceTitle : store.workspacePath)
             }
+
             Spacer()
+
+            if store.isLoading {
+                ProgressView()
+                    .controlSize(.small)
+            }
+
             Button {
                 store.refresh()
             } label: {
-                Image(systemName: "arrow.clockwise")
+                Label("Refresh", systemImage: "arrow.clockwise")
             }
-            .buttonStyle(.borderless)
+            .labelStyle(.iconOnly)
             .help("Refresh")
             .disabled(store.isLoading)
         }
     }
 
-    private var activitySnapshot: some View {
-        HStack(spacing: 6) {
-            ActivityCountPill(systemImage: "square.and.pencil", value: store.recentWrites.count, label: "writes")
-            ActivityCountPill(systemImage: "magnifyingglass", value: store.recentConsults.count, label: "consults")
-            if !store.attentionEvents.isEmpty {
-                ActivityCountPill(systemImage: "exclamationmark.triangle", value: store.attentionEvents.count, label: "attention")
-            }
-            Spacer(minLength: 0)
-        }
-    }
-
-    private var statusLine: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(store.statusSummary)
-                .font(.callout)
-                .foregroundStyle(store.errorMessage == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.red))
-                .lineLimit(2)
-            HStack(spacing: 8) {
-                if store.isLoading {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text("Refreshing")
-                } else if let lastRefresh = store.lastRefresh {
-                    Text("Updated \(lastRefresh.formatted(date: .omitted, time: .shortened))")
-                } else {
-                    Text("Not refreshed")
-                }
-                if let message = store.lastActionMessage {
-                    Text(message)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .font(.caption)
-            .foregroundStyle(.tertiary)
-            .lineLimit(1)
-        }
-    }
-
     private var controls: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Button {
                     store.runHealth()
                 } label: {
                     Label("Health", systemImage: "stethoscope")
                 }
+
                 Button {
                     store.runBackup()
                 } label: {
                     Label("Backup", systemImage: "externaldrive")
                 }
+
                 Button {
                     NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
                 } label: {
                     Label("Settings", systemImage: "gearshape")
                 }
+
                 Spacer()
+
                 Button {
                     NSApplication.shared.terminate(nil)
                 } label: {
                     Label("Quit", systemImage: "power")
                 }
             }
-            .controlSize(.small)
 
             Toggle("Notify on writes", isOn: $store.notifyOnWrites)
-                .font(.caption)
                 .toggleStyle(.switch)
                 .disabled(!store.notificationsAvailable)
-
-            HStack(spacing: 6) {
-                Image(systemName: store.launchAtLoginEnabled ? "checkmark.circle" : "circle")
-                Text(store.launchAtLoginStatusText)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-            }
-            .font(.caption)
-            .foregroundStyle(store.launchAgentError == nil ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.red))
+                .help(store.notificationsAvailable ? "Notify when memory is written" : "Notifications require the app bundle")
         }
+        .controlSize(.small)
+    }
+
+    private var refreshLabel: String {
+        if store.isLoading {
+            return "Refreshing"
+        }
+        if let lastRefresh = store.lastRefresh {
+            return "Updated \(lastRefresh.formatted(date: .omitted, time: .shortened))"
+        }
+        return "Not refreshed"
+    }
+
+    private var activitySummary: String {
+        var parts = [
+            "\(store.recentWrites.count) writes",
+            "\(store.recentConsults.count) consults",
+        ]
+        if !store.attentionEvents.isEmpty {
+            parts.append("\(store.attentionEvents.count) attention")
+        }
+        return parts.joined(separator: ", ")
     }
 }
 
-struct ActivityCountPill: View {
+struct StatusRow: View {
+    var title: String
+    var detail: String
+    var footnote: String?
     var systemImage: String
-    var value: Int
-    var label: String
+    var isError = false
 
     var body: some View {
         Label {
-            Text("\(value) \(label)")
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.callout)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(isError ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+                    .lineLimit(2)
+                if let footnote, !footnote.isEmpty {
+                    Text(footnote)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+            }
         } icon: {
             Image(systemName: systemImage)
+                .foregroundStyle(isError ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
         }
-        .font(.caption2.weight(.medium))
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 7)
-        .padding(.vertical, 4)
-        .background(Color.secondary.opacity(0.10), in: Capsule())
     }
 }
 
-struct ActivitySection<Content: View>: View {
-    var title: String
-    var emptyText: String
-    var isEmpty: Bool
-    @ViewBuilder var content: Content
+struct EmptyActivityRow: View {
+    var text: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title.uppercased())
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.tertiary)
-            if isEmpty {
-                Text(emptyText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 4)
-            } else {
-                content
-            }
-        }
+        Text(text)
+            .foregroundStyle(.secondary)
     }
 }
 
@@ -194,12 +211,11 @@ struct WriteRow: View {
     var write: MemoryWrite
 
     var body: some View {
-        HStack(alignment: .top, spacing: 9) {
-            KindPill(text: write.kind ?? "memory")
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
+        Label {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 8) {
                     Text(write.title ?? "Untitled memory")
-                        .font(.callout.weight(.semibold))
+                        .font(.callout)
                         .lineLimit(1)
                     Spacer(minLength: 8)
                     Text(relativeLabel(write.updatedAt))
@@ -213,8 +229,23 @@ struct WriteRow: View {
                         .lineLimit(2)
                 }
             }
+        } icon: {
+            Image(systemName: writeIcon)
+                .foregroundStyle(.secondary)
         }
-        .padding(.vertical, 2)
+    }
+
+    private var writeIcon: String {
+        switch write.kind {
+        case "decision":
+            return "checkmark.seal"
+        case "question", "open_question":
+            return "questionmark.circle"
+        case "procedure":
+            return "list.bullet.rectangle"
+        default:
+            return "square.and.pencil"
+        }
     }
 }
 
@@ -222,15 +253,11 @@ struct ConsultRow: View {
     var consult: ConsultEvent
 
     var body: some View {
-        HStack(alignment: .top, spacing: 9) {
-            Image(systemName: "magnifyingglass")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 46, alignment: .leading)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
+        Label {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 8) {
                     Text(queryLabel)
-                        .font(.callout.weight(.semibold))
+                        .font(.callout)
                         .lineLimit(1)
                     Spacer(minLength: 8)
                     Text(relativeLabel(consult.accessedAt))
@@ -241,8 +268,10 @@ struct ConsultRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        } icon: {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
         }
-        .padding(.vertical, 2)
     }
 
     private var queryLabel: String {
@@ -253,36 +282,26 @@ struct ConsultRow: View {
     }
 }
 
-struct AttentionBanner: View {
-    var title: String
-    var summary: String
+struct AttentionRow: View {
+    var event: AttentionEvent
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(title)
-                .font(.callout.weight(.semibold))
-            if !summary.isEmpty {
-                Text(summary)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(3)
+        Label {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(event.title ?? "Needs attention")
+                    .font(.callout)
+                    .lineLimit(1)
+                if let summary = event.summary, !summary.isEmpty {
+                    Text(summary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
             }
+        } icon: {
+            Image(systemName: "exclamationmark.triangle")
+                .foregroundStyle(.red)
         }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-}
-
-struct KindPill: View {
-    var text: String
-
-    var body: some View {
-        Text(text.uppercased())
-            .font(.system(size: 9, weight: .semibold, design: .monospaced))
-            .foregroundStyle(.secondary)
-            .frame(width: 46, alignment: .leading)
-            .lineLimit(1)
     }
 }
 

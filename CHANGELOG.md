@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.1.6 - 2026-06-01
+
+Moves the menu bar popover closer to default macOS patterns.
+
+- Replaces custom capsule activity counters with a native sectioned `List`.
+- Replaces custom material attention cards with plain list rows.
+- Uses default macOS button, toggle, label, and section styling for the popover controls.
+- Keeps the menu bar surface tightly scoped to status, recent writes, recent consults, attention, startup, notifications, health, backup, settings, and quit.
+
 ## 0.1.5 - 2026-06-01
 
 Improves the native menu bar utility's everyday install and startup behavior.

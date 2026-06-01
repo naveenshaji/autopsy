@@ -9,7 +9,7 @@ import sys
 
 
 PACKAGE_NAME = "autopsy-memory"
-FALLBACK_VERSION = "0.1.5"
+FALLBACK_VERSION = "0.1.6"
 
 AGENT_INSTRUCTIONS = """## Autopsy Memory Usage
 
