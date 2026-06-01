@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.1.7 - 2026-06-01
+
+Adds standard macOS command affordances to the menu bar utility.
+
+- Adds a native Commands menu for refresh, health, backup, settings, and quit.
+- Adds standard keyboard shortcuts for refresh (`Command-R`), settings (`Command-,`), and quit (`Command-Q`) from the menu bar popover.
+- Keeps health and backup as explicit controls without assigning nonstandard shortcuts.
+
 ## 0.1.6 - 2026-06-01
 
 Moves the menu bar popover closer to default macOS patterns.

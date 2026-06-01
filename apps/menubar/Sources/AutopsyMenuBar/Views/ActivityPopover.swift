@@ -103,6 +103,7 @@ struct ActivityPopover: View {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }
             .labelStyle(.iconOnly)
+            .keyboardShortcut("r", modifiers: .command)
             .help("Refresh")
             .disabled(store.isLoading)
         }
@@ -128,6 +129,7 @@ struct ActivityPopover: View {
                 } label: {
                     Label("Settings", systemImage: "gearshape")
                 }
+                .keyboardShortcut(",", modifiers: .command)
 
                 Spacer()
 
@@ -136,6 +138,7 @@ struct ActivityPopover: View {
                 } label: {
                     Label("Quit", systemImage: "power")
                 }
+                .keyboardShortcut("q", modifiers: .command)
             }
 
             Toggle("Notify on writes", isOn: $store.notifyOnWrites)
