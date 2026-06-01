@@ -32,6 +32,8 @@ STATUS_WINDOW_DAYS_DEFAULT = 21
 MENUBAR_RELATIVE_DIR = Path("apps") / "menubar"
 MENUBAR_INSTALLED_DIR_NAME = "menubar"
 MENUBAR_PRODUCT_NAME = "AutopsyMenuBar"
+MENUBAR_BUNDLE_IDENTIFIER = "com.naveenshaji.autopsy.menubar"
+MENUBAR_LAUNCH_AGENT_LABEL = "com.naveenshaji.autopsy.menubar"
 MEMORY_NAMESPACE_TAG_PREFIX = "namespace:"
 MEMORY_NAMESPACE_METADATA_KEY = "namespaces"
 ENTITY_SCOPE_METADATA_KEY = "entity_scopes"
@@ -15123,6 +15125,18 @@ def run_menubar_process(command: list[str], *, cwd: Path) -> None:
     raise SystemExit(call_menubar_process(command, cwd=cwd))
 
 
+def newest_mtime(path: Path) -> float:
+    if not path.exists():
+        return 0.0
+    if path.is_file():
+        return path.stat().st_mtime
+    newest = path.stat().st_mtime
+    for child in path.rglob("*"):
+        if child.is_file():
+            newest = max(newest, child.stat().st_mtime)
+    return newest
+
+
 def menubar_binary_path(app_dir: Path, *, release: bool) -> Path:
     configuration = "release" if release else "debug"
     return app_dir / ".build" / configuration / MENUBAR_PRODUCT_NAME
@@ -15138,6 +15152,10 @@ def menubar_default_cli_path() -> str:
     if autopsy_path:
         return autopsy_path
     return "autopsy"
+
+
+def menubar_source_mtime(app_dir: Path) -> float:
+    return max(newest_mtime(app_dir / "Package.swift"), newest_mtime(app_dir / "Sources"))
 
 
 def stage_menubar_app_bundle(app_dir: Path, *, release: bool) -> Path:
@@ -15161,7 +15179,7 @@ def stage_menubar_app_bundle(app_dir: Path, *, release: bool) -> Path:
         "CFBundleDevelopmentRegion": "en",
         "CFBundleDisplayName": "Autopsy",
         "CFBundleExecutable": MENUBAR_PRODUCT_NAME,
-        "CFBundleIdentifier": "com.naveenshaji.autopsy.menubar",
+        "CFBundleIdentifier": MENUBAR_BUNDLE_IDENTIFIER,
         "CFBundleInfoDictionaryVersion": "6.0",
         "CFBundleName": "AutopsyMenuBar",
         "CFBundlePackageType": "APPL",
@@ -15176,9 +15194,138 @@ def stage_menubar_app_bundle(app_dir: Path, *, release: bool) -> Path:
     return bundle_path
 
 
+def menubar_app_bundle_current(app_dir: Path, *, release: bool) -> bool:
+    binary_path = menubar_binary_path(app_dir, release=release)
+    bundle_path = menubar_app_bundle_path(app_dir, release=release)
+    bundled_binary = bundle_path / "Contents" / "MacOS" / MENUBAR_PRODUCT_NAME
+    plist_path = bundle_path / "Contents" / "Info.plist"
+    if not binary_path.exists() or not bundled_binary.exists() or not plist_path.exists():
+        return False
+    try:
+        with plist_path.open("rb") as handle:
+            plist = plistlib.load(handle)
+    except (OSError, plistlib.InvalidFileException):
+        return False
+    if plist.get("CFBundleIdentifier") != MENUBAR_BUNDLE_IDENTIFIER:
+        return False
+    if plist.get("CFBundleVersion") != package_version():
+        return False
+    newest_source = menubar_source_mtime(app_dir)
+    return bundled_binary.stat().st_mtime >= max(binary_path.stat().st_mtime, newest_source)
+
+
+def ensure_menubar_app_bundle(app_dir: Path, *, release: bool, rebuild: bool = False) -> Path:
+    if rebuild or not menubar_app_bundle_current(app_dir, release=release):
+        configuration = "release" if release else "debug"
+        build_status = call_menubar_process(["swift", "build", "-c", configuration], cwd=app_dir)
+        if build_status != 0:
+            raise SystemExit(build_status)
+        return stage_menubar_app_bundle(app_dir, release=release)
+    return menubar_app_bundle_path(app_dir, release=release)
+
+
+def menubar_launch_agent_path() -> Path:
+    return Path.home() / "Library" / "LaunchAgents" / f"{MENUBAR_LAUNCH_AGENT_LABEL}.plist"
+
+
+def menubar_log_dir() -> Path:
+    return Path.home() / "Library" / "Logs" / "Autopsy"
+
+
+def menubar_launchctl_domain() -> str:
+    return f"gui/{os.getuid()}"
+
+
+def menubar_launcher_arguments(args: argparse.Namespace, app_dir: Path) -> list[str]:
+    invoked = Path(sys.argv[0]).expanduser()
+    if invoked.name == "autopsy" and invoked.exists():
+        command = [str(invoked.resolve())]
+    else:
+        autopsy_path = shutil.which("autopsy")
+        command = [autopsy_path] if autopsy_path else [sys.executable, "-m", "autopsy_memory.cli"]
+    command.extend(["menubar", "--dir", str(app_dir)])
+    if bool(getattr(args, "release", False)):
+        command.append("--release")
+    return command
+
+
+def menubar_launch_agent_plist(args: argparse.Namespace, app_dir: Path) -> dict[str, Any]:
+    log_dir = menubar_log_dir()
+    return {
+        "Label": MENUBAR_LAUNCH_AGENT_LABEL,
+        "ProgramArguments": menubar_launcher_arguments(args, app_dir),
+        "RunAtLoad": True,
+        "StandardOutPath": str(log_dir / "menubar-launch-agent.out.log"),
+        "StandardErrorPath": str(log_dir / "menubar-launch-agent.err.log"),
+        "WorkingDirectory": str(app_dir),
+    }
+
+
+def launchctl_print_loaded() -> bool:
+    result = subprocess.run(
+        ["launchctl", "print", f"{menubar_launchctl_domain()}/{MENUBAR_LAUNCH_AGENT_LABEL}"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def menubar_launch_agent_status_payload() -> dict[str, Any]:
+    plist_path = menubar_launch_agent_path()
+    payload: dict[str, Any] = {
+        "label": MENUBAR_LAUNCH_AGENT_LABEL,
+        "path": str(plist_path),
+        "installed": plist_path.exists(),
+        "loaded": launchctl_print_loaded() if sys.platform == "darwin" else False,
+    }
+    if plist_path.exists():
+        try:
+            with plist_path.open("rb") as handle:
+                payload["program_arguments"] = plistlib.load(handle).get("ProgramArguments", [])
+        except (OSError, plistlib.InvalidFileException):
+            payload["program_arguments"] = []
+    return payload
+
+
+def install_menubar_launch_agent(args: argparse.Namespace, app_dir: Path) -> None:
+    plist_path = menubar_launch_agent_path()
+    plist_path.parent.mkdir(parents=True, exist_ok=True)
+    menubar_log_dir().mkdir(parents=True, exist_ok=True)
+    payload = menubar_launch_agent_plist(args, app_dir)
+    with plist_path.open("wb") as handle:
+        plistlib.dump(payload, handle)
+
+    domain = menubar_launchctl_domain()
+    subprocess.run(["launchctl", "bootout", domain, str(plist_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    result = subprocess.run(["launchctl", "bootstrap", domain, str(plist_path)], check=False)
+    if result.returncode != 0:
+        raise SystemExit(result.returncode)
+    subprocess.run(["launchctl", "kickstart", "-k", f"{domain}/{MENUBAR_LAUNCH_AGENT_LABEL}"], check=False)
+    print(json.dumps(menubar_launch_agent_status_payload(), indent=2))
+
+
+def uninstall_menubar_launch_agent() -> None:
+    plist_path = menubar_launch_agent_path()
+    domain = menubar_launchctl_domain()
+    subprocess.run(["launchctl", "bootout", domain, str(plist_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    if plist_path.exists():
+        plist_path.unlink()
+    print(json.dumps(menubar_launch_agent_status_payload(), indent=2))
+
+
 def cmd_menubar(args: argparse.Namespace) -> None:
     if sys.platform != "darwin":
         raise SystemExit("The native Autopsy menu bar app is only supported on macOS.")
+
+    if args.launch_agent_status:
+        print(json.dumps(menubar_launch_agent_status_payload(), indent=2))
+        return
+
+    if args.uninstall_launch_agent:
+        uninstall_menubar_launch_agent()
+        return
+
     app_dir = resolve_menubar_dir(args)
     release = bool(getattr(args, "release", False))
     configuration = "release" if release else "debug"
@@ -15196,6 +15343,9 @@ def cmd_menubar(args: argparse.Namespace) -> None:
                     "binary_exists": binary_path.exists(),
                     "app_bundle_path": str(bundle_path),
                     "app_bundle_exists": bundle_path.exists(),
+                    "app_bundle_current": menubar_app_bundle_current(app_dir, release=release),
+                    "launch_agent_path": str(menubar_launch_agent_path()),
+                    "launch_agent_installed": menubar_launch_agent_path().exists(),
                 },
                 indent=2,
             )
@@ -15203,17 +15353,16 @@ def cmd_menubar(args: argparse.Namespace) -> None:
         return
 
     if args.build:
-        build_status = call_menubar_process(["swift", "build", "-c", configuration], cwd=app_dir)
-        if build_status != 0:
-            raise SystemExit(build_status)
-        stage_menubar_app_bundle(app_dir, release=release)
+        ensure_menubar_app_bundle(app_dir, release=release, rebuild=True)
         return
 
-    build_status = call_menubar_process(["swift", "build", "-c", configuration], cwd=app_dir)
-    if build_status != 0:
-        raise SystemExit(build_status)
-    bundle_path = stage_menubar_app_bundle(app_dir, release=release)
-    run_menubar_process(["open", "-n", str(bundle_path)], cwd=app_dir)
+    if args.install_launch_agent:
+        ensure_menubar_app_bundle(app_dir, release=release, rebuild=bool(getattr(args, "rebuild", False)))
+        install_menubar_launch_agent(args, app_dir)
+        return
+
+    bundle_path = ensure_menubar_app_bundle(app_dir, release=release, rebuild=bool(getattr(args, "rebuild", False)))
+    run_menubar_process(["open", str(bundle_path)], cwd=app_dir)
 
 
 def cmd_doctor(args: argparse.Namespace) -> None:

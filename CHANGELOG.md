@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.1.5 - 2026-06-01
+
+Improves the native menu bar utility's everyday install and startup behavior.
+
+- Skips unnecessary Swift rebuilds when the staged menu bar app bundle is current.
+- Opens the menu bar app without forcing duplicate instances.
+- Adds `autopsy menubar --rebuild` and LaunchAgent install/status/uninstall commands.
+- Adds an in-app **Open Autopsy at Login** setting backed by the LaunchAgent.
+- Adds CLI timeouts so slow memory reads show an error instead of spinning indefinitely.
+- Shows compact write/consult/attention counts and login-startup status in the popover.
+
 ## 0.1.4 - 2026-06-01
 
 Fixes native menu bar launch stability.

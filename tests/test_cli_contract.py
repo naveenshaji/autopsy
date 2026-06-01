@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from autopsy_memory import cli
@@ -169,6 +170,9 @@ class AutopsyCLIContractTests(unittest.TestCase):
         menubar_args = parser.parse_args(["menubar", "--print-path"])
         self.assertEqual(menubar_args.command, "menubar")
         self.assertTrue(menubar_args.print_path)
+        agent_args = parser.parse_args(["menubar", "--install-launch-agent", "--rebuild"])
+        self.assertTrue(agent_args.install_launch_agent)
+        self.assertTrue(agent_args.rebuild)
 
     def test_stage_menubar_app_bundle_writes_launchservices_plist(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -189,6 +193,30 @@ class AutopsyCLIContractTests(unittest.TestCase):
             self.assertEqual(plist["CFBundleExecutable"], cli.MENUBAR_PRODUCT_NAME)
             self.assertTrue(plist["LSUIElement"])
             self.assertIn("AutopsyDefaultCLIPath", plist)
+            self.assertTrue(cli.menubar_app_bundle_current(app_dir, release=False))
+
+    def test_menubar_launch_agent_plist_runs_current_launcher(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["menubar", "--install-launch-agent", "--dir", "/tmp/autopsy-menubar"])
+        payload = cli.menubar_launch_agent_plist(args, Path("/tmp/autopsy-menubar"))
+        self.assertEqual(payload["Label"], cli.MENUBAR_LAUNCH_AGENT_LABEL)
+        self.assertTrue(payload["RunAtLoad"])
+        self.assertIn("menubar", payload["ProgramArguments"])
+        self.assertIn("--dir", payload["ProgramArguments"])
+        self.assertIn("/tmp/autopsy-menubar", payload["ProgramArguments"])
+
+    def test_menubar_launch_agent_status_does_not_require_app_source(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["menubar", "--launch-agent-status"])
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli.sys, "platform", "darwin"),
+            mock.patch.object(cli, "resolve_menubar_dir", side_effect=AssertionError("should not resolve app dir")),
+            mock.patch.object(cli, "menubar_launch_agent_status_payload", return_value={"installed": False, "loaded": False}),
+            contextlib.redirect_stdout(stream),
+        ):
+            cli.cmd_menubar(args)
+        self.assertEqual(json.loads(stream.getvalue()), {"installed": False, "loaded": False})
 
     def test_restore_normalization_skips_operational_by_default(self):
         payload = {

@@ -319,8 +319,12 @@ def build_parser(
     menubar_parser = subparsers.add_parser("menubar", help="Run the native macOS Autopsy menu bar app.")
     menubar_parser.add_argument("--dir", dest="menubar_dir", help="Path to the Swift menu bar app package.")
     menubar_parser.add_argument("--build", action="store_true", help="Build the Swift menu bar app without running it.")
+    menubar_parser.add_argument("--rebuild", action="store_true", help="Force rebuilding the Swift menu bar app before launching or staging it.")
     menubar_parser.add_argument("--release", action="store_true", help="Use a release SwiftPM build.")
     menubar_parser.add_argument("--print-path", action="store_true", help="Print resolved menu bar app paths as JSON.")
+    menubar_parser.add_argument("--install-launch-agent", action="store_true", help="Install and start a user LaunchAgent so the menu bar app opens at login.")
+    menubar_parser.add_argument("--uninstall-launch-agent", action="store_true", help="Remove the Autopsy menu bar LaunchAgent.")
+    menubar_parser.add_argument("--launch-agent-status", action="store_true", help="Print LaunchAgent installation and loaded status as JSON.")
     menubar_parser.set_defaults(func=handlers.menubar)
 
     create_parser = subparsers.add_parser("create", parents=[common], help="Create a typed Falkor memory note.")

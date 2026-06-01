@@ -8,6 +8,7 @@ struct ActivityPopover: View {
         VStack(alignment: .leading, spacing: 14) {
             header
             statusLine
+            activitySnapshot
 
             if let message = store.errorMessage {
                 AttentionBanner(title: "Autopsy unavailable", summary: message)
@@ -50,6 +51,7 @@ struct ActivityPopover: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .help(store.workspacePath.isEmpty ? store.workspaceTitle : store.workspacePath)
             }
             Spacer()
             Button {
@@ -60,6 +62,17 @@ struct ActivityPopover: View {
             .buttonStyle(.borderless)
             .help("Refresh")
             .disabled(store.isLoading)
+        }
+    }
+
+    private var activitySnapshot: some View {
+        HStack(spacing: 6) {
+            ActivityCountPill(systemImage: "square.and.pencil", value: store.recentWrites.count, label: "writes")
+            ActivityCountPill(systemImage: "magnifyingglass", value: store.recentConsults.count, label: "consults")
+            if !store.attentionEvents.isEmpty {
+                ActivityCountPill(systemImage: "exclamationmark.triangle", value: store.attentionEvents.count, label: "attention")
+            }
+            Spacer(minLength: 0)
         }
     }
 
@@ -93,18 +106,26 @@ struct ActivityPopover: View {
     private var controls: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                Button("Health") {
+                Button {
                     store.runHealth()
+                } label: {
+                    Label("Health", systemImage: "stethoscope")
                 }
-                Button("Backup") {
+                Button {
                     store.runBackup()
+                } label: {
+                    Label("Backup", systemImage: "externaldrive")
                 }
-                Button("Settings") {
+                Button {
                     NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                } label: {
+                    Label("Settings", systemImage: "gearshape")
                 }
                 Spacer()
-                Button("Quit") {
+                Button {
                     NSApplication.shared.terminate(nil)
+                } label: {
+                    Label("Quit", systemImage: "power")
                 }
             }
             .controlSize(.small)
@@ -112,7 +133,36 @@ struct ActivityPopover: View {
             Toggle("Notify on writes", isOn: $store.notifyOnWrites)
                 .font(.caption)
                 .toggleStyle(.switch)
+                .disabled(!store.notificationsAvailable)
+
+            HStack(spacing: 6) {
+                Image(systemName: store.launchAtLoginEnabled ? "checkmark.circle" : "circle")
+                Text(store.launchAtLoginStatusText)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .font(.caption)
+            .foregroundStyle(store.launchAgentError == nil ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.red))
         }
+    }
+}
+
+struct ActivityCountPill: View {
+    var systemImage: String
+    var value: Int
+    var label: String
+
+    var body: some View {
+        Label {
+            Text("\(value) \(label)")
+        } icon: {
+            Image(systemName: systemImage)
+        }
+        .font(.caption2.weight(.medium))
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 4)
+        .background(Color.secondary.opacity(0.10), in: Capsule())
     }
 }
 

@@ -8,9 +8,41 @@ struct SettingsView: View {
             Section("Command") {
                 TextField("autopsy command", text: $store.cliPath)
                     .textFieldStyle(.roundedBorder)
+                Button {
+                    store.resetCLIPath()
+                } label: {
+                    Label("Use Detected Command", systemImage: "location")
+                }
+                .controlSize(.small)
                 Text("Use an absolute path if the app cannot find the CLI from PATH.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Text(store.detectedCLIPath)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+
+            Section("Startup") {
+                Toggle(
+                    "Open Autopsy at Login",
+                    isOn: Binding(
+                        get: { store.launchAtLoginEnabled },
+                        set: { store.setLaunchAtLogin($0) }
+                    )
+                )
+                .disabled(store.isManagingLaunchAgent)
+
+                HStack(spacing: 6) {
+                    if store.isManagingLaunchAgent {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                    Text(store.launchAtLoginStatusText)
+                        .font(.caption)
+                        .foregroundStyle(store.launchAgentError == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.red))
+                        .lineLimit(2)
+                }
             }
 
             Section("Notifications") {

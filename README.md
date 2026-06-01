@@ -77,6 +77,7 @@ autopsy backup
 autopsy restore ~/Library/Application\ Support/Autopsy/Backups/<backup>.json --dry-run
 autopsy activity
 autopsy menubar
+autopsy menubar --install-launch-agent
 autopsy benchmark --sample-size 5 --include-sync
 ```
 
@@ -267,10 +268,11 @@ The release checklist lives at [docs/release-checklist.md](docs/release-checklis
 
 ## Menu Bar App
 
-The native macOS menu bar utility lives in [apps/menubar](apps/menubar). It is intentionally small: recent memory writes, recent consult telemetry, attention states, manual health, and backup controls. It does not browse the graph or own memory storage; the `autopsy` CLI and Falkor graph remain canonical.
+The native macOS menu bar utility lives in [apps/menubar](apps/menubar). It is intentionally small: recent memory writes, recent consult telemetry, attention states, manual health, backup controls, and login startup. It does not browse the graph or own memory storage; the `autopsy` CLI and Falkor graph remain canonical.
 
 ```bash
 autopsy menubar
+autopsy menubar --install-launch-agent
 ```
 
 From a checkout, you can also run the app directly:
@@ -282,6 +284,7 @@ swift run AutopsyMenuBar
 ```
 
 The app polls `autopsy activity`, which is the lightweight JSON feed for UI clients. See [docs/menubar.md](docs/menubar.md).
+Login startup can be toggled from Settings or installed from the CLI with `autopsy menubar --install-launch-agent`.
 
 ## Repository Split
 

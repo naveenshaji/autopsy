@@ -134,3 +134,19 @@ struct WorkflowPayload: Decodable {
     var complete: Bool?
     var message: String?
 }
+
+struct LaunchAgentStatus: Decodable {
+    var label: String?
+    var path: String?
+    var installed: Bool?
+    var loaded: Bool?
+    var programArguments: [String]?
+
+    enum CodingKeys: String, CodingKey {
+        case label
+        case path
+        case installed
+        case loaded
+        case programArguments = "program_arguments"
+    }
+}

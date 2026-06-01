@@ -9,6 +9,9 @@ final class ActivityStore: ObservableObject {
     @Published var errorMessage: String?
     @Published var lastRefresh: Date?
     @Published var lastActionMessage: String?
+    @Published var launchAgentStatus: LaunchAgentStatus?
+    @Published var launchAgentError: String?
+    @Published var isManagingLaunchAgent = false
     @Published var cliPath: String {
         didSet {
             UserDefaults.standard.set(cliPath, forKey: Defaults.cliPath)
@@ -86,6 +89,30 @@ final class ActivityStore: ObservableObject {
         Self.notificationsAvailable
     }
 
+    var detectedCLIPath: String {
+        Self.defaultCLIPath
+    }
+
+    var launchAtLoginEnabled: Bool {
+        launchAgentStatus?.installed == true
+    }
+
+    var launchAtLoginStatusText: String {
+        if let launchAgentError, !launchAgentError.isEmpty {
+            return launchAgentError
+        }
+        guard let launchAgentStatus else {
+            return "Checking login startup"
+        }
+        if launchAgentStatus.installed == true && launchAgentStatus.loaded == true {
+            return "Autopsy opens at login"
+        }
+        if launchAgentStatus.installed == true {
+            return "Login startup installed, not loaded"
+        }
+        return "Login startup off"
+    }
+
     private static var notificationsAvailable: Bool {
         guard let bundleIdentifier = Bundle.main.bundleIdentifier else { return false }
         return !bundleIdentifier.isEmpty
@@ -104,14 +131,19 @@ final class ActivityStore: ObservableObject {
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                self?.refresh()
+                self?.refresh(includeLaunchAgent: false)
             }
         }
     }
 
-    func refresh() {
+    func refresh(includeLaunchAgent: Bool = true) {
         Task {
             await loadActivity()
+        }
+        if includeLaunchAgent {
+            Task {
+                await loadLaunchAgentStatus()
+            }
         }
     }
 
@@ -127,6 +159,17 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    func resetCLIPath() {
+        cliPath = Self.defaultCLIPath
+        refresh()
+    }
+
+    func setLaunchAtLogin(_ enabled: Bool) {
+        Task {
+            await updateLaunchAgent(enabled: enabled)
+        }
+    }
+
     private func loadActivity() async {
         isLoading = true
         errorMessage = nil
@@ -136,7 +179,7 @@ final class ActivityStore: ObservableObject {
         }
 
         do {
-            let output = try await AutopsyCLI(executable: cliPath).run(["activity", "--limit", "6"])
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run(["activity", "--limit", "6"])
             let decoded = try JSONDecoder().decode(ActivityPayload.self, from: Data(output.utf8))
             payload = decoded
             maybeNotifyAboutWrite(decoded.activity?.recentWrites?.first)
@@ -154,11 +197,38 @@ final class ActivityStore: ObservableObject {
         }
 
         do {
-            _ = try await AutopsyCLI(executable: cliPath).run(arguments)
+            _ = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 90).run(arguments)
             lastActionMessage = successMessage
             await loadActivity()
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private func loadLaunchAgentStatus() async {
+        launchAgentError = nil
+        do {
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 10).run(["menubar", "--launch-agent-status"])
+            launchAgentStatus = try JSONDecoder().decode(LaunchAgentStatus.self, from: Data(output.utf8))
+        } catch {
+            launchAgentError = error.localizedDescription
+        }
+    }
+
+    private func updateLaunchAgent(enabled: Bool) async {
+        isManagingLaunchAgent = true
+        launchAgentError = nil
+        defer {
+            isManagingLaunchAgent = false
+        }
+
+        do {
+            let arguments = enabled ? ["menubar", "--install-launch-agent"] : ["menubar", "--uninstall-launch-agent"]
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 120).run(arguments)
+            launchAgentStatus = try JSONDecoder().decode(LaunchAgentStatus.self, from: Data(output.utf8))
+            lastActionMessage = enabled ? "Opens at login" : "Login startup disabled"
+        } catch {
+            launchAgentError = error.localizedDescription
         }
     }
 

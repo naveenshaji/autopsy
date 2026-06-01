@@ -11,6 +11,7 @@ The app is intentionally not a memory browser. The installed `autopsy` CLI and F
 - `autopsy menubar` stages a minimal `.app` bundle before launch so macOS services such as notifications have a bundle identity.
 - `autopsy activity` for recent writes, recent consults, status, and attention items.
 - Manual `autopsy health` and `autopsy backup` controls.
+- Login startup is managed through the app's Settings window or the `autopsy menubar --install-launch-agent` command.
 
 ## Local Development
 
@@ -32,8 +33,14 @@ Useful launcher modes:
 ```bash
 autopsy menubar --print-path
 autopsy menubar --build
+autopsy menubar --rebuild
 autopsy menubar --release
+autopsy menubar --install-launch-agent
+autopsy menubar --launch-agent-status
+autopsy menubar --uninstall-launch-agent
 ```
+
+Normal `autopsy menubar` launches the staged app bundle without forcing a rebuild when the bundle is current. `--install-launch-agent` writes a user LaunchAgent at `~/Library/LaunchAgents/com.naveenshaji.autopsy.menubar.plist` so the utility opens at login. The same startup state is visible and editable from Settings under **Open Autopsy at Login**.
 
 For low-level SwiftPM debugging, run directly from the repo:
 
@@ -66,3 +73,4 @@ Run checks:
 - Current workspace/status summary.
 - Attention items when available.
 - Manual refresh, health, backup, settings, and quit actions.
+- Optional login startup through the user LaunchAgent.
