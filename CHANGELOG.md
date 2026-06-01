@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.1.10 - 2026-06-01
+
+Makes the menu bar app useful immediately after launch.
+
+- Caches the last successful activity payload so the popover can show recent writes, consults, status, and attention before the first refresh completes.
+- Caches LaunchAgent status so Settings and the startup row do not begin from an unknown state after restart.
+- Keeps the last successful update time unchanged when a refresh fails, making stale data clearer.
+- Allows write notifications after an initial empty activity feed instead of requiring a prior write to seed notification state.
+
 ## 0.1.9 - 2026-06-01
 
 Keeps the menu bar login item stable across Homebrew-style updates.

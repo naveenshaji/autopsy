@@ -29,6 +29,9 @@ final class ActivityStore: ObservableObject {
     private enum Defaults {
         static let cliPath = "AutopsyMenuBar.cliPath"
         static let notifyOnWrites = "AutopsyMenuBar.notifyOnWrites"
+        static let cachedActivityPayload = "AutopsyMenuBar.cachedActivityPayload"
+        static let cachedActivityDate = "AutopsyMenuBar.cachedActivityDate"
+        static let cachedLaunchAgentStatus = "AutopsyMenuBar.cachedLaunchAgentStatus"
     }
 
     private var timer: Timer?
@@ -38,6 +41,7 @@ final class ActivityStore: ObservableObject {
     init() {
         cliPath = UserDefaults.standard.string(forKey: Defaults.cliPath) ?? Self.defaultCLIPath
         notifyOnWrites = UserDefaults.standard.bool(forKey: Defaults.notifyOnWrites)
+        loadCachedState()
         start()
     }
 
@@ -175,13 +179,14 @@ final class ActivityStore: ObservableObject {
         errorMessage = nil
         defer {
             isLoading = false
-            lastRefresh = Date()
         }
 
         do {
             let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run(["activity", "--limit", "6"])
             let decoded = try JSONDecoder().decode(ActivityPayload.self, from: Data(output.utf8))
             payload = decoded
+            lastRefresh = Date()
+            cacheActivityPayload(output)
             maybeNotifyAboutWrite(decoded.activity?.recentWrites?.first)
         } catch {
             errorMessage = error.localizedDescription
@@ -211,6 +216,7 @@ final class ActivityStore: ObservableObject {
         do {
             let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 10).run(["menubar", "--launch-agent-status"])
             launchAgentStatus = try JSONDecoder().decode(LaunchAgentStatus.self, from: Data(output.utf8))
+            UserDefaults.standard.set(output, forKey: Defaults.cachedLaunchAgentStatus)
         } catch {
             launchAgentError = error.localizedDescription
         }
@@ -228,20 +234,49 @@ final class ActivityStore: ObservableObject {
             let arguments = enabled ? ["menubar", "--install-launch-agent"] : ["menubar", "--uninstall-launch-agent"]
             let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 120).run(arguments)
             launchAgentStatus = try JSONDecoder().decode(LaunchAgentStatus.self, from: Data(output.utf8))
+            UserDefaults.standard.set(output, forKey: Defaults.cachedLaunchAgentStatus)
             lastActionMessage = enabled ? "Opens at login" : "Login startup disabled"
         } catch {
             launchAgentError = error.localizedDescription
         }
     }
 
+    private func loadCachedState() {
+        let defaults = UserDefaults.standard
+        if let cachedActivity = defaults.string(forKey: Defaults.cachedActivityPayload),
+           let data = cachedActivity.data(using: .utf8),
+           let decoded = try? JSONDecoder().decode(ActivityPayload.self, from: data) {
+            payload = decoded
+            newestWriteKey = decoded.activity?.recentWrites?.first?.stableKey
+            hasLoadedActivity = true
+            lastRefresh = defaults.object(forKey: Defaults.cachedActivityDate) as? Date
+        }
+
+        if let cachedLaunchAgent = defaults.string(forKey: Defaults.cachedLaunchAgentStatus),
+           let data = cachedLaunchAgent.data(using: .utf8),
+           let decoded = try? JSONDecoder().decode(LaunchAgentStatus.self, from: data) {
+            launchAgentStatus = decoded
+        }
+    }
+
+    private func cacheActivityPayload(_ output: String) {
+        let defaults = UserDefaults.standard
+        defaults.set(output, forKey: Defaults.cachedActivityPayload)
+        defaults.set(lastRefresh, forKey: Defaults.cachedActivityDate)
+    }
+
     private func maybeNotifyAboutWrite(_ write: MemoryWrite?) {
-        guard let write, let key = write.stableKey, !key.isEmpty else { return }
+        let previousWriteKey = newestWriteKey
+        guard let write, let key = write.stableKey, !key.isEmpty else {
+            hasLoadedActivity = true
+            return
+        }
         defer {
             newestWriteKey = key
             hasLoadedActivity = true
         }
 
-        guard hasLoadedActivity, newestWriteKey != key, notifyOnWrites, notificationsAvailable else { return }
+        guard hasLoadedActivity, previousWriteKey != key, notifyOnWrites, notificationsAvailable else { return }
         let content = UNMutableNotificationContent()
         content.title = "Autopsy memory written"
         content.body = write.title ?? "New memory captured"

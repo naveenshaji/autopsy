@@ -151,6 +151,9 @@ struct ActivityPopover: View {
 
     private var refreshLabel: String {
         if store.isLoading {
+            if let lastRefresh = store.lastRefresh {
+                return "Refreshing - updated \(lastRefresh.formatted(date: .omitted, time: .shortened))"
+            }
             return "Refreshing"
         }
         if let lastRefresh = store.lastRefresh {
@@ -194,6 +197,7 @@ struct StatusRow: View {
                     .font(.caption)
                     .foregroundStyle(isError ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
                     .lineLimit(2)
+                    .help(detail)
                 if let footnote, !footnote.isEmpty {
                     Text(footnote)
                         .font(.caption2)
@@ -224,19 +228,21 @@ struct WriteRow: View {
         Label {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 8) {
-                    Text(write.title ?? "Untitled memory")
+                    Text(compactLabel(write.title, fallback: "Untitled memory"))
                         .font(.callout)
                         .lineLimit(1)
+                        .help(write.title ?? "Untitled memory")
                     Spacer(minLength: 8)
                     Text(relativeLabel(write.updatedAt))
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }
                 if let summary = write.summary, !summary.isEmpty {
-                    Text(summary)
+                    Text(summary.clippedForMenuBarDetail())
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
+                        .help(summary)
                 }
             }
         } icon: {
@@ -266,9 +272,10 @@ struct ConsultRow: View {
         Label {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 8) {
-                    Text(queryLabel)
+                    Text(compactLabel(queryLabel, fallback: "Consult"))
                         .font(.callout)
                         .lineLimit(1)
+                        .help(queryLabel)
                     Spacer(minLength: 8)
                     Text(relativeLabel(consult.accessedAt))
                         .font(.caption)
@@ -298,14 +305,16 @@ struct AttentionRow: View {
     var body: some View {
         Label {
             VStack(alignment: .leading, spacing: 2) {
-                Text(event.title ?? "Needs attention")
+                Text(compactLabel(event.title, fallback: "Needs attention"))
                     .font(.callout)
                     .lineLimit(1)
+                    .help(event.title ?? "Needs attention")
                 if let summary = event.summary, !summary.isEmpty {
-                    Text(summary)
+                    Text(summary.clippedForMenuBarDetail())
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
+                        .help(summary)
                 }
             }
         } icon: {
@@ -322,4 +331,20 @@ private func relativeLabel(_ value: String?) -> String {
     let date = formatter.date(from: value) ?? ISO8601DateFormatter().date(from: value)
     guard let date else { return "" }
     return date.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated))
+}
+
+private func compactLabel(_ value: String?, fallback: String, limit: Int = 30) -> String {
+    guard let value, !value.isEmpty else { return fallback }
+    return value.clippedForMenuBar(limit: limit)
+}
+
+private extension String {
+    func clippedForMenuBar(limit: Int = 30) -> String {
+        guard count > limit, limit > 3 else { return self }
+        return "\(prefix(limit - 3))..."
+    }
+
+    func clippedForMenuBarDetail(limit: Int = 140) -> String {
+        clippedForMenuBar(limit: limit)
+    }
 }
