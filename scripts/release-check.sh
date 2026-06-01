@@ -23,6 +23,7 @@ PY
 "$PYTHON" -m unittest discover -s tests
 sh -n scripts/install.sh
 sh -n scripts/install-global.sh
+sh -n scripts/menubar-check.sh
 
 TMP_DIR="${TMPDIR:-/tmp}/autopsy-release-check-$$"
 trap 'rm -rf "$TMP_DIR"' EXIT INT TERM HUP
@@ -36,6 +37,8 @@ PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" doctor >/dev/null
 PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" init --check >/dev/null
 PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" instructions >/dev/null
 PATH="$TMP_DIR/venv/bin:$PATH" AUTOPSY_UNIFIED_MEMORY=0 AUTOPSY_APP_SUPPORT_DIR="$TMP_DIR/app-support" AUTOPSY_FALKORDB_LITE_PATH="$TMP_DIR/app-support/FalkorDB/autopsy-memory.db" "$TMP_DIR/venv/bin/autopsy" health --workspace "$TMP_DIR/workspace" >/dev/null
+PATH="$TMP_DIR/venv/bin:$PATH" AUTOPSY_UNIFIED_MEMORY=0 AUTOPSY_APP_SUPPORT_DIR="$TMP_DIR/app-support" AUTOPSY_FALKORDB_LITE_PATH="$TMP_DIR/app-support/FalkorDB/autopsy-memory.db" "$TMP_DIR/venv/bin/autopsy" activity --workspace "$TMP_DIR/workspace" >/dev/null
+PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" menubar --print-path >/dev/null
 cat > "$TMP_DIR/restore.json" <<'JSON'
 {
   "schema_version": 1,
@@ -54,5 +57,8 @@ cat > "$TMP_DIR/restore.json" <<'JSON'
 JSON
 PATH="$TMP_DIR/venv/bin:$PATH" AUTOPSY_UNIFIED_MEMORY=0 AUTOPSY_APP_SUPPORT_DIR="$TMP_DIR/app-support" AUTOPSY_FALKORDB_LITE_PATH="$TMP_DIR/app-support/FalkorDB/autopsy-memory.db" "$TMP_DIR/venv/bin/autopsy" restore "$TMP_DIR/restore.json" --dry-run --workspace "$TMP_DIR/workspace" >/dev/null
 "$TMP_DIR/venv/bin/python" -m build --wheel --outdir "$TMP_DIR/dist" >/dev/null
+if command -v swift >/dev/null 2>&1; then
+  ./scripts/menubar-check.sh >/dev/null
+fi
 
 echo "release-check: ok"

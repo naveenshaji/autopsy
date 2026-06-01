@@ -116,19 +116,16 @@ else
   "$VENV_DIR/bin/python" -m pip install "$WHEEL_PATH" >/dev/null
 fi
 
-if [ -d "$ROOT_DIR/apps/observatory" ]; then
-  mkdir -p "$TMP_DIR/observatory"
+if [ -d "$ROOT_DIR/apps/menubar" ]; then
+  mkdir -p "$TMP_DIR/menubar"
   (
-    cd "$ROOT_DIR/apps/observatory"
+    cd "$ROOT_DIR/apps/menubar"
     tar \
-      --exclude node_modules \
-      --exclude .npm-cache \
-      --exclude dist \
       --exclude target \
-      --exclude src-tauri/target \
+      --exclude .build \
       -cf - .
   ) | (
-    cd "$TMP_DIR/observatory"
+    cd "$TMP_DIR/menubar"
     tar -xf -
   )
 fi

@@ -18,6 +18,7 @@ SERVER_NAME = "autopsy_falkor_memory"
 SERVER_VERSION = "0.1.0"
 DEFAULT_GRAPH_NAME = "autopsy_memory"
 DEFAULT_WORKSPACE_ROOT = str(Path.home() / "github" / "codex")
+RELATION_FIELDS = ("informed_by", "answers", "supersedes", "reverts", "depends_on", "implements", "constrains", "refines")
 
 
 class BridgeError(RuntimeError):
@@ -144,6 +145,24 @@ def read_worker_info() -> dict[str, Any] | None:
         return None
 
 
+def source_fingerprint() -> str:
+    parts: list[str] = []
+    paths = script_paths()
+    for name in ("script", "worker", "tool"):
+        path = paths[name]
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            parts.append(f"{name}:{path}:missing")
+            continue
+        parts.append(f"{name}:{path.resolve()}:{stat.st_mtime_ns}:{stat.st_size}")
+    return "|".join(parts)
+
+
+def worker_info_matches_current_sources(info: dict[str, Any]) -> bool:
+    return str(info.get("source_fingerprint") or "") == source_fingerprint()
+
+
 def health_check(info: dict[str, Any], timeout: float = 2.0) -> bool:
     base_url = str(info.get("base_url") or "")
     token = str(info.get("token") or "")
@@ -204,7 +223,7 @@ def clear_stale_falkor_settings() -> str | None:
 
 def start_worker_locked() -> dict[str, Any]:
     existing = read_worker_info()
-    if existing and health_check(existing):
+    if existing and worker_info_matches_current_sources(existing) and health_check(existing):
         return existing
 
     if existing:
@@ -232,6 +251,8 @@ def start_worker_locked() -> dict[str, Any]:
             token,
             "--info-file",
             str(info_file()),
+            "--source-fingerprint",
+            source_fingerprint(),
         ],
         env=env,
         stdin=subprocess.DEVNULL,
@@ -256,7 +277,7 @@ def start_worker_locked() -> dict[str, Any]:
 
 def ensure_worker() -> dict[str, Any]:
     info = read_worker_info()
-    if info and health_check(info):
+    if info and worker_info_matches_current_sources(info) and health_check(info):
         return info
 
     lock_file().parent.mkdir(parents=True, exist_ok=True)
@@ -355,6 +376,68 @@ def cwd_for(arguments: dict[str, Any], workspace: str) -> str:
     return str(Path(str(value)).expanduser())
 
 
+def int_argument(arguments: dict[str, Any], name: str, default: int) -> int:
+    value = arguments.get(name)
+    if value is None or value == "":
+        return default
+    return int(value)
+
+
+def list_argument(arguments: dict[str, Any], name: str) -> list[Any]:
+    value = arguments.get(name)
+    if value is None or value == "":
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    return [value]
+
+
+def metadata_argument(arguments: dict[str, Any]) -> Any:
+    if "metadata" not in arguments:
+        return []
+    value = arguments.get("metadata")
+    if value is None or value == "":
+        return []
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    return [value]
+
+
+def filter_json_argument(arguments: dict[str, Any]) -> Any:
+    if "filter_json" in arguments:
+        value = arguments.get("filter_json")
+    elif "filter" in arguments:
+        value = arguments.get("filter")
+    else:
+        return None
+    if value is None or value == "":
+        return None
+    return value
+
+
+def entity_scope_arguments(arguments: dict[str, Any]) -> list[Any]:
+    scopes: list[Any] = []
+    for field in ("entity_scopes", "entity_scope"):
+        if arguments.get(field):
+            scopes.extend(list_argument(arguments, field))
+    for argument_name, scope_type in (
+        ("user_id", "user"),
+        ("agent_id", "agent"),
+        ("app_id", "app"),
+        ("run_id", "run"),
+        ("group_id", "group"),
+    ):
+        if arguments.get(argument_name):
+            scopes.extend(f"{scope_type}:{value}" for value in list_argument(arguments, argument_name))
+    return scopes
+
+
 def base_payload(arguments: dict[str, Any]) -> dict[str, Any]:
     workspace = workspace_root(arguments)
     return {
@@ -397,10 +480,40 @@ def tool_consult(arguments: dict[str, Any]) -> dict[str, Any]:
     request = {
         "query": query,
         "current_only": bool(arguments.get("current_only", True)),
-        "limit": int(arguments.get("limit") or 8),
-        "inspect_limit": int(arguments.get("inspect_limit") or 3),
+        "limit": int_argument(arguments, "limit", 8),
+        "inspect_limit": int_argument(arguments, "inspect_limit", 3),
         "route": route,
+        "scope": str(arguments.get("scope") or "system"),
     }
+    if arguments.get("repo"):
+        request["repo"] = str(arguments["repo"])
+    if arguments.get("repository_root_path"):
+        request["repository_root_path"] = str(arguments["repository_root_path"])
+    if arguments.get("kinds"):
+        request["kinds"] = list(arguments.get("kinds") or [])
+    elif arguments.get("kind"):
+        request["kinds"] = list(arguments.get("kind") if isinstance(arguments.get("kind"), list) else [arguments.get("kind")])
+    if arguments.get("memory_types"):
+        request["memory_types"] = list_argument(arguments, "memory_types")
+    elif arguments.get("memory_type"):
+        request["memory_types"] = list_argument(arguments, "memory_type")
+    if arguments.get("tags"):
+        request["tags"] = list_argument(arguments, "tags")
+    elif arguments.get("tag"):
+        request["tags"] = list_argument(arguments, "tag")
+    if arguments.get("namespaces"):
+        request["namespaces"] = list_argument(arguments, "namespaces")
+    elif arguments.get("namespace"):
+        request["namespaces"] = list_argument(arguments, "namespace")
+    entity_scopes = entity_scope_arguments(arguments)
+    if entity_scopes:
+        request["entity_scopes"] = entity_scopes
+    if "metadata" in arguments:
+        request["metadata"] = metadata_argument(arguments)
+    if "filter_json" in arguments or "filter" in arguments:
+        request["filter_json"] = filter_json_argument(arguments)
+    if "min_fact_rating" in arguments:
+        request["min_fact_rating"] = arguments.get("min_fact_rating")
     if arguments.get("thread_id"):
         request["thread_id"] = str(arguments["thread_id"])
     if arguments.get("as_of"):
@@ -425,6 +538,17 @@ def tool_timeline(arguments: dict[str, Any]) -> dict[str, Any]:
     return worker_request("/memory/timeline", request_payload(arguments, request))
 
 
+def tool_history(arguments: dict[str, Any]) -> dict[str, Any]:
+    stable_key = str(arguments.get("stable_key") or "").strip()
+    if not stable_key:
+        raise BridgeError("stable_key is required")
+    request = {
+        "stable_key": stable_key,
+        "limit": int(arguments.get("limit") or 50),
+    }
+    return worker_request("/memory/history", request_payload(arguments, request))
+
+
 def tool_neighbors(arguments: dict[str, Any]) -> dict[str, Any]:
     stable_key = str(arguments.get("stable_key") or "").strip()
     if not stable_key:
@@ -433,7 +557,26 @@ def tool_neighbors(arguments: dict[str, Any]) -> dict[str, Any]:
         "stable_key": stable_key,
         "relation_limit": int(arguments.get("relation_limit") or 12),
     }
+    if "min_fact_rating" in arguments:
+        request["min_fact_rating"] = arguments.get("min_fact_rating")
     return worker_request("/memory/neighbors", request_payload(arguments, request))
+
+
+def tool_observe(arguments: dict[str, Any]) -> dict[str, Any]:
+    stable_key = str(arguments.get("stable_key") or "").strip()
+    if not stable_key:
+        raise BridgeError("stable_key is required")
+    request = {
+        "stable_key": stable_key,
+        "limit": int(arguments.get("limit") or 5),
+        "write": bool(arguments.get("write")),
+        "write_if_stale": bool(arguments.get("write_if_stale")),
+    }
+    if "min_fact_rating" in arguments:
+        request["min_fact_rating"] = arguments.get("min_fact_rating")
+    if arguments.get("title"):
+        request["title"] = str(arguments["title"])
+    return worker_request("/memory/observe", request_payload(arguments, request))
 
 
 def tool_graph_search(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -444,6 +587,33 @@ def tool_graph_search(arguments: dict[str, Any]) -> dict[str, Any]:
         "query": query,
         "limit": int(arguments.get("limit") or 24),
     }
+    if arguments.get("kinds"):
+        request["kinds"] = list_argument(arguments, "kinds")
+    elif arguments.get("kind"):
+        request["kinds"] = list_argument(arguments, "kind")
+    if arguments.get("memory_types"):
+        request["memory_types"] = list_argument(arguments, "memory_types")
+    elif arguments.get("memory_type"):
+        request["memory_types"] = list_argument(arguments, "memory_type")
+    if arguments.get("tags"):
+        request["tags"] = list_argument(arguments, "tags")
+    elif arguments.get("tag"):
+        request["tags"] = list_argument(arguments, "tag")
+    if arguments.get("namespaces"):
+        request["namespaces"] = list_argument(arguments, "namespaces")
+    elif arguments.get("namespace"):
+        request["namespaces"] = list_argument(arguments, "namespace")
+    entity_scopes = entity_scope_arguments(arguments)
+    if entity_scopes:
+        request["entity_scopes"] = entity_scopes
+    if "metadata" in arguments:
+        request["metadata"] = metadata_argument(arguments)
+    if "filter_json" in arguments or "filter" in arguments:
+        request["filter_json"] = filter_json_argument(arguments)
+    if "min_fact_rating" in arguments:
+        request["min_fact_rating"] = arguments.get("min_fact_rating")
+    if arguments.get("as_of"):
+        request["as_of"] = str(arguments["as_of"])
     return worker_request("/memory/graph/search", request_payload(arguments, request))
 
 
@@ -464,6 +634,32 @@ def tool_create_note(arguments: dict[str, Any]) -> dict[str, Any]:
         request["repository_root_path"] = str(arguments["repository_root_path"])
     if arguments.get("thread_id"):
         request["thread_id"] = str(arguments["thread_id"])
+    if arguments.get("tags"):
+        request["tags"] = list_argument(arguments, "tags")
+    elif arguments.get("tag"):
+        request["tags"] = list_argument(arguments, "tag")
+    if arguments.get("namespaces"):
+        request["namespaces"] = list_argument(arguments, "namespaces")
+    elif arguments.get("namespace"):
+        request["namespaces"] = list_argument(arguments, "namespace")
+    entity_scopes = entity_scope_arguments(arguments)
+    if entity_scopes:
+        request["entity_scopes"] = entity_scopes
+    if "metadata" in arguments:
+        request["metadata"] = metadata_argument(arguments)
+    for field in RELATION_FIELDS:
+        values = arguments.get(field)
+        if values:
+            request[field] = values
+    for field in ("relation_valid_at", "relation_invalid_at", "relation_expires_at"):
+        if arguments.get(field):
+            request[field] = str(arguments[field])
+    if "fact_rating" in arguments:
+        request["fact_rating"] = arguments.get("fact_rating")
+    if arguments.get("no_relations_ok"):
+        request["no_relations_ok"] = True
+    if arguments.get("allow_unsafe_memory"):
+        request["allow_unsafe_memory"] = True
     return worker_request("/memory/graph/note", request_payload(arguments, request))
 
 
@@ -484,6 +680,21 @@ def tool_update_item(arguments: dict[str, Any]) -> dict[str, Any]:
         "title": title,
         "content": content,
     }
+    if arguments.get("tags"):
+        request["tags"] = list_argument(arguments, "tags")
+    elif arguments.get("tag"):
+        request["tags"] = list_argument(arguments, "tag")
+    if arguments.get("namespaces"):
+        request["namespaces"] = list_argument(arguments, "namespaces")
+    elif arguments.get("namespace"):
+        request["namespaces"] = list_argument(arguments, "namespace")
+    entity_scopes = entity_scope_arguments(arguments)
+    if entity_scopes:
+        request["entity_scopes"] = entity_scopes
+    if "metadata" in arguments:
+        request["metadata"] = metadata_argument(arguments)
+    if arguments.get("allow_unsafe_memory"):
+        request["allow_unsafe_memory"] = True
     return worker_request("/memory/graph/item/update", request_payload(arguments, request))
 
 
@@ -520,7 +731,18 @@ def tool_worker_info(_arguments: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-KIND_ENUM = ["memory_note", "decision", "open_question", "preference", "attempt", "plan"]
+KIND_ENUM = ["memory_note", "decision", "open_question", "preference", "attempt", "plan", "procedure", "observation", "summary"]
+
+
+def relation_tool_properties() -> dict[str, Any]:
+    return {
+        field: {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": f"Stable keys this memory {field.replace('_', ' ')}.",
+        }
+        for field in RELATION_FIELDS
+    }
 
 
 def optional_workspace_properties() -> dict[str, Any]:
@@ -533,6 +755,26 @@ def optional_workspace_properties() -> dict[str, Any]:
             "type": "string",
             "description": "Execution cwd for workspace resolution. Defaults to workspace.",
         },
+    }
+
+
+def entity_scope_tool_properties() -> dict[str, Any]:
+    return {
+        "entity_scope": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Entity scopes as TYPE:ID values such as user:alice, agent:planner, app:web, run:ticket-42, or group:team-a.",
+        },
+        "entity_scopes": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Entity scopes as TYPE:ID values such as user:alice, agent:planner, app:web, run:ticket-42, or group:team-a.",
+        },
+        "user_id": {"type": "array", "items": {"type": "string"}, "description": "User-scoped memory partition."},
+        "agent_id": {"type": "array", "items": {"type": "string"}, "description": "Agent-scoped memory partition."},
+        "app_id": {"type": "array", "items": {"type": "string"}, "description": "Application-scoped memory partition."},
+        "run_id": {"type": "array", "items": {"type": "string"}, "description": "Run/session-scoped memory partition."},
+        "group_id": {"type": "array", "items": {"type": "string"}, "description": "Group/tenant-scoped memory partition."},
     }
 
 
@@ -565,6 +807,42 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "limit": {"type": "integer", "default": 8},
                 "inspect_limit": {"type": "integer", "default": 3},
                 "route": {"type": "string", "enum": ["auto", "status", "lexical", "hybrid"], "default": "auto"},
+                "scope": {"type": "string", "enum": ["system", "repo"], "default": "system"},
+                "repo": {"type": "string"},
+                "repository_root_path": {"type": "string"},
+                "kind": {"type": "array", "items": {"type": "string"}},
+                "kinds": {"type": "array", "items": {"type": "string"}},
+                "memory_type": {"type": "array", "items": {"type": "string"}, "description": "Cognitive memory types: semantic, episodic, procedural, or observation."},
+                "memory_types": {"type": "array", "items": {"type": "string"}, "description": "Cognitive memory types: semantic, episodic, procedural, or observation."},
+                "tag": {"type": "array", "items": {"type": "string"}},
+                "tags": {"type": "array", "items": {"type": "string"}},
+                "namespace": {"type": "array", "items": {"type": "string"}},
+                "namespaces": {"type": "array", "items": {"type": "string"}},
+                **entity_scope_tool_properties(),
+                "metadata": {
+                    "oneOf": [
+                        {"type": "array", "items": {"type": "string"}},
+                        {"type": "object", "additionalProperties": True},
+                    ],
+                    "description": "Metadata filters such as key=value, key!=value, key~=text, or score>=8.",
+                },
+                "filter_json": {
+                    "oneOf": [
+                        {"type": "string"},
+                        {"type": "array", "items": {}},
+                        {"type": "object", "additionalProperties": True},
+                    ],
+                    "description": "JSON boolean filter over kind, tag, namespace, entity scope, metadata, and item fields.",
+                },
+                "filter": {
+                    "oneOf": [
+                        {"type": "string"},
+                        {"type": "array", "items": {}},
+                        {"type": "object", "additionalProperties": True},
+                    ],
+                    "description": "Alias for filter_json.",
+                },
+                "min_fact_rating": {"type": "number", "minimum": 0, "maximum": 1, "description": "Filter relation/fact side-channel retrieval to facts rated at or above this threshold."},
                 "as_of": {"type": "string"},
             },
             "required": ["query"],
@@ -592,6 +870,19 @@ TOOLS: dict[str, dict[str, Any]] = {
             "required": ["stable_key"],
         },
     },
+    "autopsy_memory_history": {
+        "description": "Fetch recorded old/new change history for one Autopsy memory item, including updates, expiration, pinning, and deletion events.",
+        "handler": tool_history,
+        "schema": {
+            "type": "object",
+            "properties": {
+                **optional_workspace_properties(),
+                "stable_key": {"type": "string"},
+                "limit": {"type": "integer", "default": 50},
+            },
+            "required": ["stable_key"],
+        },
+    },
     "autopsy_memory_neighbors": {
         "description": "Fetch graph neighbors and explicit relations around one Autopsy memory item.",
         "handler": tool_neighbors,
@@ -601,6 +892,24 @@ TOOLS: dict[str, dict[str, Any]] = {
                 **optional_workspace_properties(),
                 "stable_key": {"type": "string"},
                 "relation_limit": {"type": "integer", "default": 12},
+                "min_fact_rating": {"type": "number", "minimum": 0, "maximum": 1, "description": "Filter semantic neighbors to relation facts rated at or above this threshold."},
+            },
+            "required": ["stable_key"],
+        },
+    },
+    "autopsy_memory_observe": {
+        "description": "Draft or materialize an evidence-backed observation from one seed memory and its semantic graph neighborhood.",
+        "handler": tool_observe,
+        "schema": {
+            "type": "object",
+            "properties": {
+                **optional_workspace_properties(),
+                "stable_key": {"type": "string"},
+                "limit": {"type": "integer", "default": 5},
+                "min_fact_rating": {"type": "number", "minimum": 0, "maximum": 1, "description": "Only use relation facts rated at or above this threshold as observation evidence."},
+                "title": {"type": "string", "description": "Optional title override for the derived observation."},
+                "write": {"type": "boolean", "default": False, "description": "When true, upsert the observation and link it back to evidence memories."},
+                "write_if_stale": {"type": "boolean", "default": False, "description": "When true, upsert only if the existing observation is missing or its stored evidence fingerprint differs from current graph evidence."},
             },
             "required": ["stable_key"],
         },
@@ -614,6 +923,40 @@ TOOLS: dict[str, dict[str, Any]] = {
                 **optional_workspace_properties(),
                 "query": {"type": "string"},
                 "limit": {"type": "integer", "default": 24},
+                "kind": {"type": "array", "items": {"type": "string"}},
+                "kinds": {"type": "array", "items": {"type": "string"}},
+                "memory_type": {"type": "array", "items": {"type": "string"}, "description": "Cognitive memory types: semantic, episodic, procedural, or observation."},
+                "memory_types": {"type": "array", "items": {"type": "string"}, "description": "Cognitive memory types: semantic, episodic, procedural, or observation."},
+                "tag": {"type": "array", "items": {"type": "string"}},
+                "tags": {"type": "array", "items": {"type": "string"}},
+                "namespace": {"type": "array", "items": {"type": "string"}},
+                "namespaces": {"type": "array", "items": {"type": "string"}},
+                **entity_scope_tool_properties(),
+                "metadata": {
+                    "oneOf": [
+                        {"type": "array", "items": {"type": "string"}},
+                        {"type": "object", "additionalProperties": True},
+                    ],
+                    "description": "Metadata filters such as key=value, key!=value, key~=text, or score>=8.",
+                },
+                "filter_json": {
+                    "oneOf": [
+                        {"type": "string"},
+                        {"type": "array", "items": {}},
+                        {"type": "object", "additionalProperties": True},
+                    ],
+                    "description": "JSON boolean filter over kind, tag, namespace, entity scope, metadata, and item fields.",
+                },
+                "filter": {
+                    "oneOf": [
+                        {"type": "string"},
+                        {"type": "array", "items": {}},
+                        {"type": "object", "additionalProperties": True},
+                    ],
+                    "description": "Alias for filter_json.",
+                },
+                "min_fact_rating": {"type": "number", "minimum": 0, "maximum": 1, "description": "Filter relation/fact side-channel retrieval to facts rated at or above this threshold."},
+                "as_of": {"type": "string"},
             },
             "required": ["query"],
         },
@@ -630,6 +973,33 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "content": {"type": "string"},
                 "repository_root_path": {"type": "string"},
                 "thread_id": {"type": "string"},
+                "tag": {"type": "array", "items": {"type": "string"}},
+                "tags": {"type": "array", "items": {"type": "string"}},
+                "namespace": {"type": "array", "items": {"type": "string"}},
+                "namespaces": {"type": "array", "items": {"type": "string"}},
+                **entity_scope_tool_properties(),
+                "metadata": {
+                    "oneOf": [
+                        {"type": "array", "items": {"type": "string"}},
+                        {"type": "object", "additionalProperties": True},
+                    ],
+                    "description": "Structured memory metadata to persist with the item.",
+                },
+                "relation_valid_at": {"type": "string", "description": "ISO-8601 timestamp for when newly created semantic relation facts became true."},
+                "relation_invalid_at": {"type": "string", "description": "ISO-8601 timestamp for when newly created semantic relation facts stopped being true."},
+                "relation_expires_at": {"type": "string", "description": "ISO-8601 timestamp for when newly created semantic relation facts should leave current reads."},
+                "fact_rating": {"type": "number", "minimum": 0, "maximum": 1, "description": "Optional quality rating to attach to newly created semantic relation facts."},
+                **relation_tool_properties(),
+                "no_relations_ok": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Only set true when the memory is intentionally standalone and no semantic relation applies.",
+                },
+                "allow_unsafe_memory": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Bypass the write-time safety guard for deliberate incident evidence; unsafe findings remain in write_quality.",
+                },
             },
             "required": ["title", "content"],
         },
@@ -645,6 +1015,23 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "kind": {"type": "string", "enum": KIND_ENUM, "default": "memory_note"},
                 "title": {"type": "string"},
                 "content": {"type": "string"},
+                "tag": {"type": "array", "items": {"type": "string"}},
+                "tags": {"type": "array", "items": {"type": "string"}},
+                "namespace": {"type": "array", "items": {"type": "string"}},
+                "namespaces": {"type": "array", "items": {"type": "string"}},
+                **entity_scope_tool_properties(),
+                "metadata": {
+                    "oneOf": [
+                        {"type": "array", "items": {"type": "string"}},
+                        {"type": "object", "additionalProperties": True},
+                    ],
+                    "description": "Structured memory metadata to replace or persist with the item.",
+                },
+                "allow_unsafe_memory": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Bypass the write-time safety guard for deliberate incident evidence; unsafe findings remain in write_quality.",
+                },
             },
             "required": ["stable_key", "title", "content"],
         },

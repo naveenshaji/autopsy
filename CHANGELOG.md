@@ -2,10 +2,10 @@
 
 ## Unreleased
 
-- Adds the Tauri v2 Autopsy Observatory app with a Rust CLI bridge, Svelte/Bits UI frontend, Sigma.js/Graphology neighborhood graph, and tray/menu bar health and backup actions.
-- Keeps the installed `autopsy` CLI and Falkor graph as the canonical engine; Observatory performs read-only inspection and serializes CLI calls to avoid embedded Falkor startup races.
-- Adds `autopsy observatory` so the installed CLI can launch, build, or locate the Observatory app.
-- Fixes the Observatory frontend entrypoint to use Svelte 5 `mount(...)` so packaged builds render the app UI instead of only global background styles.
+- Removes the Tauri/Svelte Observatory graph browser product surface.
+- Adds a native Swift macOS menu bar utility focused on recent writes, recent consults, health, backup, and quiet attention states.
+- Adds `autopsy activity` as the lightweight JSON feed for UI clients.
+- Adds `autopsy menubar` so the installed CLI can launch, build, or locate the menu bar app.
 
 ## 0.1.2 - 2026-05-16
 

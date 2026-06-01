@@ -20,26 +20,36 @@ class CommandHandlers:
     doctor: CommandHandler
     sync: CommandHandler
     status: CommandHandler
+    context: CommandHandler
     consult: CommandHandler
     search: CommandHandler
     benchmark: CommandHandler
+    audit: CommandHandler
     export: CommandHandler
     backup: CommandHandler
     restore: CommandHandler
     health: CommandHandler
-    observatory: CommandHandler
+    activity: CommandHandler
+    menubar: CommandHandler
     create_note: CommandHandler
     update_item: CommandHandler
     delete_item: CommandHandler
+    expire_item: CommandHandler
+    pin_item: CommandHandler
+    feedback: CommandHandler
+    import_session: CommandHandler
+    consolidate_session: CommandHandler
+    observe: CommandHandler
     item: CommandHandler
     neighbors: CommandHandler
     timeline: CommandHandler
+    history: CommandHandler
     snapshot: CommandHandler
 
 
 def add_common_arguments(parser: argparse.ArgumentParser, *, falkordb_lite_path_default: Path) -> None:
     parser.add_argument("--workspace", default=str(Path.cwd()), help="Workspace root path.")
-    parser.add_argument("--scope", choices=("system", "repo"), help="Accepted for compatibility; Falkor memory is stored in the unified graph.")
+    parser.add_argument("--scope", choices=("system", "repo"), help="Read scope. Use repo to constrain retrieval to one repository.")
     parser.add_argument("--repo", help="Repository root hint for repo-scoped reads and writes.")
     parser.add_argument("--repository-root-path", help="Repository root hint for repo-scoped reads and writes.")
     parser.add_argument("--host", default=str(os.environ.get("AUTOPSY_FALKORDB_HOST") or "127.0.0.1"), help="FalkorDB host.")
@@ -54,15 +64,42 @@ def add_common_arguments(parser: argparse.ArgumentParser, *, falkordb_lite_path_
 
 def add_note_write_arguments(parser: argparse.ArgumentParser, *, include_kind: bool = False, include_outcome: bool = False) -> None:
     if include_kind:
-        parser.add_argument("--kind", help="Memory kind, for example decision, attempt, question, preference, plan, or memory_note.")
+        parser.add_argument("--kind", help="Memory kind, for example decision, attempt, observation, procedure, question, preference, plan, or memory_note.")
     if include_outcome:
-        parser.add_argument("--outcome", choices=("decision", "attempt", "question", "preference", "plan", "resolved-question", "reverted-attempt"), default="attempt")
+        parser.add_argument("--outcome", choices=("decision", "attempt", "observation", "procedure", "question", "preference", "plan", "resolved-question", "reverted-attempt"), default="attempt")
     parser.add_argument("--title")
     parser.add_argument("--content")
     parser.add_argument("--thread-id")
+    parser.add_argument("--tag", action="append", help="Attach one or more normalized memory tags. Repeat or comma-separate values.")
+    parser.add_argument("--namespace", action="append", help="Attach one or more normalized memory namespaces. Repeat or comma-separate values.")
+    add_entity_scope_arguments(parser, verb="Attach")
+    parser.add_argument("--metadata", action="append", help="Attach structured memory metadata as KEY=VALUE. Repeat for multiple fields.")
     for relation_flag in ("informed-by", "answers", "supersedes", "reverts", "depends-on", "implements", "constrains", "refines"):
         parser.add_argument(f"--{relation_flag}", action="append", default=[])
+    parser.add_argument("--relation-valid-at", help="ISO-8601 timestamp for when newly created semantic relation facts became true.")
+    parser.add_argument("--relation-invalid-at", help="ISO-8601 timestamp for when newly created semantic relation facts stopped being true.")
+    parser.add_argument("--relation-expires-at", help="ISO-8601 timestamp for when newly created semantic relation facts should leave current reads.")
+    parser.add_argument("--fact-rating", type=float, help="Optional 0.0-1.0 quality rating to attach to newly created semantic relation facts.")
+    parser.add_argument(
+        "--no-relations-ok",
+        action="store_true",
+        help="Mark this write as intentionally standalone when no semantic relation applies.",
+    )
+    parser.add_argument(
+        "--allow-unsafe-memory",
+        action="store_true",
+        help="Bypass the write-time safety guard for deliberate incident evidence; unsafe findings remain in write_quality.",
+    )
     parser.add_argument("text", nargs="*")
+
+
+def add_entity_scope_arguments(parser: argparse.ArgumentParser, *, verb: str = "Restrict") -> None:
+    parser.add_argument("--entity-scope", action="append", help=f"{verb} one or more entity scopes as TYPE:ID, for example user:alice, agent:planner, app:web, run:ticket-42, or group:team-a. Repeat or comma-separate values.")
+    parser.add_argument("--user-id", action="append", help=f"{verb} a user-scoped memory partition. Repeat or comma-separate values.")
+    parser.add_argument("--agent-id", action="append", help=f"{verb} an agent-scoped memory partition. Repeat or comma-separate values.")
+    parser.add_argument("--app-id", action="append", help=f"{verb} an application-scoped memory partition. Repeat or comma-separate values.")
+    parser.add_argument("--run-id", action="append", help=f"{verb} a run/session-scoped memory partition. Repeat or comma-separate values.")
+    parser.add_argument("--group-id", action="append", help=f"{verb} a group/tenant-scoped memory partition. Repeat or comma-separate values.")
 
 
 def build_parser(
@@ -109,18 +146,63 @@ def build_parser(
 
     status_parser = subparsers.add_parser("status", parents=[common], help="Show current Falkor memory status.")
     status_parser.add_argument("--current-only", action="store_true", help="Accepted for compatibility; Falkor status is current by default.")
+    status_parser.add_argument("--as-of", help="Read memory as of an ISO-8601 timestamp, excluding records updated after that time.")
     status_parser.add_argument("--thread-id")
     status_parser.add_argument("--limit", type=int, default=8)
     status_parser.add_argument("--section-limit", type=int, default=4)
     status_parser.add_argument("--recent-days", type=int, default=status_window_days_default)
     status_parser.set_defaults(func=handlers.status)
 
+    context_parser = subparsers.add_parser("context", parents=[common], help="Build a compact agent context pack from status plus consult.")
+    context_parser.add_argument("query_text", nargs="?", help="Natural-language task or context query.")
+    context_parser.add_argument("--query", help="Natural-language task or context query.")
+    context_parser.add_argument("--limit", type=int, default=5, help="Top-k retrieval result count.")
+    context_parser.add_argument("--inspect-limit", type=int, default=3, help="Number of top retrieval hits to inspect.")
+    context_parser.add_argument("--kind", action="append", help="Restrict retrieval to one or more memory kinds. Repeat or comma-separate values.")
+    context_parser.add_argument("--memory-type", action="append", help="Restrict retrieval to semantic, episodic, procedural, or observation memory. Repeat or comma-separate values.")
+    context_parser.add_argument("--tag", action="append", help="Restrict retrieval to memories containing all requested tags. Repeat or comma-separate values.")
+    context_parser.add_argument("--namespace", action="append", help="Restrict retrieval to one or more memory namespaces. Repeat or comma-separate values.")
+    add_entity_scope_arguments(context_parser)
+    context_parser.add_argument("--metadata", action="append", help="Restrict retrieval with metadata filters such as key=value, key!=value, key~=text, or score>=8.")
+    context_parser.add_argument("--filter-json", action="append", help="Restrict retrieval with a JSON boolean filter over kind, tag, namespace, entity scope, metadata, and item fields.")
+    context_parser.add_argument("--min-fact-rating", type=float, help="Only include relation facts rated at or above this 0.0-1.0 threshold in relation retrieval.")
+    context_parser.add_argument("--status-limit", type=int, default=6, help="Maximum current-state items to include.")
+    context_parser.add_argument("--section-limit", type=int, default=3, help="Maximum items per current-state section.")
+    context_parser.add_argument("--recent-days", type=int, default=status_window_days_default)
+    context_parser.add_argument("--max-chars", type=int, default=6000, help="Approximate character budget for agent_context entries.")
+    context_parser.add_argument(
+        "--format",
+        choices=("json", "text"),
+        default="json",
+        help="Output structured JSON or a deterministic text context block.",
+    )
+    context_parser.add_argument("--current-only", action="store_true", help="Accepted for compatibility; Falkor reads the current graph by default.")
+    context_parser.add_argument("--as-of", help="Read memory as of an ISO-8601 timestamp, excluding records updated after that time.")
+    context_parser.add_argument("--no-worker", action="store_true", help="Run consult in this CLI process instead of the resident worker.")
+    context_parser.add_argument(
+        "--route",
+        choices=("auto", "status", "lexical", "hybrid"),
+        default="auto",
+        help="Force or auto-select the retrieval route for the consult portion.",
+    )
+    context_parser.set_defaults(func=handlers.context)
+
     consult_parser = subparsers.add_parser("consult", parents=[common], help="Query the retrieval stack.")
     consult_parser.add_argument("query_text", nargs="?", help="Natural-language query.")
     consult_parser.add_argument("--query", help="Natural-language query.")
     consult_parser.add_argument("--limit", type=int, default=5, help="Top-k result count.")
     consult_parser.add_argument("--inspect-limit", type=int, default=3, help="Number of top hits to inspect.")
+    consult_parser.add_argument("--kind", action="append", help="Restrict retrieval to one or more memory kinds. Repeat or comma-separate values.")
+    consult_parser.add_argument("--memory-type", action="append", help="Restrict retrieval to semantic, episodic, procedural, or observation memory. Repeat or comma-separate values.")
+    consult_parser.add_argument("--tag", action="append", help="Restrict retrieval to memories containing all requested tags. Repeat or comma-separate values.")
+    consult_parser.add_argument("--namespace", action="append", help="Restrict retrieval to one or more memory namespaces. Repeat or comma-separate values.")
+    add_entity_scope_arguments(consult_parser)
+    consult_parser.add_argument("--metadata", action="append", help="Restrict retrieval with metadata filters such as key=value, key!=value, key~=text, or score>=8.")
+    consult_parser.add_argument("--filter-json", action="append", help="Restrict retrieval with a JSON boolean filter over kind, tag, namespace, entity scope, metadata, and item fields.")
+    consult_parser.add_argument("--min-fact-rating", type=float, help="Only include relation facts rated at or above this 0.0-1.0 threshold in relation retrieval.")
     consult_parser.add_argument("--current-only", action="store_true", help="Accepted for compatibility; Falkor reads the current graph by default.")
+    consult_parser.add_argument("--as-of", help="Read memory as of an ISO-8601 timestamp, excluding records updated after that time.")
+    consult_parser.add_argument("--no-worker", action="store_true", help="Run consult in this CLI process instead of the resident worker.")
     consult_parser.add_argument(
         "--route",
         choices=("auto", "status", "lexical", "hybrid"),
@@ -133,7 +215,16 @@ def build_parser(
     search_parser.add_argument("query_text", nargs="?", help="Search query.")
     search_parser.add_argument("--query", help="Search query.")
     search_parser.add_argument("--limit", type=int, default=10)
+    search_parser.add_argument("--kind", action="append", help="Restrict search to one or more memory kinds. Repeat or comma-separate values.")
+    search_parser.add_argument("--memory-type", action="append", help="Restrict search to semantic, episodic, procedural, or observation memory. Repeat or comma-separate values.")
+    search_parser.add_argument("--tag", action="append", help="Restrict search to memories containing all requested tags. Repeat or comma-separate values.")
+    search_parser.add_argument("--namespace", action="append", help="Restrict search to one or more memory namespaces. Repeat or comma-separate values.")
+    add_entity_scope_arguments(search_parser)
+    search_parser.add_argument("--metadata", action="append", help="Restrict search with metadata filters such as key=value, key!=value, key~=text, or score>=8.")
+    search_parser.add_argument("--filter-json", action="append", help="Restrict search with a JSON boolean filter over kind, tag, namespace, entity scope, metadata, and item fields.")
+    search_parser.add_argument("--min-fact-rating", type=float, help="Only include relation facts rated at or above this 0.0-1.0 threshold in relation retrieval.")
     search_parser.add_argument("--current-only", action="store_true", help="Accepted for compatibility; Falkor reads the current graph by default.")
+    search_parser.add_argument("--as-of", help="Read memory as of an ISO-8601 timestamp, excluding records updated after that time.")
     search_parser.set_defaults(func=handlers.search)
 
     recall_parser = subparsers.add_parser("recall", parents=[common], help="Recall relevant Falkor memory items.")
@@ -141,7 +232,15 @@ def build_parser(
     recall_parser.add_argument("--query", help="Natural-language query.")
     recall_parser.add_argument("--limit", type=int, default=5)
     recall_parser.add_argument("--inspect-limit", type=int, default=3)
+    recall_parser.add_argument("--kind", action="append", help="Restrict retrieval to one or more memory kinds. Repeat or comma-separate values.")
+    recall_parser.add_argument("--memory-type", action="append", help="Restrict retrieval to semantic, episodic, procedural, or observation memory. Repeat or comma-separate values.")
+    recall_parser.add_argument("--tag", action="append", help="Restrict retrieval to memories containing all requested tags. Repeat or comma-separate values.")
+    recall_parser.add_argument("--namespace", action="append", help="Restrict retrieval to one or more memory namespaces. Repeat or comma-separate values.")
+    add_entity_scope_arguments(recall_parser)
+    recall_parser.add_argument("--metadata", action="append", help="Restrict retrieval with metadata filters such as key=value, key!=value, key~=text, or score>=8.")
+    recall_parser.add_argument("--filter-json", action="append", help="Restrict retrieval with a JSON boolean filter over kind, tag, namespace, entity scope, metadata, and item fields.")
     recall_parser.add_argument("--current-only", action="store_true", help="Accepted for compatibility; Falkor reads the current graph by default.")
+    recall_parser.add_argument("--as-of", help="Read memory as of an ISO-8601 timestamp, excluding records updated after that time.")
     recall_parser.add_argument(
         "--route",
         choices=("auto", "status", "lexical", "hybrid"),
@@ -156,6 +255,30 @@ def build_parser(
     benchmark_parser.add_argument("--skip-write-probe", action="store_true")
     benchmark_parser.add_argument("--current-only", action="store_true", help="Accepted for compatibility; benchmark reads the current graph by default.")
     benchmark_parser.set_defaults(func=handlers.benchmark)
+
+    audit_parser = subparsers.add_parser("audit", parents=[common], help="Audit memory quality, lineage, duplicate, and governance issues.")
+    audit_parser.add_argument("--limit", type=int, default=100, help="Maximum recent semantic memories to audit.")
+    audit_parser.add_argument("--kind", action="append", help="Restrict audit to one or more memory kinds. Repeat or comma-separate values.")
+    audit_parser.add_argument("--memory-type", action="append", help="Restrict audit to semantic, episodic, procedural, or observation memory. Repeat or comma-separate values.")
+    audit_parser.add_argument("--tag", action="append", help="Restrict audit to memories containing all requested tags. Repeat or comma-separate values.")
+    audit_parser.add_argument("--namespace", action="append", help="Restrict audit to one or more memory namespaces. Repeat or comma-separate values.")
+    add_entity_scope_arguments(audit_parser)
+    audit_parser.add_argument("--metadata", action="append", help="Restrict audit with metadata filters such as key=value, key!=value, key~=text, or score>=8.")
+    audit_parser.add_argument("--filter-json", action="append", help="Restrict audit with a JSON boolean filter over kind, tag, namespace, entity scope, metadata, and item fields.")
+    audit_parser.add_argument(
+        "--format",
+        choices=("json", "text"),
+        default="json",
+        help="Output structured JSON or an agent-readable repair plan.",
+    )
+    audit_parser.add_argument(
+        "--min-severity",
+        choices=("low", "medium", "high"),
+        default="low",
+        help="Minimum issue severity to include in text output.",
+    )
+    audit_parser.add_argument("--current-only", action="store_true", help="Accepted for compatibility; audit reads the current graph by default.")
+    audit_parser.set_defaults(func=handlers.audit)
 
     export_parser = subparsers.add_parser("export", parents=[common], help="Export memory items and in-graph relations as JSON.")
     export_parser.add_argument("--output", "-o", help="Write JSON to this path instead of stdout.")
@@ -184,14 +307,21 @@ def build_parser(
     health_parser = subparsers.add_parser("health", parents=[common], help="Run a product health summary for the local memory layer.")
     health_parser.set_defaults(func=handlers.health)
 
-    observatory_parser = subparsers.add_parser("observatory", help="Run the Tauri Observatory visual memory app.")
-    observatory_parser.add_argument("--dir", dest="observatory_dir", help="Path to an Observatory app source directory.")
-    observatory_parser.add_argument("--dev", action="store_true", help="Run `npm run tauri:dev`.")
-    observatory_parser.add_argument("--build", action="store_true", help="Build a native Observatory app bundle.")
-    observatory_parser.add_argument("--open", dest="open_bundle", action="store_true", help="Open an existing built app bundle.")
-    observatory_parser.add_argument("--no-install", action="store_true", help="Do not run npm install when node_modules is missing.")
-    observatory_parser.add_argument("--print-path", action="store_true", help="Print resolved Observatory paths as JSON.")
-    observatory_parser.set_defaults(func=handlers.observatory)
+    activity_parser = subparsers.add_parser("activity", parents=[common], help="Show recent memory activity for lightweight UI clients.")
+    activity_parser.add_argument("--limit", type=int, default=8, help="Default number of writes and consult events to return.")
+    activity_parser.add_argument("--writes-limit", type=int, help="Number of recent memory writes to return.")
+    activity_parser.add_argument("--consults-limit", type=int, help="Number of recent consult events to return.")
+    activity_parser.add_argument("--section-limit", type=int, default=3, help="Maximum current-state items per status section.")
+    activity_parser.add_argument("--recent-days", type=int, default=status_window_days_default)
+    activity_parser.add_argument("--current-only", action="store_true", help="Accepted for compatibility; activity reads the current graph by default.")
+    activity_parser.set_defaults(func=handlers.activity)
+
+    menubar_parser = subparsers.add_parser("menubar", help="Run the native macOS Autopsy menu bar app.")
+    menubar_parser.add_argument("--dir", dest="menubar_dir", help="Path to the Swift menu bar app package.")
+    menubar_parser.add_argument("--build", action="store_true", help="Build the Swift menu bar app without running it.")
+    menubar_parser.add_argument("--release", action="store_true", help="Use a release SwiftPM build.")
+    menubar_parser.add_argument("--print-path", action="store_true", help="Print resolved menu bar app paths as JSON.")
+    menubar_parser.set_defaults(func=handlers.menubar)
 
     create_parser = subparsers.add_parser("create", parents=[common], help="Create a typed Falkor memory note.")
     add_note_write_arguments(create_parser, include_kind=True)
@@ -205,7 +335,7 @@ def build_parser(
     add_note_write_arguments(capture_outcome_parser, include_outcome=True)
     capture_outcome_parser.set_defaults(func=handlers.create_note)
 
-    for note_command in ("decision", "attempt", "question", "preference", "plan", "resolved-question", "reverted-attempt"):
+    for note_command in ("decision", "attempt", "observation", "procedure", "question", "preference", "plan", "resolved-question", "reverted-attempt"):
         note_parser = subparsers.add_parser(note_command, parents=[common], help=f"Create a {note_command} memory note.")
         add_note_write_arguments(note_parser)
         note_parser.set_defaults(func=handlers.create_note)
@@ -219,6 +349,68 @@ def build_parser(
     delete_parser.add_argument("stable_key")
     delete_parser.set_defaults(func=handlers.delete_item)
 
+    expire_parser = subparsers.add_parser("expire", parents=[common], help="Soft-expire a memory item so current reads omit it while history remains inspectable.")
+    expire_parser.add_argument("stable_key")
+    expire_parser.add_argument("--expires-at", help="ISO-8601 expiration timestamp. Defaults to now.")
+    expire_parser.add_argument("--reason", default="", help="Short reason for the lifecycle change.")
+    expire_parser.add_argument("--clear", action="store_true", help="Clear an existing expiration and restore the item to current reads.")
+    expire_parser.set_defaults(func=handlers.expire_item)
+
+    pin_parser = subparsers.add_parser("pin", parents=[common], help="Pin a memory into the core context pack so it is visible without retrieval.")
+    pin_parser.add_argument("stable_key")
+    pin_parser.add_argument("--label", default="", help="Optional short core-memory label or memory-block label.")
+    pin_parser.add_argument("--reason", default="", help="Short reason for pinning this memory.")
+    pin_parser.add_argument("--description", default="", help="Memory-block description that tells agents how this core memory should be used.")
+    pin_parser.add_argument("--limit", type=int, dest="block_limit", help="Maximum characters from this block value to expose in context.")
+    pin_parser.add_argument(
+        "--read-only",
+        dest="read_only",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Mark the memory block read-only for ordinary update operations. Use --no-read-only to clear.",
+    )
+    pin_parser.add_argument(
+        "--shared",
+        dest="shared",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Mark the memory block as shared across agents or scopes. Use --no-shared to clear.",
+    )
+    pin_parser.add_argument("--clear", action="store_true", help="Unpin the memory from core context packs.")
+    pin_parser.set_defaults(func=handlers.pin_item)
+
+    feedback_parser = subparsers.add_parser("feedback", parents=[common], help="Record useful/not-useful feedback for a memory item.")
+    feedback_parser.add_argument("stable_key")
+    feedback_parser.add_argument("--rating", choices=("useful", "not-useful", "neutral"), required=True)
+    feedback_parser.add_argument("--note", default="", help="Optional short note explaining the feedback.")
+    feedback_parser.add_argument("--source", default="cli", help="Feedback source label.")
+    feedback_parser.set_defaults(func=handlers.feedback)
+
+    import_session_parser = subparsers.add_parser("import-session", parents=[common], help="Import an agent JSONL transcript as episodic timeline memory.")
+    import_session_parser.add_argument("path", help="Path to a JSONL transcript file.")
+    import_session_parser.add_argument("--title", default="", help="Optional title for the imported session timeline.")
+    import_session_parser.add_argument("--source", default="agent-jsonl", help="Source label such as claude-jsonl, codex-jsonl, or cursor-jsonl.")
+    import_session_parser.add_argument("--max-events", type=int, default=200, help="Maximum parsed events to import.")
+    import_session_parser.add_argument("--dry-run", action="store_true", help="Validate and summarize without writing to Falkor.")
+    import_session_parser.set_defaults(func=handlers.import_session)
+
+    consolidate_session_parser = subparsers.add_parser("consolidate-session", parents=[common], help="Draft or write semantic memory from an imported session timeline.")
+    consolidate_session_parser.add_argument("stable_key", help="Imported session stable key, for example session-import:<sha>.")
+    consolidate_session_parser.add_argument("--title", default="", help="Optional title for the consolidated memory.")
+    consolidate_session_parser.add_argument("--kind", choices=("memory_note", "attempt", "decision", "observation", "procedure", "plan", "summary"), default="memory_note")
+    consolidate_session_parser.add_argument("--max-events", type=int, default=80, help="Maximum timeline events to include.")
+    consolidate_session_parser.add_argument("--write", action="store_true", help="Write the consolidation memory instead of returning a draft only.")
+    consolidate_session_parser.set_defaults(func=handlers.consolidate_session)
+
+    observe_parser = subparsers.add_parser("observe", parents=[common], help="Draft or materialize a graph-derived observation from one seed memory.")
+    observe_parser.add_argument("--stable-key", required=True, help="Seed memory stable key.")
+    observe_parser.add_argument("--limit", type=int, default=5, help="Maximum related memories to use as evidence.")
+    observe_parser.add_argument("--min-fact-rating", type=float, help="Only use relation facts rated at or above this 0.0-1.0 threshold.")
+    observe_parser.add_argument("--title", default="", help="Optional title override for the derived observation.")
+    observe_parser.add_argument("--write", action="store_true", help="Materialize or update the observation memory; default is draft-only.")
+    observe_parser.add_argument("--write-if-stale", action="store_true", help="Materialize only when the existing observation is missing or its evidence fingerprint differs from current graph evidence.")
+    observe_parser.set_defaults(func=handlers.observe)
+
     item_parser = subparsers.add_parser("item", parents=[common], help="Fetch one graph item from Falkor memory.")
     item_parser.add_argument("stable_key")
     item_parser.add_argument("--current-only", action="store_true", help="Accepted for compatibility; Falkor reads the current graph by default.")
@@ -230,6 +422,7 @@ def build_parser(
     group.add_argument("--entity-id", type=int)
     group.add_argument("--thread-id")
     neighbors_parser.add_argument("--limit", type=int, default=12)
+    neighbors_parser.add_argument("--min-fact-rating", type=float, help="Only include semantic neighbors connected by relation facts rated at or above this 0.0-1.0 threshold.")
     neighbors_parser.add_argument("--all-kinds", action="store_true")
     neighbors_parser.add_argument("--current-only", action="store_true", help="Accepted for compatibility; Falkor reads the current graph by default.")
     neighbors_parser.set_defaults(func=handlers.neighbors)
@@ -238,6 +431,12 @@ def build_parser(
     timeline_parser.add_argument("stable_key")
     timeline_parser.add_argument("--current-only", action="store_true", help="Accepted for compatibility; Falkor reads the current graph by default.")
     timeline_parser.set_defaults(func=handlers.timeline)
+
+    history_parser = subparsers.add_parser("history", parents=[common], help="Fetch recorded old/new change history for one memory item.")
+    history_parser.add_argument("stable_key")
+    history_parser.add_argument("--limit", type=int, default=50)
+    history_parser.add_argument("--current-only", action="store_true", help="Accepted for compatibility; Falkor reads the current graph by default.")
+    history_parser.set_defaults(func=handlers.history)
 
     snapshot_parser = subparsers.add_parser("snapshot", parents=[common], help="Fetch a graph snapshot around one item from Falkor memory.")
     snapshot_parser.add_argument("stable_key")

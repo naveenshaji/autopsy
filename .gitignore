@@ -3,6 +3,7 @@
 .ruff_cache/
 .mypy_cache/
 .venv/
+.build/
 __pycache__/
 node_modules/
 .npm-cache/
