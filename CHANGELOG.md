@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.1.8 - 2026-06-01
+
+Restores native action feedback in the menu bar status row.
+
+- Shows successful utility actions, such as health, backup, and login-startup changes, in the status footnote.
+- Clears stale action text when a new utility action starts so old success messages do not survive failures or new work.
+
 ## 0.1.7 - 2026-06-01
 
 Adds standard macOS command affordances to the menu bar utility.

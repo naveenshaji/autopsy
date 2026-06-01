@@ -17,7 +17,7 @@ struct ActivityPopover: View {
                     StatusRow(
                         title: "Status",
                         detail: store.statusSummary,
-                        footnote: refreshLabel,
+                        footnote: statusFootnote,
                         systemImage: store.errorMessage == nil ? "checkmark.circle" : "exclamationmark.triangle",
                         isError: store.errorMessage != nil
                     )
@@ -157,6 +157,13 @@ struct ActivityPopover: View {
             return "Updated \(lastRefresh.formatted(date: .omitted, time: .shortened))"
         }
         return "Not refreshed"
+    }
+
+    private var statusFootnote: String {
+        guard let message = store.lastActionMessage, !message.isEmpty else {
+            return refreshLabel
+        }
+        return "\(refreshLabel) - \(message)"
     }
 
     private var activitySummary: String {

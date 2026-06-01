@@ -191,6 +191,7 @@ final class ActivityStore: ObservableObject {
     private func runUtilityCommand(_ arguments: [String], successMessage: String) async {
         isLoading = true
         errorMessage = nil
+        lastActionMessage = nil
         defer {
             isLoading = false
             lastRefresh = Date()
@@ -218,6 +219,7 @@ final class ActivityStore: ObservableObject {
     private func updateLaunchAgent(enabled: Bool) async {
         isManagingLaunchAgent = true
         launchAgentError = nil
+        lastActionMessage = nil
         defer {
             isManagingLaunchAgent = false
         }
