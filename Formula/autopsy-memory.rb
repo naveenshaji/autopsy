@@ -5,8 +5,8 @@ class AutopsyMemory < Formula
 
   desc "Local-first Falkor-backed memory layer and CLI for coding agents"
   homepage "https://github.com/naveenshaji/autopsy"
-  url "https://github.com/naveenshaji/autopsy/archive/refs/tags/v0.1.14.tar.gz"
-  sha256 "5eebe0c8351cb1d4d2e13bc268e5db55f2e5d4b4e3b55e0cb12d9834fc71e79d"
+  url "https://github.com/naveenshaji/autopsy/archive/refs/tags/v0.1.15.tar.gz"
+  sha256 "ccff952cb0c952cc67110efb024cd7990af238dfff2c80a1ebd0145fe48d4a4d"
   license :cannot_represent
 
   depends_on :macos
@@ -62,10 +62,10 @@ class AutopsyMemory < Formula
 
   def caveats
     <<~EOS
-      To start the macOS menu bar utility and keep it visible at login:
-        autopsy menubar --install-launch-agent
+      To install agent instructions and start the macOS menu bar utility:
+        autopsy install
 
-      To stop it:
+      To stop only the menu bar utility:
         autopsy menubar --uninstall-launch-agent
     EOS
   end
