@@ -9,7 +9,7 @@ autopsy doctor
 autopsy init
 ```
 
-The installer creates a versioned Homebrew-style layout under `/opt/homebrew` when writable, or `~/.local` otherwise. It backs up a non-standalone existing `autopsy` command before replacing it.
+The installer creates a versioned Homebrew-style layout under `/opt/homebrew` when writable, or `~/.local` otherwise. It backs up a non-standalone existing `autopsy` command before replacing it. On macOS, it also installs and starts the menu bar LaunchAgent by default; set `AUTOPSY_INSTALL_MENUBAR_AGENT=0` to skip that in CI or headless sessions.
 
 ## First-Run Agent Setup
 
@@ -21,7 +21,7 @@ autopsy init --print
 autopsy init --mcp
 ```
 
-`init` is CLI-first. It installs managed instruction blocks for Codex and Claude Code in global and repo instruction files. MCP configuration is optional and only printed when `--mcp` is passed.
+`init` is CLI-first. It installs managed instruction blocks for global Codex, Claude Code, Gemini CLI, and OpenCode instruction files, plus repo-scoped files for Codex/AGENTS.md-aware tools, Claude Code, Gemini CLI, GitHub Copilot, and Windsurf. MCP configuration is optional and only printed when `--mcp` is passed.
 
 ## Health
 
@@ -42,7 +42,7 @@ autopsy menubar
 
 `activity` is the lightweight JSON feed for UI clients. It returns recent memory writes, recent consult telemetry, attention items, and current status without exposing the graph-browser surface.
 
-`menubar` stages the native macOS menu bar app as a small `.app` bundle and opens it with LaunchServices. Current bundles launch without rebuilding; use `autopsy menubar --build` to build and stage without launching, `autopsy menubar --rebuild` to force a rebuild before launch, `autopsy menubar --install-launch-agent` to open it at login, and `autopsy menubar --print-path` to inspect resolved app paths. Login startup is also exposed in the menu bar popover.
+`menubar` stages the native macOS menu bar app as a small `.app` bundle and opens it. Current bundles launch without rebuilding; use `autopsy menubar --build` to build and stage without launching, `autopsy menubar --rebuild` to force a rebuild before launch, `autopsy menubar --install-launch-agent` to install the supervised login item, and `autopsy menubar --print-path` to inspect resolved app paths. Installed LaunchAgents run the app executable directly with `KeepAlive`.
 
 ## Retrieval
 

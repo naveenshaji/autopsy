@@ -22,7 +22,21 @@ This repository is the standalone memory product extraction. It intentionally do
 
 ## Install
 
-For the local machine, install the standalone CLI into a Homebrew-style prefix:
+Install from the public repository as a Homebrew tap:
+
+```bash
+brew tap naveenshaji/autopsy https://github.com/naveenshaji/autopsy
+brew install autopsy-memory
+autopsy version --json
+autopsy doctor
+autopsy menubar --install-launch-agent
+```
+
+The menu bar command installs a user LaunchAgent that points at Homebrew's
+stable `opt/autopsy-memory` path, so the app follows package updates.
+
+For local development or machines without Homebrew, install the standalone CLI
+into a Homebrew-style prefix:
 
 ```bash
 cd /Users/naveenshaji/github/codex/projects/autopsy
@@ -39,6 +53,12 @@ By default this uses `/opt/homebrew` when it is writable, otherwise `~/.local`. 
 <prefix>/opt/autopsy-memory -> <prefix>/Cellar/autopsy-memory/<version>
 <prefix>/bin/autopsy
 ```
+
+On macOS, the installer also installs and starts the menu bar LaunchAgent by default so Autopsy is visible when the local install is available. Set `AUTOPSY_INSTALL_MENUBAR_AGENT=0` to skip that behavior.
+
+Homebrew packaging details live in [docs/homebrew.md](docs/homebrew.md). Plain
+`brew install autopsy-memory` without a tap requires acceptance into
+`homebrew/core`; until then, use the tap command above.
 
 Use a repo-local virtual environment for development:
 
@@ -77,7 +97,6 @@ autopsy backup
 autopsy restore ~/Library/Application\ Support/Autopsy/Backups/<backup>.json --dry-run
 autopsy activity
 autopsy menubar
-autopsy menubar --install-launch-agent
 autopsy benchmark --sample-size 5 --include-sync
 ```
 
@@ -262,13 +281,14 @@ Before publishing a release:
 
 ```bash
 ./scripts/release-check.sh
+/opt/homebrew/opt/python@3.12/libexec/bin/python scripts/update-homebrew-formula.py --version <version> --python /opt/homebrew/opt/python@3.12/libexec/bin/python
 ```
 
 The release checklist lives at [docs/release-checklist.md](docs/release-checklist.md).
 
 ## Menu Bar App
 
-The native macOS menu bar utility lives in [apps/menubar](apps/menubar). It is intentionally small: recent memory writes, recent consult telemetry, attention states, manual health, backup controls, and login startup. It does not browse the graph or own memory storage; the `autopsy` CLI and Falkor graph remain canonical.
+The native macOS menu bar utility lives in [apps/menubar](apps/menubar). It is intentionally small: tabbed recent memory writes and consult telemetry, global agent instruction status, attention states, manual health, backup, restart, and quit controls. It does not browse the graph or own memory storage; the `autopsy` CLI and Falkor graph remain canonical.
 
 ```bash
 autopsy menubar
@@ -284,7 +304,7 @@ swift run AutopsyMenuBar
 ```
 
 The app polls `autopsy activity`, which is the lightweight JSON feed for UI clients. See [docs/menubar.md](docs/menubar.md).
-Login startup can be toggled from Settings or installed from the CLI with `autopsy menubar --install-launch-agent`.
+The global installer starts a supervised LaunchAgent by default, and `autopsy menubar --install-launch-agent` can refresh it manually.
 
 ## Repository Split
 

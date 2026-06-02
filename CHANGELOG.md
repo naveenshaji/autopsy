@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.1.13 - 2026-06-02
+
+Publishes the public Homebrew-ready menu bar utility.
+
+- Adds Homebrew tap packaging with pinned Python resources and a source-built Swift menu bar app.
+- Adds a formula regeneration script for public release tags.
+- Adds Homebrew distribution documentation and release checklist coverage.
+- Switches the menu bar activity area to Writes and Consults tabs with a single larger scroll list.
+- Adds full-height hover detail flyouts with expandable memory text.
+- Removes broken write notifications and noisy refresh indicators.
+- Adds broader agent instruction status/install support and a Quit action.
+- Keeps the installed menu bar app supervised through the stable Homebrew `opt` path.
+
 ## 0.1.12 - 2026-06-02
 
 Finishes moving the native utility to a menu-bar-only surface.

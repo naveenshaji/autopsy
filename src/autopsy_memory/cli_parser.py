@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from .init import SUPPORTED_AGENTS
+
 
 CommandHandler = Callable[[argparse.Namespace], None]
 
@@ -128,7 +130,7 @@ def build_parser(
     init_parser = subparsers.add_parser("init", help="Install CLI-first persistent instructions for coding agents.")
     init_parser.add_argument("--global", dest="global_scope", action="store_true", help="Install global instructions for selected agents.")
     init_parser.add_argument("--repo", dest="repo_path", nargs="?", const="", help="Install repo-local instructions. Defaults to the current directory when no path is provided.")
-    init_parser.add_argument("--agent", choices=("all", "codex", "claude"), default="all", help="Instruction target agent.")
+    init_parser.add_argument("--agent", choices=("all", *SUPPORTED_AGENTS), default="all", help="Instruction target agent.")
     init_parser.add_argument("--print", dest="print_instructions", action="store_true", help="Print the managed instruction block without writing files.")
     init_parser.add_argument("--check", action="store_true", help="Inspect target files without writing changes.")
     init_parser.add_argument("--dry-run", action="store_true", help="Preview file changes without writing them.")

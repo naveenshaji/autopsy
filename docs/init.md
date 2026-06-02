@@ -14,8 +14,15 @@ When no target is specified, this installs managed Autopsy memory instruction bl
 
 - `~/.codex/AGENTS.md`
 - `~/.claude/CLAUDE.md`
+- `~/.gemini/GEMINI.md`
+- `~/.config/opencode/AGENTS.md`
 - `./AGENTS.md`
 - `./CLAUDE.md`
+- `./GEMINI.md`
+- `./.github/copilot-instructions.md`
+- `./.windsurf/rules/autopsy.md`
+
+Repo `./AGENTS.md` is shared by AGENTS.md-aware harnesses such as Codex, OpenCode, and Cursor.
 
 The command uses managed markers and only replaces content between those markers:
 
@@ -32,6 +39,8 @@ autopsy init --check
 autopsy init --dry-run
 autopsy init --global --agent codex
 autopsy init --repo . --agent claude
+autopsy init --global --agent gemini
+autopsy init --repo . --agent copilot
 autopsy init --print
 autopsy init --mcp
 autopsy init --smoke-test

@@ -1,6 +1,6 @@
+import AppKit
 import Foundation
 import SwiftUI
-import UserNotifications
 
 @MainActor
 final class ActivityStore: ObservableObject {
@@ -12,35 +12,27 @@ final class ActivityStore: ObservableObject {
     @Published var launchAgentStatus: LaunchAgentStatus?
     @Published var launchAgentError: String?
     @Published var isManagingLaunchAgent = false
+    @Published var instructionStatus: InstructionStatusPayload?
+    @Published var instructionStatusError: String?
+    @Published var isManagingInstructions = false
     @Published var cliPath: String {
         didSet {
             UserDefaults.standard.set(cliPath, forKey: Defaults.cliPath)
         }
     }
-    @Published var notifyOnWrites: Bool {
-        didSet {
-            UserDefaults.standard.set(notifyOnWrites, forKey: Defaults.notifyOnWrites)
-            if notifyOnWrites {
-                requestNotificationAuthorization()
-            }
-        }
-    }
 
     private enum Defaults {
         static let cliPath = "AutopsyMenuBar.cliPath"
-        static let notifyOnWrites = "AutopsyMenuBar.notifyOnWrites"
         static let cachedActivityPayload = "AutopsyMenuBar.cachedActivityPayload"
         static let cachedActivityDate = "AutopsyMenuBar.cachedActivityDate"
         static let cachedLaunchAgentStatus = "AutopsyMenuBar.cachedLaunchAgentStatus"
+        static let cachedInstructionStatus = "AutopsyMenuBar.cachedInstructionStatus"
     }
 
     private var timer: Timer?
-    private var newestWriteKey: String?
-    private var hasLoadedActivity = false
 
     init() {
         cliPath = UserDefaults.standard.string(forKey: Defaults.cliPath) ?? Self.defaultCLIPath
-        notifyOnWrites = UserDefaults.standard.bool(forKey: Defaults.notifyOnWrites)
         loadCachedState()
         start()
     }
@@ -83,14 +75,7 @@ final class ActivityStore: ObservableObject {
         if !attentionEvents.isEmpty {
             return "circle.lefthalf.filled"
         }
-        if isLoading {
-            return "arrow.triangle.2.circlepath"
-        }
         return "brain.head.profile"
-    }
-
-    var notificationsAvailable: Bool {
-        Self.notificationsAvailable
     }
 
     var detectedCLIPath: String {
@@ -99,6 +84,10 @@ final class ActivityStore: ObservableObject {
 
     var launchAtLoginEnabled: Bool {
         launchAgentStatus?.installed == true
+    }
+
+    var launchAtLoginLoaded: Bool {
+        launchAgentStatus?.loaded == true
     }
 
     var launchAtLoginStatusText: String {
@@ -117,9 +106,42 @@ final class ActivityStore: ObservableObject {
         return "Login startup off"
     }
 
-    private static var notificationsAvailable: Bool {
-        guard let bundleIdentifier = Bundle.main.bundleIdentifier else { return false }
-        return !bundleIdentifier.isEmpty
+    var instructionTargets: [InstructionTarget] {
+        let knownAgents = ["codex", "claude", "gemini", "opencode"]
+        let targets = instructionStatus?.targets ?? []
+        let knownTargets = targets.filter { target in
+            guard let agent = target.agent else { return false }
+            return knownAgents.contains(agent)
+        }
+        let missingAgents = knownAgents.filter { agent in
+            !knownTargets.contains { $0.agent == agent }
+        }
+        return knownTargets + missingAgents.map { agent in
+            InstructionTarget(
+                agent: agent,
+                scope: "global",
+                path: nil,
+                description: instructionDescription(agent),
+                state: "missing",
+                action: "install",
+                changed: true,
+                dryRun: true
+            )
+        }
+    }
+
+    var hasPriorMemory: Bool {
+        !recentWrites.isEmpty || !recentConsults.isEmpty
+    }
+
+    var hasInstalledInstructions: Bool {
+        instructionTargets.contains { target in
+            target.state == "managed"
+        }
+    }
+
+    var shouldShowOnboardingPrompt: Bool {
+        instructionStatus != nil && !hasPriorMemory && !hasInstalledInstructions
     }
 
     private static var defaultCLIPath: String {
@@ -148,6 +170,9 @@ final class ActivityStore: ObservableObject {
             Task {
                 await loadLaunchAgentStatus()
             }
+            Task {
+                await loadInstructionStatus()
+            }
         }
     }
 
@@ -174,6 +199,27 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    func quit() {
+        Task {
+            if launchAtLoginEnabled || launchAtLoginLoaded {
+                await updateLaunchAgent(enabled: false)
+            }
+            NSApplication.shared.terminate(nil)
+        }
+    }
+
+    func installInstructions(agent: String) {
+        Task {
+            await updateInstructions(agent: agent)
+        }
+    }
+
+    func installAllInstructions() {
+        Task {
+            await updateInstructions(agent: "all")
+        }
+    }
+
     private func loadActivity() async {
         isLoading = true
         errorMessage = nil
@@ -182,12 +228,17 @@ final class ActivityStore: ObservableObject {
         }
 
         do {
-            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run(["activity", "--limit", "6"])
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run([
+                "activity",
+                "--writes-limit",
+                "20",
+                "--consults-limit",
+                "20",
+            ])
             let decoded = try JSONDecoder().decode(ActivityPayload.self, from: Data(output.utf8))
             payload = decoded
             lastRefresh = Date()
             cacheActivityPayload(output)
-            maybeNotifyAboutWrite(decoded.activity?.recentWrites?.first)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -222,6 +273,23 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    private func loadInstructionStatus() async {
+        instructionStatusError = nil
+        do {
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run([
+                "init",
+                "--check",
+                "--global",
+                "--agent",
+                "all",
+            ])
+            instructionStatus = try JSONDecoder().decode(InstructionStatusPayload.self, from: Data(output.utf8))
+            UserDefaults.standard.set(output, forKey: Defaults.cachedInstructionStatus)
+        } catch {
+            instructionStatusError = error.localizedDescription
+        }
+    }
+
     private func updateLaunchAgent(enabled: Bool) async {
         isManagingLaunchAgent = true
         launchAgentError = nil
@@ -241,14 +309,36 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    private func updateInstructions(agent: String) async {
+        isManagingInstructions = true
+        instructionStatusError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingInstructions = false
+        }
+
+        do {
+            _ = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 90).run([
+                "init",
+                "--global",
+                "--agent",
+                agent,
+                "--yes",
+            ])
+            lastActionMessage = agent == "all" ? "Instructions installed" : "\(agentDisplayName(agent)) instructions installed"
+            await loadInstructionStatus()
+            await loadActivity()
+        } catch {
+            instructionStatusError = error.localizedDescription
+        }
+    }
+
     private func loadCachedState() {
         let defaults = UserDefaults.standard
         if let cachedActivity = defaults.string(forKey: Defaults.cachedActivityPayload),
            let data = cachedActivity.data(using: .utf8),
            let decoded = try? JSONDecoder().decode(ActivityPayload.self, from: data) {
             payload = decoded
-            newestWriteKey = decoded.activity?.recentWrites?.first?.stableKey
-            hasLoadedActivity = true
             lastRefresh = defaults.object(forKey: Defaults.cachedActivityDate) as? Date
         }
 
@@ -257,6 +347,12 @@ final class ActivityStore: ObservableObject {
            let decoded = try? JSONDecoder().decode(LaunchAgentStatus.self, from: data) {
             launchAgentStatus = decoded
         }
+
+        if let cachedInstructionStatus = defaults.string(forKey: Defaults.cachedInstructionStatus),
+           let data = cachedInstructionStatus.data(using: .utf8),
+           let decoded = try? JSONDecoder().decode(InstructionStatusPayload.self, from: data) {
+            instructionStatus = decoded
+        }
     }
 
     private func cacheActivityPayload(_ output: String) {
@@ -264,29 +360,34 @@ final class ActivityStore: ObservableObject {
         defaults.set(output, forKey: Defaults.cachedActivityPayload)
         defaults.set(lastRefresh, forKey: Defaults.cachedActivityDate)
     }
+}
 
-    private func maybeNotifyAboutWrite(_ write: MemoryWrite?) {
-        let previousWriteKey = newestWriteKey
-        guard let write, let key = write.stableKey, !key.isEmpty else {
-            hasLoadedActivity = true
-            return
-        }
-        defer {
-            newestWriteKey = key
-            hasLoadedActivity = true
-        }
-
-        guard hasLoadedActivity, previousWriteKey != key, notifyOnWrites, notificationsAvailable else { return }
-        let content = UNMutableNotificationContent()
-        content.title = "Autopsy memory written"
-        content.body = write.title ?? "New memory captured"
-        content.sound = nil
-        let request = UNNotificationRequest(identifier: key, content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(request)
+private func agentDisplayName(_ agent: String) -> String {
+    switch agent {
+    case "codex":
+        return "Codex"
+    case "claude":
+        return "Claude Code"
+    case "gemini":
+        return "Gemini CLI"
+    case "opencode":
+        return "OpenCode"
+    default:
+        return agent
     }
+}
 
-    private func requestNotificationAuthorization() {
-        guard notificationsAvailable else { return }
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) { _, _ in }
+private func instructionDescription(_ agent: String) -> String {
+    switch agent {
+    case "codex":
+        return "Codex global instructions"
+    case "claude":
+        return "Claude Code global memory"
+    case "gemini":
+        return "Gemini CLI global context"
+    case "opencode":
+        return "OpenCode global instructions"
+    default:
+        return "\(agentDisplayName(agent)) global instructions"
     }
 }

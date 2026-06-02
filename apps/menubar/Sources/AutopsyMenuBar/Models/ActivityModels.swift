@@ -150,3 +150,33 @@ struct LaunchAgentStatus: Decodable {
         case programArguments = "program_arguments"
     }
 }
+
+struct InstructionStatusPayload: Decodable {
+    var targets: [InstructionTarget]?
+}
+
+struct InstructionTarget: Decodable, Identifiable {
+    var agent: String?
+    var scope: String?
+    var path: String?
+    var description: String?
+    var state: String?
+    var action: String?
+    var changed: Bool?
+    var dryRun: Bool?
+
+    var id: String {
+        "\(agent ?? "agent")-\(scope ?? "scope")-\(path ?? "")"
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case agent
+        case scope
+        case path
+        case description
+        case state
+        case action
+        case changed
+        case dryRun = "dry_run"
+    }
+}

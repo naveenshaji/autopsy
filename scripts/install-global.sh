@@ -20,6 +20,9 @@ Environment:
   AUTOPSY_INSTALL_PREFIX Install prefix. Defaults to /opt/homebrew when writable,
                          otherwise ~/.local.
   AUTOPSY_INSTALL_EXTRA  Package extra to install. Defaults to ml.
+  AUTOPSY_INSTALL_MENUBAR_AGENT
+                         Set to 0 to skip installing the macOS menu bar
+                         LaunchAgent. Defaults to 1 on macOS.
 EOF
 }
 
@@ -171,6 +174,12 @@ write_wrapper "$BIN_DIR/autopsy-memory-mcp" "autopsy_memory.mcp_bridge"
 
 PATH="$BIN_DIR:$PATH" "$BIN_DIR/autopsy" version --json >/dev/null
 PATH="$BIN_DIR:$PATH" "$BIN_DIR/autopsy" doctor >/dev/null
+
+if [ "$(uname -s)" = "Darwin" ] && [ "${AUTOPSY_INSTALL_MENUBAR_AGENT:-1}" != "0" ] && [ -d "$OPT_DIR/menubar" ]; then
+  if ! PATH="$BIN_DIR:$PATH" "$BIN_DIR/autopsy" menubar --dir "$OPT_DIR/menubar" --install-launch-agent >/dev/null; then
+    echo "install-global: menu bar LaunchAgent was not installed; run 'autopsy menubar --install-launch-agent' from a graphical macOS session" >&2
+  fi
+fi
 
 cat <<EOF
 Installed Autopsy Memory $VERSION

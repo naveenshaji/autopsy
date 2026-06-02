@@ -15147,6 +15147,10 @@ def menubar_app_bundle_path(app_dir: Path, *, release: bool) -> Path:
     return app_dir / ".build" / configuration / f"{MENUBAR_PRODUCT_NAME}.app"
 
 
+def menubar_app_executable_path(app_dir: Path, *, release: bool) -> Path:
+    return menubar_app_bundle_path(app_dir, release=release) / "Contents" / "MacOS" / MENUBAR_PRODUCT_NAME
+
+
 def menubar_default_cli_path() -> str:
     autopsy_path = shutil.which("autopsy")
     if autopsy_path:
@@ -15261,17 +15265,14 @@ def menubar_default_release(app_dir: Path) -> bool:
     return menubar_homebrew_prefix(app_dir) is not None
 
 
+def menubar_launch_agent_release(args: argparse.Namespace, app_dir: Path) -> bool:
+    return bool(getattr(args, "release", False) or menubar_default_release(app_dir))
+
+
 def menubar_launcher_arguments(args: argparse.Namespace, app_dir: Path) -> list[str]:
-    invoked = Path(sys.argv[0]).expanduser()
-    if invoked.name == "autopsy" and invoked.exists():
-        command = [str(invoked.resolve())]
-    else:
-        autopsy_path = shutil.which("autopsy")
-        command = [autopsy_path] if autopsy_path else [sys.executable, "-m", "autopsy_memory.cli"]
-    command.extend(["menubar", "--dir", str(menubar_launch_agent_app_dir(app_dir))])
-    if bool(getattr(args, "release", False)):
-        command.append("--release")
-    return command
+    launch_app_dir = menubar_launch_agent_app_dir(app_dir)
+    executable = menubar_app_executable_path(launch_app_dir, release=menubar_launch_agent_release(args, app_dir))
+    return [str(executable)]
 
 
 def menubar_launch_agent_plist(args: argparse.Namespace, app_dir: Path) -> dict[str, Any]:
@@ -15280,6 +15281,7 @@ def menubar_launch_agent_plist(args: argparse.Namespace, app_dir: Path) -> dict[
     return {
         "Label": MENUBAR_LAUNCH_AGENT_LABEL,
         "ProgramArguments": menubar_launcher_arguments(args, app_dir),
+        "KeepAlive": True,
         "RunAtLoad": True,
         "StandardOutPath": str(log_dir / "menubar-launch-agent.out.log"),
         "StandardErrorPath": str(log_dir / "menubar-launch-agent.err.log"),

@@ -195,15 +195,15 @@ class AutopsyCLIContractTests(unittest.TestCase):
             self.assertIn("AutopsyDefaultCLIPath", plist)
             self.assertTrue(cli.menubar_app_bundle_current(app_dir, release=False))
 
-    def test_menubar_launch_agent_plist_runs_current_launcher(self):
+    def test_menubar_launch_agent_plist_runs_app_executable(self):
         parser = cli.build_parser()
         args = parser.parse_args(["menubar", "--install-launch-agent", "--dir", "/tmp/autopsy-menubar"])
         payload = cli.menubar_launch_agent_plist(args, Path("/tmp/autopsy-menubar"))
+        executable = Path("/tmp/autopsy-menubar") / ".build" / "debug" / f"{cli.MENUBAR_PRODUCT_NAME}.app" / "Contents" / "MacOS" / cli.MENUBAR_PRODUCT_NAME
         self.assertEqual(payload["Label"], cli.MENUBAR_LAUNCH_AGENT_LABEL)
         self.assertTrue(payload["RunAtLoad"])
-        self.assertIn("menubar", payload["ProgramArguments"])
-        self.assertIn("--dir", payload["ProgramArguments"])
-        self.assertIn("/tmp/autopsy-menubar", payload["ProgramArguments"])
+        self.assertTrue(payload["KeepAlive"])
+        self.assertEqual(payload["ProgramArguments"], [str(executable)])
         self.assertEqual(payload["WorkingDirectory"], "/tmp/autopsy-menubar")
 
     def test_menubar_launch_agent_prefers_homebrew_opt_path(self):
@@ -220,7 +220,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
 
             payload = cli.menubar_launch_agent_plist(args, cellar_menubar)
 
-        self.assertIn(str(stable_menubar), payload["ProgramArguments"])
+        stable_executable = stable_menubar / ".build" / "release" / f"{cli.MENUBAR_PRODUCT_NAME}.app" / "Contents" / "MacOS" / cli.MENUBAR_PRODUCT_NAME
+        self.assertEqual(payload["ProgramArguments"], [str(stable_executable)])
         self.assertNotIn(str(cellar_menubar), payload["ProgramArguments"])
         self.assertEqual(payload["WorkingDirectory"], str(stable_menubar))
 
@@ -662,6 +663,12 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(args.agent, "claude")
         self.assertTrue(args.dry_run)
         self.assertTrue(args.mcp)
+
+    def test_init_parser_accepts_new_agent_targets(self):
+        parser = cli.build_parser()
+        for agent in ("gemini", "opencode", "cursor", "copilot", "windsurf"):
+            args = parser.parse_args(["init", "--repo", "/tmp/repo", "--agent", agent, "--dry-run"])
+            self.assertEqual(args.agent, agent)
 
     def test_consult_parser_accepts_worker_bypass(self):
         parser = cli.build_parser()

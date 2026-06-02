@@ -23,6 +23,10 @@ Use this checklist before tagging or publishing Autopsy Memory.
 - `autopsy menubar --print-path` resolves the installed menu bar app source.
 - `autopsy menubar --launch-agent-status` reports LaunchAgent state without writing.
 - `./scripts/menubar-check.sh` passes when shipping the macOS menu bar app.
+- `scripts/update-homebrew-formula.py --version <version>` regenerates `Formula/autopsy-memory.rb` from the public release tag.
+- `brew style naveenshaji/autopsy/autopsy-memory` passes against a local tap copy.
+- `brew audit --formula --strict naveenshaji/autopsy/autopsy-memory` passes against a local tap copy.
+- `brew fetch --formula --deps naveenshaji/autopsy/autopsy-memory` verifies the public tag and resource checksums.
 
 ## Packaging
 
@@ -30,6 +34,8 @@ Use this checklist before tagging or publishing Autopsy Memory.
 - README install commands work from a clean checkout.
 - CLI entrypoints exist: `autopsy`, `autopsy-memory-worker`, and `autopsy-memory-mcp`.
 - The license file is intentional for the release channel.
+- If publishing through the owned Homebrew tap, copy `Formula/autopsy-memory.rb` to `naveenshaji/homebrew-autopsy`.
+- If submitting to `homebrew/core`, replace the current all-rights-reserved license before opening the PR.
 
 ## Product Safety
 

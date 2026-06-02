@@ -16,7 +16,7 @@ from .metadata import AGENT_INSTRUCTIONS
 MANAGED_START = "<!-- AUTOPSY_MEMORY_START v1 -->"
 MANAGED_END = "<!-- AUTOPSY_MEMORY_END -->"
 LEGACY_HEADING = "## Autopsy Memory Usage"
-SUPPORTED_AGENTS = ("codex", "claude")
+SUPPORTED_AGENTS = ("codex", "claude", "gemini", "opencode", "cursor", "copilot", "windsurf")
 
 MCP_SNIPPET = """[mcp_servers.autopsy_falkor_memory]
 command = "autopsy-memory-mcp"
@@ -30,6 +30,68 @@ class InstructionTarget:
     scope: str
     path: Path
     description: str
+
+
+@dataclass(frozen=True)
+class InstructionTargetSpec:
+    agent: str
+    global_path: tuple[str, ...] | None
+    repo_path: tuple[str, ...] | None
+    global_description: str
+    repo_description: str
+
+
+INSTRUCTION_TARGET_SPECS = (
+    InstructionTargetSpec(
+        agent="codex",
+        global_path=(".codex", "AGENTS.md"),
+        repo_path=("AGENTS.md",),
+        global_description="Codex global instructions",
+        repo_description="repo Codex/agent instructions",
+    ),
+    InstructionTargetSpec(
+        agent="claude",
+        global_path=(".claude", "CLAUDE.md"),
+        repo_path=("CLAUDE.md",),
+        global_description="Claude Code global memory",
+        repo_description="repo Claude Code memory",
+    ),
+    InstructionTargetSpec(
+        agent="gemini",
+        global_path=(".gemini", "GEMINI.md"),
+        repo_path=("GEMINI.md",),
+        global_description="Gemini CLI global context",
+        repo_description="repo Gemini CLI context",
+    ),
+    InstructionTargetSpec(
+        agent="opencode",
+        global_path=(".config", "opencode", "AGENTS.md"),
+        repo_path=("AGENTS.md",),
+        global_description="OpenCode global instructions",
+        repo_description="repo OpenCode instructions",
+    ),
+    InstructionTargetSpec(
+        agent="cursor",
+        global_path=None,
+        repo_path=("AGENTS.md",),
+        global_description="Cursor user rules are managed in Cursor settings",
+        repo_description="repo Cursor AGENTS.md instructions",
+    ),
+    InstructionTargetSpec(
+        agent="copilot",
+        global_path=None,
+        repo_path=(".github", "copilot-instructions.md"),
+        global_description="GitHub Copilot personal instructions are managed in GitHub or IDE settings",
+        repo_description="repo GitHub Copilot instructions",
+    ),
+    InstructionTargetSpec(
+        agent="windsurf",
+        global_path=None,
+        repo_path=(".windsurf", "rules", "autopsy.md"),
+        global_description="Windsurf global rules are managed in Windsurf settings",
+        repo_description="repo Windsurf rule",
+    ),
+)
 
 
 def managed_instruction_block() -> str:
@@ -90,6 +152,13 @@ def selected_agents(value: str) -> list[str]:
     return [value]
 
 
+def path_from_parts(root: Path, parts: tuple[str, ...]) -> Path:
+    path = root
+    for part in parts:
+        path /= part
+    return path
+
+
 def resolve_repo_path(value: str | None) -> Path | None:
     if value is None:
         return None
@@ -108,35 +177,22 @@ def instruction_targets(
 ) -> list[InstructionTarget]:
     agents = selected_agents(agent)
     targets: list[InstructionTarget] = []
-    if install_global:
-        if "codex" in agents:
+    for spec in INSTRUCTION_TARGET_SPECS:
+        if spec.agent not in agents:
+            continue
+        if install_global and spec.global_path:
             targets.append(InstructionTarget(
-                agent="codex",
+                agent=spec.agent,
                 scope="global",
-                path=home / ".codex" / "AGENTS.md",
-                description="Codex global instructions",
+                path=path_from_parts(home, spec.global_path),
+                description=spec.global_description,
             ))
-        if "claude" in agents:
+        if repo_path and spec.repo_path:
             targets.append(InstructionTarget(
-                agent="claude",
-                scope="global",
-                path=home / ".claude" / "CLAUDE.md",
-                description="Claude Code global memory",
-            ))
-    if repo_path:
-        if "codex" in agents:
-            targets.append(InstructionTarget(
-                agent="codex",
+                agent=spec.agent,
                 scope="repo",
-                path=repo_path / "AGENTS.md",
-                description="repo Codex/agent instructions",
-            ))
-        if "claude" in agents:
-            targets.append(InstructionTarget(
-                agent="claude",
-                scope="repo",
-                path=repo_path / "CLAUDE.md",
-                description="repo Claude Code memory",
+                path=path_from_parts(repo_path, spec.repo_path),
+                description=spec.repo_description,
             ))
     return targets
 

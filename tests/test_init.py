@@ -55,9 +55,24 @@ Old memory instructions.
                 install_global=True,
                 agent="all",
             )
-        paths = {target.path.name for target in targets}
-        self.assertEqual(paths, {"AGENTS.md", "CLAUDE.md"})
-        self.assertEqual(len(targets), 4)
+        agents_by_scope = {
+            scope: {target.agent for target in targets if target.scope == scope}
+            for scope in ("global", "repo")
+        }
+        self.assertEqual(agents_by_scope["global"], {"codex", "claude", "gemini", "opencode"})
+        self.assertEqual(agents_by_scope["repo"], {"codex", "claude", "gemini", "opencode", "cursor", "copilot", "windsurf"})
+        self.assertEqual(len(targets), 11)
+
+    def test_global_cursor_has_no_file_target(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            targets = init_module.instruction_targets(
+                home=root / "home",
+                repo_path=None,
+                install_global=True,
+                agent="cursor",
+            )
+        self.assertEqual(targets, [])
 
     def test_dry_run_does_not_write_files(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
