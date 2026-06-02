@@ -27,7 +27,7 @@ from .metadata import PACKAGE_NAME, cmd_instructions, cmd_version, package_versi
 APP_SUPPORT_DIR_DEFAULT = Path(os.environ.get("AUTOPSY_APP_SUPPORT_DIR") or Path.home() / "Library" / "Application Support" / "Autopsy")
 FALKORDB_LITE_PATH_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "FalkorDB" / "autopsy-memory.db"
 GLOBAL_MEMORY_SETTINGS_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "Config" / "memory-settings.json"
-UNIFIED_MEMORY_ROOT_DEFAULT = Path.home() / "github" / "codex"
+UNIFIED_MEMORY_ROOT_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "MemoryRoot"
 STATUS_WINDOW_DAYS_DEFAULT = 21
 MENUBAR_RELATIVE_DIR = Path("apps") / "menubar"
 MENUBAR_INSTALLED_DIR_NAME = "menubar"

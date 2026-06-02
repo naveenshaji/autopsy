@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.1.16 - 2026-06-02
+
+Removes a personal development path from shipped defaults.
+
+- Changes the default unified memory root from `~/github/codex` to `~/Library/Application Support/Autopsy/MemoryRoot`.
+- Updates the CLI, worker, and MCP bridge to agree on the neutral default.
+- Keeps `AUTOPSY_UNIFIED_MEMORY_ROOT` as the explicit override for users who want a custom root.
+
 ## 0.1.15 - 2026-06-02
 
 Simplifies first-run setup after Homebrew installs.

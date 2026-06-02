@@ -29,21 +29,22 @@ brew tap naveenshaji/autopsy https://github.com/naveenshaji/autopsy
 brew install autopsy-memory
 autopsy version --json
 autopsy doctor
-autopsy menubar --install-launch-agent
+autopsy install
 ```
 
-The menu bar command installs a user LaunchAgent that points at Homebrew's
-stable `opt/autopsy-memory` path, so the app follows package updates.
+`autopsy install` installs agent instructions and, on macOS, installs a user
+LaunchAgent that points at Homebrew's stable `opt/autopsy-memory` path, so the
+menu bar app follows package updates.
 
 For local development or machines without Homebrew, install the standalone CLI
 into a Homebrew-style prefix:
 
 ```bash
-cd /Users/naveenshaji/github/codex/projects/autopsy
+cd /path/to/autopsy
 ./scripts/install-global.sh
 autopsy version --json
 autopsy doctor
-autopsy init
+autopsy install
 ```
 
 By default this uses `/opt/homebrew` when it is writable, otherwise `~/.local`. The layout is:
@@ -63,7 +64,7 @@ Homebrew packaging details live in [docs/homebrew.md](docs/homebrew.md). Plain
 Use a repo-local virtual environment for development:
 
 ```bash
-cd /Users/naveenshaji/github/codex/projects/autopsy
+cd /path/to/autopsy
 python3.12 -m venv .venv
 . .venv/bin/activate
 python -m pip install -U pip
@@ -228,6 +229,7 @@ By default, Autopsy uses:
 ```text
 ~/Library/Application Support/Autopsy/FalkorDB/autopsy-memory.db
 ~/Library/Application Support/Autopsy/Config/memory-settings.json
+~/Library/Application Support/Autopsy/MemoryRoot
 ```
 
 Override with:
@@ -236,7 +238,7 @@ Override with:
 export AUTOPSY_APP_SUPPORT_DIR="$HOME/Library/Application Support/Autopsy"
 export AUTOPSY_FALKORDB_LITE_PATH="$AUTOPSY_APP_SUPPORT_DIR/FalkorDB/autopsy-memory.db"
 export AUTOPSY_UNIFIED_MEMORY=1
-export AUTOPSY_UNIFIED_MEMORY_ROOT="$HOME/github/codex"
+export AUTOPSY_UNIFIED_MEMORY_ROOT="$AUTOPSY_APP_SUPPORT_DIR/MemoryRoot"
 ```
 
 Autopsy has no alternate local persistence fallback. If Falkor cannot initialize, commands fail loudly.

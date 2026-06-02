@@ -50,7 +50,7 @@ Clients should use the bridge or CLI to:
 
 Both clients use the same graph name and DB path by default:
 - graph base name: `autopsy_memory`
-- unified workspace root: `~/github/codex`
+- unified workspace root: `~/Library/Application Support/Autopsy/MemoryRoot`
 - DB path: `~/Library/Application Support/Autopsy/FalkorDB/autopsy-memory.db`
 
 ## Recovery Behavior
@@ -73,7 +73,7 @@ Useful environment overrides:
 - `AUTOPSY_FALKORDB_ENABLED=1`
 - `AUTOPSY_FALKORDB_GRAPH_NAME=autopsy_memory`
 - `AUTOPSY_FALKORDB_LITE_PATH=~/Library/Application Support/Autopsy/FalkorDB/autopsy-memory.db`
-- `AUTOPSY_UNIFIED_MEMORY_ROOT=~/github/codex`
+- `AUTOPSY_UNIFIED_MEMORY_ROOT=~/Library/Application Support/Autopsy/MemoryRoot`
 - `AUTOPSY_MEMORY_TOOL=/path/to/autopsy_memory/cli.py`
 - `AUTOPSY_WORKER_SCRIPT=/path/to/autopsy_memory/worker.py`
 

@@ -28,8 +28,9 @@ _FALKOR_VALIDATION_TTL_SECONDS = 10.0
 _FALKOR_FAILURE_TTL_SECONDS = 30.0
 DIRECT_RETRIEVAL_REASONS = {'lexical', 'exact', 'token_overlap', 'entity_overlap', 'graph_relation'}
 
-GLOBAL_MEMORY_SETTINGS_DEFAULT = Path.home() / 'Library' / 'Application Support' / 'Autopsy' / 'Config' / 'memory-settings.json'
-UNIFIED_MEMORY_ROOT_DEFAULT = Path.home() / 'github' / 'codex'
+APP_SUPPORT_DIR_DEFAULT = Path.home() / 'Library' / 'Application Support' / 'Autopsy'
+GLOBAL_MEMORY_SETTINGS_DEFAULT = APP_SUPPORT_DIR_DEFAULT / 'Config' / 'memory-settings.json'
+UNIFIED_MEMORY_ROOT_DEFAULT = APP_SUPPORT_DIR_DEFAULT / 'MemoryRoot'
 STATUS_WINDOW_DAYS_DEFAULT = 21
 EMBEDDINGS_CONFIG_DEFAULT = {
     'enabled': True,

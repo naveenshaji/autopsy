@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from autopsy_memory import cli
 from autopsy_memory import doctor
 from autopsy_memory import mcp_bridge
+from autopsy_memory import worker
 
 
 class AutopsyCLIContractTests(unittest.TestCase):
@@ -31,6 +32,22 @@ class AutopsyCLIContractTests(unittest.TestCase):
         payload = json.loads(stream.getvalue())
         self.assertEqual(payload["package"], "autopsy-memory")
         self.assertRegex(payload["version"], r"^\d+\.\d+\.\d+")
+
+    def test_default_unified_memory_root_is_neutral_app_support_path(self):
+        defaults = [
+            str(cli.UNIFIED_MEMORY_ROOT_DEFAULT),
+            str(worker.UNIFIED_MEMORY_ROOT_DEFAULT),
+            str(mcp_bridge.DEFAULT_WORKSPACE_ROOT),
+        ]
+
+        for value in defaults:
+            self.assertEqual(Path(value).name, "MemoryRoot")
+            self.assertNotIn("github/codex", value)
+
+        with mock.patch.dict(cli.os.environ, {}, clear=True):
+            resolved = cli.unified_memory_root_path()
+            self.assertEqual(Path(resolved).name, "MemoryRoot")
+            self.assertNotIn("github/codex", resolved)
 
     def test_instructions_include_required_commands(self):
         parser = cli.build_parser()

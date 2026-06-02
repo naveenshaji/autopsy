@@ -17,7 +17,6 @@ from typing import Any
 SERVER_NAME = "autopsy_falkor_memory"
 SERVER_VERSION = "0.1.0"
 DEFAULT_GRAPH_NAME = "autopsy_memory"
-DEFAULT_WORKSPACE_ROOT = str(Path.home() / "github" / "codex")
 RELATION_FIELDS = ("informed_by", "answers", "supersedes", "reverts", "depends_on", "implements", "constrains", "refines")
 
 
@@ -30,6 +29,9 @@ def app_support_dir() -> Path:
     if override:
         return Path(override).expanduser()
     return Path.home() / "Library" / "Application Support" / "Autopsy"
+
+
+DEFAULT_WORKSPACE_ROOT = str(app_support_dir() / "MemoryRoot")
 
 
 def script_paths() -> dict[str, Path]:
@@ -749,7 +751,7 @@ def optional_workspace_properties() -> dict[str, Any]:
     return {
         "workspace": {
             "type": "string",
-            "description": "Workspace root path. Defaults to AUTOPSY_UNIFIED_MEMORY_ROOT or ~/github/codex.",
+            "description": "Workspace root path. Defaults to AUTOPSY_UNIFIED_MEMORY_ROOT or the Autopsy app-support MemoryRoot.",
         },
         "cwd": {
             "type": "string",
