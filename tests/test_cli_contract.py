@@ -2278,7 +2278,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             lite_path = Path(tmp_dir) / "FalkorDB" / "autopsy-memory.db"
             log_path = cli.falkordb_lite_log_path(lite_path)
-            log_path.parent.mkdir(parents=True)
+            log_path.parent.mkdir(parents=True, exist_ok=True)
             log_path.write_text("line one\nmodule failed to load\n", encoding="utf-8")
             args = parser.parse_args(["status", "--lite-path", str(lite_path)])
             payload = cli.falkor_start_failure_payload(args, RuntimeError("The redis-server process failed to start"))
@@ -2287,6 +2287,14 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["mode"], "embedded")
         self.assertEqual(payload["log"]["tail"], ["line one", "module failed to load"])
         self.assertTrue(any("brew reinstall autopsy-memory" in step for step in payload["workflow"]["suggested_next_steps"]))
+
+    def test_falkordb_lite_log_path_avoids_app_support_spaces(self):
+        lite_path = Path.home() / "Library" / "Application Support" / "Autopsy" / "FalkorDB" / "autopsy-memory.db"
+        log_path = cli.falkordb_lite_log_path(lite_path)
+
+        self.assertNotIn("Application Support", str(log_path))
+        self.assertEqual(log_path.parent.name, "autopsy-falkordb")
+        self.assertTrue(log_path.name.startswith("autopsy-memory-"))
 
     def test_doctor_rejects_legacy_app_wrapper(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

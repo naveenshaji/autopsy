@@ -129,7 +129,7 @@ class {FORMULA_CLASS} < Formula
   end
 
   def install
-    virtualenv_install_with_resources
+    virtualenv_install_with_resources without: "falkordb-macos-arm64v8"
 
     native_module = libexec/"share/autopsy/falkordb.so"
     native_module.dirname.mkpath

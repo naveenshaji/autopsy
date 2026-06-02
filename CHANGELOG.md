@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.1.18 - 2026-06-02
+
+Fixes the Homebrew test/default-path edge cases from v0.1.17.
+
+- Moves embedded Redis log files out of `~/Library/Application Support/...` to a stable temp log directory so Redis config parsing is not broken by spaces in the default macOS path.
+- Keeps runtime diagnostics pointing at the new Redis log location.
+- Excludes the native FalkorDB `.so` resource from Homebrew's Python virtualenv installer while still staging it into `libexec/share/autopsy/falkordb.so`.
+
 ## 0.1.17 - 2026-06-02
 
 Fixes the self-contained Homebrew runtime on Apple Silicon.

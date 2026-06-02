@@ -1458,7 +1458,9 @@ def ensure_graph(host: str, port: int, graph_name: str, lite_path: str | None = 
         configure_falkordblite_runtime()
         resolved_path = str(Path(lite_path).expanduser())
         Path(resolved_path).parent.mkdir(parents=True, exist_ok=True)
-        serverconfig = {"logfile": str(falkordb_lite_log_path(resolved_path))}
+        log_path = falkordb_lite_log_path(resolved_path)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        serverconfig = {"logfile": str(log_path)}
         try:
             client = _FALKORDB_LITE_CLIENTS.get(resolved_path)
             if client is None:
@@ -1490,7 +1492,9 @@ def is_stale_falkordb_lite_error(error: Exception | str) -> bool:
 
 def falkordb_lite_log_path(lite_path: str | Path) -> Path:
     path = Path(lite_path).expanduser()
-    return path.parent / f"{path.stem}.redis.log"
+    digest = hashlib.sha1(str(path).encode("utf-8")).hexdigest()[:12]
+    root = Path(os.environ.get("AUTOPSY_FALKORDB_LOG_DIR") or tempfile.gettempdir()).expanduser()
+    return root / "autopsy-falkordb" / f"{path.stem}-{digest}.redis.log"
 
 
 def tail_text(path: Path, *, line_limit: int = 30, char_limit: int = 8000) -> list[str]:
