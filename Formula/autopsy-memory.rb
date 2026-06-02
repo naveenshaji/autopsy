@@ -57,6 +57,8 @@ class AutopsyMemory < Formula
       system libexec/"bin/python", "-m", "autopsy_memory.cli", "menubar", "--dir", menubar, "--build", "--release"
     end
 
+    rm bin/"autopsy" if (bin/"autopsy").exist?
+    rm bin/"autopsy-memory-mcp" if (bin/"autopsy-memory-mcp").exist?
     (bin/"autopsy").write_env_script libexec/"bin/autopsy", AUTOPSY_UNIFIED_MEMORY: "1"
     (bin/"autopsy-memory-mcp").write_env_script libexec/"bin/autopsy-memory-mcp", AUTOPSY_UNIFIED_MEMORY: "1"
   end
