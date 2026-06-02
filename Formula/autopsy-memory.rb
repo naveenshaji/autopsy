@@ -5,11 +5,13 @@ class AutopsyMemory < Formula
 
   desc "Local-first Falkor-backed memory layer and CLI for coding agents"
   homepage "https://github.com/naveenshaji/autopsy"
-  url "https://github.com/naveenshaji/autopsy/archive/refs/tags/v0.1.16.tar.gz"
-  sha256 "ce3453f3c53d27ec1fdbe5e489c41ed3afd436a6b8a7655d66d5f5dbcc87ab70"
+  url "https://github.com/naveenshaji/autopsy/archive/refs/tags/v0.1.18.tar.gz"
+  sha256 "4ac2a6addd7a5d361254010f4abc1839c245dc6b0787b824a4ff3f76c3ff68e6"
   license :cannot_represent
 
   depends_on :macos
+  depends_on arch: :arm64
+  depends_on "openssl@3"
   depends_on "python@3.12"
 
   resource "falkordb" do
@@ -47,8 +49,20 @@ class AutopsyMemory < Formula
     sha256 "ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81"
   end
 
+  resource "falkordb-macos-arm64v8" do
+    url "https://github.com/FalkorDB/FalkorDB/releases/download/v4.18.3/falkordb-macos-arm64v8.so", using: :nounzip
+    sha256 "53aa98e66dc52cf4d95628d1144ab4f3233cadf951faf81e76d5a7c44483541a"
+  end
+
   def install
-    virtualenv_install_with_resources
+    virtualenv_install_with_resources without: "falkordb-macos-arm64v8"
+
+    native_module = libexec/"share/autopsy/falkordb.so"
+    native_module.dirname.mkpath
+    resource("falkordb-macos-arm64v8").stage do
+      cp "falkordb-macos-arm64v8.so", native_module
+    end
+    chmod 0755, native_module
 
     menubar = prefix/"menubar"
     menubar.install Dir["apps/menubar/*"]
@@ -57,10 +71,14 @@ class AutopsyMemory < Formula
       system libexec/"bin/python", "-m", "autopsy_memory.cli", "menubar", "--dir", menubar, "--build", "--release"
     end
 
-    rm bin/"autopsy" if (bin/"autopsy").exist?
-    rm bin/"autopsy-memory-mcp" if (bin/"autopsy-memory-mcp").exist?
-    (bin/"autopsy").write_env_script libexec/"bin/autopsy", AUTOPSY_UNIFIED_MEMORY: "1"
-    (bin/"autopsy-memory-mcp").write_env_script libexec/"bin/autopsy-memory-mcp", AUTOPSY_UNIFIED_MEMORY: "1"
+    wrapper_env = {
+      AUTOPSY_UNIFIED_MEMORY: "1",
+      AUTOPSY_FALKORDB_MODULE_PATH: native_module.to_s,
+    }
+    %w[autopsy autopsy-memory-mcp autopsy-memory-worker].each do |script|
+      rm bin/script if (bin/script).exist?
+      (bin/script).write_env_script libexec/"bin/#{script}", wrapper_env
+    end
   end
 
   def caveats
