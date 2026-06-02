@@ -111,7 +111,7 @@ class {FORMULA_CLASS} < Formula
   sha256 "{source_sha}"
   license :cannot_represent
 
-  depends_on xcode: ["15.0", :build]
+  depends_on :macos
   depends_on "python@3.12"
 
 {resource_text}

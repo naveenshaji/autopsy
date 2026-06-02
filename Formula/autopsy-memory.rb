@@ -9,7 +9,7 @@ class AutopsyMemory < Formula
   sha256 "2870a94d1c0bbab695cc5944e8dfef96d451d0c2cf4480259f6dc3c81090e811"
   license :cannot_represent
 
-  depends_on xcode: ["15.0", :build]
+  depends_on :macos
   depends_on "python@3.12"
 
   resource "falkordb" do
