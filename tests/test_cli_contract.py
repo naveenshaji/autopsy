@@ -4,6 +4,7 @@ import json
 import plistlib
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -2259,6 +2260,34 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertTrue(cli.is_stale_falkordb_lite_error("Connection refused while connecting to /tmp/tmpabc/redis.socket"))
         self.assertFalse(cli.is_stale_falkordb_lite_error("authentication failed"))
 
+    def test_falkordblite_runtime_uses_module_path_override(self):
+        fake_package = types.ModuleType("redislite")
+        fake_client = types.ModuleType("redislite.client")
+        fake_client.__falkordb_module__ = "/tmp/default-falkordb.so"
+        fake_package.client = fake_client
+        with mock.patch.dict(sys.modules, {"redislite": fake_package, "redislite.client": fake_client}):
+            with mock.patch.dict(cli.os.environ, {"AUTOPSY_FALKORDB_MODULE_PATH": "/tmp/native-falkordb.so"}):
+                payload = cli.configure_falkordblite_runtime()
+
+        self.assertTrue(payload["configured"])
+        self.assertEqual(fake_client.__falkordb_module__, "/tmp/native-falkordb.so")
+        self.assertEqual(payload["active_module"], "/tmp/native-falkordb.so")
+
+    def test_falkor_start_failure_payload_includes_lite_log_tail(self):
+        parser = cli.build_parser()
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            lite_path = Path(tmp_dir) / "FalkorDB" / "autopsy-memory.db"
+            log_path = cli.falkordb_lite_log_path(lite_path)
+            log_path.parent.mkdir(parents=True)
+            log_path.write_text("line one\nmodule failed to load\n", encoding="utf-8")
+            args = parser.parse_args(["status", "--lite-path", str(lite_path)])
+            payload = cli.falkor_start_failure_payload(args, RuntimeError("The redis-server process failed to start"))
+
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["mode"], "embedded")
+        self.assertEqual(payload["log"]["tail"], ["line one", "module failed to load"])
+        self.assertTrue(any("brew reinstall autopsy-memory" in step for step in payload["workflow"]["suggested_next_steps"]))
+
     def test_doctor_rejects_legacy_app_wrapper(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             wrapper = Path(tmp_dir) / "autopsy"
@@ -2272,6 +2301,36 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertTrue(payload["legacy_wrapper"])
         self.assertIn("legacy app wrapper", payload["error"])
+
+    def test_doctor_accepts_homebrew_env_wrapper(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            target = root / "libexec" / "bin" / "autopsy"
+            target.parent.mkdir(parents=True)
+            target.write_text(
+                "#!/tmp/python\n"
+                "import sys\n"
+                "from autopsy_memory.cli import main\n"
+                "sys.exit(main())\n",
+                encoding="utf-8",
+            )
+            wrapper = root / "bin" / "autopsy"
+            wrapper.parent.mkdir(parents=True)
+            wrapper.write_text(
+                f"#!/bin/bash\nAUTOPSY_UNIFIED_MEMORY=\"1\" exec \"{target}\" \"$@\"\n",
+                encoding="utf-8",
+            )
+            original_which = doctor.shutil.which
+            doctor.shutil.which = lambda _name: str(wrapper)
+            try:
+                payload = doctor.installed_autopsy_command_check()
+            finally:
+                doctor.shutil.which = original_which
+
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["homebrew_env_wrapper"])
+        self.assertTrue(payload["package_entrypoint"])
+        self.assertTrue(payload["target_package_entrypoint"])
 
 
 if __name__ == "__main__":

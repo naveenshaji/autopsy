@@ -20,6 +20,11 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = ROOT / "Formula" / "autopsy-memory.rb"
 PACKAGE_NAME = "autopsy-memory"
 FORMULA_CLASS = "AutopsyMemory"
+FALKORDB_NATIVE_VERSION = "v4.18.3"
+FALKORDB_MACOS_ARM64_URL = (
+    f"https://github.com/FalkorDB/FalkorDB/releases/download/{FALKORDB_NATIVE_VERSION}/falkordb-macos-arm64v8.so"
+)
+FALKORDB_MACOS_ARM64_SHA256 = "53aa98e66dc52cf4d95628d1144ab4f3233cadf951faf81e76d5a7c44483541a"
 
 
 def read_project_version() -> str:
@@ -112,12 +117,26 @@ class {FORMULA_CLASS} < Formula
   license :cannot_represent
 
   depends_on :macos
+  depends_on arch: :arm64
+  depends_on "openssl@3"
   depends_on "python@3.12"
 
 {resource_text}
 
+  resource "falkordb-macos-arm64v8" do
+    url "{FALKORDB_MACOS_ARM64_URL}", using: :nounzip
+    sha256 "{FALKORDB_MACOS_ARM64_SHA256}"
+  end
+
   def install
     virtualenv_install_with_resources
+
+    native_module = libexec/"share/autopsy/falkordb.so"
+    native_module.dirname.mkpath
+    resource("falkordb-macos-arm64v8").stage do
+      cp "falkordb-macos-arm64v8.so", native_module
+    end
+    chmod 0755, native_module
 
     menubar = prefix/"menubar"
     menubar.install Dir["apps/menubar/*"]
@@ -126,10 +145,14 @@ class {FORMULA_CLASS} < Formula
       system libexec/"bin/python", "-m", "autopsy_memory.cli", "menubar", "--dir", menubar, "--build", "--release"
     end
 
-    rm bin/"autopsy" if (bin/"autopsy").exist?
-    rm bin/"autopsy-memory-mcp" if (bin/"autopsy-memory-mcp").exist?
-    (bin/"autopsy").write_env_script libexec/"bin/autopsy", AUTOPSY_UNIFIED_MEMORY: "1"
-    (bin/"autopsy-memory-mcp").write_env_script libexec/"bin/autopsy-memory-mcp", AUTOPSY_UNIFIED_MEMORY: "1"
+    wrapper_env = {{
+      AUTOPSY_UNIFIED_MEMORY: "1",
+      AUTOPSY_FALKORDB_MODULE_PATH: native_module.to_s,
+    }}
+    %w[autopsy autopsy-memory-mcp autopsy-memory-worker].each do |script|
+      rm bin/script if (bin/script).exist?
+      (bin/script).write_env_script libexec/"bin/#{{script}}", wrapper_env
+    end
   end
 
   def caveats

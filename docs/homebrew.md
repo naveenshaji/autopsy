@@ -2,16 +2,14 @@
 
 Autopsy ships a Homebrew formula at [Formula/autopsy-memory.rb](../Formula/autopsy-memory.rb).
 
-## Install From This Repository As A Tap
+## Install
 
-Because this repository is named `autopsy` rather than `homebrew-autopsy`, users
-must provide the repository URL when tapping it directly:
+Use the public tap:
 
 ```bash
-brew tap naveenshaji/autopsy https://github.com/naveenshaji/autopsy
+brew tap naveenshaji/autopsy
 brew install autopsy-memory
 autopsy install
-autopsy version --json
 autopsy doctor
 ```
 
@@ -30,36 +28,23 @@ pointing at the stable Homebrew `opt` path:
 <brew-prefix>/opt/autopsy-memory/menubar/.build/release/AutopsyMenuBar.app/Contents/MacOS/AutopsyMenuBar
 ```
 
+The Homebrew formula is the preferred self-contained macOS distribution because
+it pins the Python dependencies and vendors the native Apple Silicon FalkorDB
+module used by the embedded graph backend.
+
 Stop and remove the menu bar LaunchAgent with:
 
 ```bash
 autopsy menubar --uninstall-launch-agent
 ```
 
-## Preferred Public Tap
+## Python/Pip Installs
 
-For a cleaner user command, publish the same formula to a dedicated tap repo:
-
-```text
-https://github.com/naveenshaji/homebrew-autopsy
-```
-
-with this layout:
-
-```text
-Formula/autopsy-memory.rb
-```
-
-Then users can install with:
-
-```bash
-brew tap naveenshaji/autopsy
-brew install autopsy-memory
-autopsy install
-```
-
-After a tap is installed, `brew install autopsy-memory` works because Homebrew
-searches tapped formulae.
+`pip install autopsy-memory` is useful for development, but on macOS it is not
+currently the preferred full distribution path because the PyPI `falkordblite`
+package does not bundle the native Darwin FalkorDB module. Homebrew supplies
+that module as a pinned resource and sets `AUTOPSY_FALKORDB_MODULE_PATH` in the
+installed wrappers.
 
 ## Plain `brew install autopsy-memory`
 

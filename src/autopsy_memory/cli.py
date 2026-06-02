@@ -1043,6 +1043,32 @@ def load_falkordblite():
     return FalkorDB
 
 
+def configure_falkordblite_runtime() -> dict[str, Any]:
+    module_path = str(os.environ.get("AUTOPSY_FALKORDB_MODULE_PATH") or "").strip()
+    try:
+        import redislite.client as redislite_client
+    except Exception as exc:
+        return {"configured": False, "error": str(exc)}
+
+    default_module = str(getattr(redislite_client, "__falkordb_module__", "") or "")
+    payload: dict[str, Any] = {
+        "configured": False,
+        "default_module": default_module,
+        "active_module": default_module,
+        "module_path_env": module_path or None,
+    }
+    if module_path:
+        resolved = str(Path(module_path).expanduser())
+        redislite_client.__falkordb_module__ = resolved
+        payload.update({
+            "configured": True,
+            "active_module": resolved,
+            "module_exists": Path(resolved).exists(),
+            "module_executable": os.access(resolved, os.X_OK),
+        })
+    return payload
+
+
 def tokenize_query(query: str) -> list[str]:
     return [token for token in re.findall(r"[A-Za-z0-9_]+", query) if len(token) >= 2]
 
@@ -1429,12 +1455,14 @@ def workspace_graph_name(base_graph_name: str, workspace: dict[str, Any]) -> str
 def ensure_graph(host: str, port: int, graph_name: str, lite_path: str | None = None):
     if lite_path:
         FalkorDBLite = load_falkordblite()
+        configure_falkordblite_runtime()
         resolved_path = str(Path(lite_path).expanduser())
         Path(resolved_path).parent.mkdir(parents=True, exist_ok=True)
+        serverconfig = {"logfile": str(falkordb_lite_log_path(resolved_path))}
         try:
             client = _FALKORDB_LITE_CLIENTS.get(resolved_path)
             if client is None:
-                client = FalkorDBLite(resolved_path)
+                client = FalkorDBLite(resolved_path, serverconfig=serverconfig)
                 _FALKORDB_LITE_CLIENTS[resolved_path] = client
             return client.select_graph(graph_name)
         except Exception as exc:
@@ -1442,7 +1470,7 @@ def ensure_graph(host: str, port: int, graph_name: str, lite_path: str | None = 
                 raise
             reset_falkordb_lite_client(resolved_path)
             backup_stale_falkordb_lite_settings(resolved_path)
-            client = FalkorDBLite(resolved_path)
+            client = FalkorDBLite(resolved_path, serverconfig=serverconfig)
             _FALKORDB_LITE_CLIENTS[resolved_path] = client
             return client.select_graph(graph_name)
     FalkorDB = load_falkordb()
@@ -1458,6 +1486,79 @@ def is_stale_falkordb_lite_error(error: Exception | str) -> bool:
         or "error 2 connecting" in lowered
         or "stale" in lowered
     )
+
+
+def falkordb_lite_log_path(lite_path: str | Path) -> Path:
+    path = Path(lite_path).expanduser()
+    return path.parent / f"{path.stem}.redis.log"
+
+
+def tail_text(path: Path, *, line_limit: int = 30, char_limit: int = 8000) -> list[str]:
+    if not path.exists():
+        return []
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")[-char_limit:]
+    except OSError:
+        return []
+    return text.splitlines()[-line_limit:]
+
+
+def falkordb_lite_binary_diagnostics() -> dict[str, Any]:
+    try:
+        import redislite.client as redislite_client
+    except Exception as exc:
+        return {"error": str(exc)}
+
+    payload: dict[str, Any] = {
+        "redis_server": str(getattr(redislite_client, "__redis_executable__", "") or ""),
+        "falkordb_module": str(getattr(redislite_client, "__falkordb_module__", "") or ""),
+        "module_path_env": str(os.environ.get("AUTOPSY_FALKORDB_MODULE_PATH") or "") or None,
+    }
+    module = payload["falkordb_module"]
+    if module:
+        module_path = Path(module)
+        payload["module_exists"] = module_path.exists()
+        payload["module_executable"] = os.access(str(module_path), os.X_OK)
+    redis_server = payload["redis_server"]
+    if redis_server:
+        payload["redis_server_exists"] = Path(redis_server).exists()
+        payload["redis_server_executable"] = os.access(redis_server, os.X_OK)
+    return payload
+
+
+def falkor_start_failure_payload(args: argparse.Namespace, error: Exception) -> dict[str, Any]:
+    lite_path = resolved_lite_path(args)
+    paths = {
+        "app_support_dir": str(APP_SUPPORT_DIR_DEFAULT),
+        "falkordb_lite_path": str(lite_path or ""),
+        "memory_settings": str(GLOBAL_MEMORY_SETTINGS_DEFAULT),
+        "unified_memory_root": str(unified_memory_root_path()),
+    }
+    payload: dict[str, Any] = {
+        "ok": False,
+        "backend": "falkordb",
+        "mode": "embedded" if lite_path else "external",
+        "error": str(error),
+        "paths": paths,
+        "workflow": {
+            "status": "runtime_unavailable",
+            "complete": False,
+            "next_step": "fix_falkordb_runtime",
+            "message": "Autopsy could not start or reach the FalkorDB runtime.",
+            "suggested_next_steps": [
+                "Run autopsy doctor for runtime diagnostics.",
+                "If installed with Homebrew, run brew reinstall autopsy-memory.",
+            ],
+        },
+    }
+    if lite_path:
+        log_path = falkordb_lite_log_path(lite_path)
+        payload["diagnostics"] = falkordb_lite_binary_diagnostics()
+        payload["log"] = {
+            "path": str(log_path),
+            "tail": tail_text(log_path),
+        }
+    return payload
 
 
 def backup_stale_falkordb_lite_settings(lite_path: str | None) -> str | None:
@@ -13182,16 +13283,20 @@ def build_benchmark_payload(
 
 def open_workspace_graph(args: argparse.Namespace):
     tool, workspace, config = load_workspace_and_config(args)
-    graph, _ = ensure_workspace_graph(
-        tool=tool,
-        conn=None,
-        workspace=workspace,
-        config=config,
-        host=args.host,
-        port=args.port,
-        graph_name_base=args.graph_name,
-        lite_path=resolved_lite_path(args),
-    )
+    try:
+        graph, _ = ensure_workspace_graph(
+            tool=tool,
+            conn=None,
+            workspace=workspace,
+            config=config,
+            host=args.host,
+            port=args.port,
+            graph_name_base=args.graph_name,
+            lite_path=resolved_lite_path(args),
+        )
+    except Exception as exc:
+        print(json.dumps(falkor_start_failure_payload(args, exc), indent=2))
+        raise SystemExit(1)
     return tool, workspace, config, graph
 
 
@@ -15542,6 +15647,42 @@ def cmd_menubar(args: argparse.Namespace) -> None:
     run_menubar_process(["open", str(bundle_path)], cwd=app_dir)
 
 
+def falkordb_runtime_check(args: argparse.Namespace) -> dict[str, Any]:
+    lite_path = resolved_lite_path(args)
+    check: dict[str, Any] = {
+        "name": "falkordb_runtime",
+        "required": True,
+        "ok": False,
+        "backend": "embedded" if lite_path else "external",
+        "host": str(getattr(args, "host", "")),
+        "port": int(getattr(args, "port", 0)),
+        "graph_name": "__autopsy_doctor__",
+    }
+    if lite_path:
+        configure_falkordblite_runtime()
+        check["lite_path"] = str(lite_path)
+        check["diagnostics"] = falkordb_lite_binary_diagnostics()
+        check["log_path"] = str(falkordb_lite_log_path(lite_path))
+    try:
+        graph = ensure_graph(
+            str(getattr(args, "host", "127.0.0.1")),
+            int(getattr(args, "port", 6381)),
+            "__autopsy_doctor__",
+            lite_path=lite_path,
+        )
+        result = graph.query("RETURN 1")
+        rows = getattr(result, "result_set", [])
+        check["ok"] = rows == [[1]] or rows == [(1,)]
+        if not check["ok"]:
+            check["error"] = f"Unexpected FalkorDB runtime probe result: {rows!r}"
+    except Exception as exc:
+        check["error"] = str(exc)
+        if lite_path:
+            check["diagnostics"] = falkordb_lite_binary_diagnostics()
+            check["log_tail"] = tail_text(falkordb_lite_log_path(lite_path))
+    return check
+
+
 def cmd_doctor(args: argparse.Namespace) -> None:
     checks = [
         python_version_check(),
@@ -15549,6 +15690,7 @@ def cmd_doctor(args: argparse.Namespace) -> None:
         import_check("falkordb", required=True),
         import_check("redis", required=True),
         import_check("redislite.falkordb_client", required=True),
+        falkordb_runtime_check(args),
         import_check("sentence_transformers", required=False),
     ]
     required_ok = all(check["ok"] for check in checks if check["required"])

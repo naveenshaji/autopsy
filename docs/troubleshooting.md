@@ -38,7 +38,14 @@ Check the configured DB path:
 autopsy doctor
 ```
 
-If using embedded FalkorDBLite, make sure the parent directory is writable.
+If using embedded FalkorDBLite, make sure the parent directory is writable and
+inspect the Redis log path shown by `doctor`. Homebrew installs should show a
+native module path in `AUTOPSY_FALKORDB_MODULE_PATH`; if not, reinstall:
+
+```bash
+brew reinstall autopsy-memory
+autopsy doctor
+```
 
 If using external FalkorDB, set:
 

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.1.17 - 2026-06-02
+
+Fixes the self-contained Homebrew runtime on Apple Silicon.
+
+- Vendors the native Darwin arm64 FalkorDB module in the Homebrew formula and sets `AUTOPSY_FALKORDB_MODULE_PATH` in all installed Autopsy wrappers.
+- Adds an embedded FalkorDB runtime probe to `autopsy doctor` so package installs fail fast before normal memory commands.
+- Makes backend startup failures return structured JSON with Redis log tail diagnostics instead of raw Python tracebacks.
+- Teaches `doctor` to recognize Homebrew env wrappers that exec the real `autopsy_memory.cli` entrypoint.
+- Documents Homebrew as the preferred self-contained macOS install path while PyPI `falkordblite` lacks a native Darwin module.
+
 ## 0.1.16 - 2026-06-02
 
 Removes a personal development path from shipped defaults.

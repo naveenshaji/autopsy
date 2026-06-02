@@ -31,9 +31,17 @@ trap 'rm -rf "$TMP_DIR"' EXIT INT TERM HUP
 "$TMP_DIR/venv/bin/python" -m pip install -U pip >/dev/null
 "$TMP_DIR/venv/bin/python" -m pip install -e ".[dev]" >/dev/null
 
+if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
+  FALKORDB_NATIVE_MODULE="$TMP_DIR/falkordb.so"
+  curl -fsSL -o "$FALKORDB_NATIVE_MODULE" "https://github.com/FalkorDB/FalkorDB/releases/download/v4.18.3/falkordb-macos-arm64v8.so"
+  chmod 0755 "$FALKORDB_NATIVE_MODULE"
+  export AUTOPSY_FALKORDB_MODULE_PATH="$FALKORDB_NATIVE_MODULE"
+fi
+
 PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" --help >/dev/null
 PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" version --json >/dev/null
 PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" doctor >/dev/null
+PATH="$TMP_DIR/venv/bin:$PATH" AUTOPSY_APP_SUPPORT_DIR="$TMP_DIR/fresh-app-support" AUTOPSY_UNIFIED_MEMORY_ROOT="$TMP_DIR/fresh-root" "$TMP_DIR/venv/bin/autopsy" status --current-only --limit 1 --section-limit 1 >/dev/null
 PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" install --dry-run --skip-menubar >/dev/null
 PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" init --check >/dev/null
 PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" instructions >/dev/null
