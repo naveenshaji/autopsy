@@ -34,6 +34,7 @@ trap 'rm -rf "$TMP_DIR"' EXIT INT TERM HUP
 PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" --help >/dev/null
 PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" version --json >/dev/null
 PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" doctor >/dev/null
+PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" install --dry-run --skip-menubar >/dev/null
 PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" init --check >/dev/null
 PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" instructions >/dev/null
 PATH="$TMP_DIR/venv/bin:$PATH" AUTOPSY_UNIFIED_MEMORY=0 AUTOPSY_APP_SUPPORT_DIR="$TMP_DIR/app-support" AUTOPSY_FALKORDB_LITE_PATH="$TMP_DIR/app-support/FalkorDB/autopsy-memory.db" "$TMP_DIR/venv/bin/autopsy" health --workspace "$TMP_DIR/workspace" >/dev/null

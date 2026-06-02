@@ -20,7 +20,7 @@ from typing import Any
 
 from .cli_parser import CommandHandlers, build_parser as build_cli_parser, normalized_cli_args
 from .doctor import import_check, installed_autopsy_command_check, python_version_check
-from .init import cmd_init, instruction_targets, target_status
+from .init import build_init_payload, cmd_init, instruction_targets, target_status
 from .metadata import PACKAGE_NAME, cmd_instructions, cmd_version, package_version
 
 
@@ -15329,6 +15329,18 @@ def launchctl_print_loaded() -> bool:
     return result.returncode == 0
 
 
+def menubar_gui_session_available() -> bool:
+    if sys.platform != "darwin":
+        return False
+    result = subprocess.run(
+        ["launchctl", "print", menubar_launchctl_domain()],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode == 0
+
+
 def menubar_launch_agent_status_payload() -> dict[str, Any]:
     plist_path = menubar_launch_agent_path()
     payload: dict[str, Any] = {
@@ -15346,7 +15358,20 @@ def menubar_launch_agent_status_payload() -> dict[str, Any]:
     return payload
 
 
-def install_menubar_launch_agent(args: argparse.Namespace, app_dir: Path) -> None:
+def menubar_launch_agent_plist_current(args: argparse.Namespace, app_dir: Path) -> bool:
+    plist_path = menubar_launch_agent_path()
+    if not plist_path.exists():
+        return False
+    try:
+        with plist_path.open("rb") as handle:
+            payload = plistlib.load(handle)
+    except (OSError, plistlib.InvalidFileException):
+        return False
+    expected = menubar_launch_agent_plist(args, app_dir)
+    return all(payload.get(key) == expected[key] for key in ("Label", "ProgramArguments", "WorkingDirectory", "KeepAlive", "RunAtLoad"))
+
+
+def install_menubar_launch_agent(args: argparse.Namespace, app_dir: Path, *, quiet: bool = False) -> bool:
     plist_path = menubar_launch_agent_path()
     plist_path.parent.mkdir(parents=True, exist_ok=True)
     menubar_log_dir().mkdir(parents=True, exist_ok=True)
@@ -15356,11 +15381,16 @@ def install_menubar_launch_agent(args: argparse.Namespace, app_dir: Path) -> Non
 
     domain = menubar_launchctl_domain()
     subprocess.run(["launchctl", "bootout", domain, str(plist_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-    result = subprocess.run(["launchctl", "bootstrap", domain, str(plist_path)], check=False)
+    output = subprocess.DEVNULL if quiet else None
+    result = subprocess.run(["launchctl", "bootstrap", domain, str(plist_path)], stdout=output, stderr=output, check=False)
     if result.returncode != 0:
+        if quiet:
+            return False
         raise SystemExit(result.returncode)
-    subprocess.run(["launchctl", "kickstart", "-k", f"{domain}/{MENUBAR_LAUNCH_AGENT_LABEL}"], check=False)
-    print(json.dumps(menubar_launch_agent_status_payload(), indent=2))
+    subprocess.run(["launchctl", "kickstart", "-k", f"{domain}/{MENUBAR_LAUNCH_AGENT_LABEL}"], stdout=output, stderr=output, check=False)
+    if not quiet:
+        print(json.dumps(menubar_launch_agent_status_payload(), indent=2))
+    return True
 
 
 def uninstall_menubar_launch_agent() -> None:
@@ -15370,6 +15400,95 @@ def uninstall_menubar_launch_agent() -> None:
     if plist_path.exists():
         plist_path.unlink()
     print(json.dumps(menubar_launch_agent_status_payload(), indent=2))
+
+
+def install_instruction_payload(args: argparse.Namespace) -> dict[str, Any]:
+    if getattr(args, "skip_instructions", False):
+        return {"skipped": True, "reason": "skip_instructions"}
+    init_args = copy.copy(args)
+    init_args.global_scope = True
+    init_args.print_instructions = False
+    init_args.check = False
+    init_args.mcp = False
+    return build_init_payload(init_args)
+
+
+def install_menubar_payload(args: argparse.Namespace) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "supported": sys.platform == "darwin",
+        "skipped": False,
+        "installed": False,
+        "loaded": False,
+        "app_bundle_path": None,
+        "launch_agent_path": str(menubar_launch_agent_path()),
+        "error": None,
+    }
+    if getattr(args, "skip_menubar", False):
+        payload.update({"skipped": True, "reason": "skip_menubar"})
+        return payload
+    if sys.platform != "darwin":
+        payload.update({"skipped": True, "reason": "unsupported_platform"})
+        return payload
+    if not menubar_gui_session_available():
+        payload.update({"skipped": True, "reason": "no_gui_launchd_session"})
+        return payload
+    try:
+        app_dir = resolve_menubar_dir(args)
+        release = bool(getattr(args, "release", False) or menubar_default_release(app_dir))
+        bundle_path = menubar_app_bundle_path(app_dir, release=release)
+        payload.update({
+            "menubar_dir": str(app_dir),
+            "configuration": "release" if release else "debug",
+            "app_bundle_path": str(bundle_path),
+        })
+        if getattr(args, "dry_run", False):
+            payload.update({
+                "skipped": True,
+                "reason": "dry_run",
+                "app_bundle_current": menubar_app_bundle_current(app_dir, release=release),
+                "launch_agent_current": menubar_launch_agent_plist_current(args, app_dir),
+            })
+            return payload
+        bundle_path = ensure_menubar_app_bundle(app_dir, release=release, rebuild=bool(getattr(args, "rebuild", False)))
+        payload["app_bundle_path"] = str(bundle_path)
+        installed = install_menubar_launch_agent(args, app_dir, quiet=True)
+        payload["installed"] = installed
+        status = menubar_launch_agent_status_payload()
+        payload["loaded"] = bool(status.get("loaded"))
+        payload["status"] = status
+        return payload
+    except SystemExit as exc:
+        payload["error"] = str(exc)
+        return payload
+    except Exception as exc:
+        payload["error"] = str(exc)
+        return payload
+
+
+def cmd_install(args: argparse.Namespace) -> None:
+    instructions_payload = install_instruction_payload(args)
+    menubar_payload = install_menubar_payload(args)
+    next_steps: list[str] = []
+    instructions_workflow = instructions_payload.get("workflow") if isinstance(instructions_payload, dict) else None
+    if isinstance(instructions_workflow, dict) and not instructions_workflow.get("complete", True):
+        next_steps.extend(str(item) for item in instructions_workflow.get("next_steps", []))
+    if menubar_payload.get("error"):
+        next_steps.append("Run autopsy menubar --install-launch-agent for detailed menu bar startup diagnostics.")
+    if menubar_payload.get("reason") == "no_gui_launchd_session":
+        next_steps.append("Run autopsy install from a normal macOS user session to start the menu bar app.")
+
+    payload = {
+        "mode": "install",
+        "instructions": instructions_payload,
+        "menubar": menubar_payload,
+        "workflow": {
+            "complete": not next_steps,
+            "next_steps": next_steps,
+        },
+    }
+    print(json.dumps(payload, indent=2))
+    if next_steps:
+        raise SystemExit(1)
 
 
 def cmd_menubar(args: argparse.Namespace) -> None:
@@ -15462,6 +15581,7 @@ def build_parser() -> argparse.ArgumentParser:
             version=cmd_version,
             instructions=cmd_instructions,
             init=cmd_init,
+            install=cmd_install,
             doctor=cmd_doctor,
             sync=cmd_sync,
             status=cmd_status,

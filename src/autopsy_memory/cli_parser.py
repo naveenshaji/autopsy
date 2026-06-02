@@ -19,6 +19,7 @@ class CommandHandlers:
     version: CommandHandler
     instructions: CommandHandler
     init: CommandHandler
+    install: CommandHandler
     doctor: CommandHandler
     sync: CommandHandler
     status: CommandHandler
@@ -139,6 +140,19 @@ def build_parser(
     init_parser.add_argument("--skip-write-smoke", action="store_true", help="Skip temporary write/delete smoke check.")
     init_parser.add_argument("--mcp", action="store_true", help="Print optional MCP configuration. MCP is not installed by default.")
     init_parser.set_defaults(func=handlers.init)
+
+    install_parser = subparsers.add_parser("install", help="Install Autopsy for normal local use.")
+    install_parser.add_argument("--agent", choices=("all", *SUPPORTED_AGENTS), default="all", help="Instruction target agent.")
+    install_parser.add_argument("--repo", dest="repo_path", nargs="?", const="", help="Also install repo-local instructions. Defaults to the current directory when no path is provided.")
+    install_parser.add_argument("--dry-run", action="store_true", help="Preview setup without writing files or installing launchd state.")
+    install_parser.add_argument("--skip-instructions", action="store_true", help="Do not install agent instructions.")
+    install_parser.add_argument("--skip-menubar", action="store_true", help="Do not install the macOS menu bar LaunchAgent.")
+    install_parser.add_argument("--menubar-dir", help="Path to the Swift menu bar app package.")
+    install_parser.add_argument("--rebuild", action="store_true", help="Force rebuilding the Swift menu bar app before installing startup.")
+    install_parser.add_argument("--release", action="store_true", help="Use a release SwiftPM build for the menu bar app.")
+    install_parser.add_argument("--smoke-test", action="store_true", help="Run doctor, read, abstention, and temporary write/delete smoke checks after installing instructions.")
+    install_parser.add_argument("--skip-write-smoke", action="store_true", help="Skip temporary write/delete smoke check.")
+    install_parser.set_defaults(func=handlers.install)
 
     doctor_parser = subparsers.add_parser("doctor", parents=[common], help="Check local runtime dependencies and Autopsy memory paths.")
     doctor_parser.set_defaults(func=handlers.doctor)

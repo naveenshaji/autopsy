@@ -173,6 +173,11 @@ class AutopsyCLIContractTests(unittest.TestCase):
         agent_args = parser.parse_args(["menubar", "--install-launch-agent", "--rebuild"])
         self.assertTrue(agent_args.install_launch_agent)
         self.assertTrue(agent_args.rebuild)
+        install_args = parser.parse_args(["install", "--repo", "/tmp/project", "--agent", "codex", "--skip-menubar"])
+        self.assertEqual(install_args.command, "install")
+        self.assertEqual(install_args.repo_path, "/tmp/project")
+        self.assertEqual(install_args.agent, "codex")
+        self.assertTrue(install_args.skip_menubar)
 
     def test_stage_menubar_app_bundle_writes_launchservices_plist(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -244,6 +249,94 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["ProgramArguments"], [str(stable_executable)])
         self.assertNotIn(str(cellar_menubar), payload["ProgramArguments"])
         self.assertEqual(payload["WorkingDirectory"], str(stable_menubar))
+
+    def test_menubar_launch_agent_plist_current_detects_stale_payload(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["menubar", "--install-launch-agent"])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            home = Path(temp_dir) / "home"
+            home.mkdir()
+            app_dir = Path(temp_dir) / "Cellar" / cli.PACKAGE_NAME / "0.1.14" / cli.MENUBAR_INSTALLED_DIR_NAME
+            app_dir.mkdir(parents=True)
+            with mock.patch.object(cli.Path, "home", return_value=home):
+                self.assertFalse(cli.menubar_launch_agent_plist_current(args, app_dir))
+                plist_path = cli.menubar_launch_agent_path()
+                plist_path.parent.mkdir(parents=True)
+                with plist_path.open("wb") as handle:
+                    plistlib.dump(cli.menubar_launch_agent_plist(args, app_dir), handle)
+                self.assertTrue(cli.menubar_launch_agent_plist_current(args, app_dir))
+                with plist_path.open("wb") as handle:
+                    plistlib.dump({"ProgramArguments": ["/old/autopsy"]}, handle)
+                self.assertFalse(cli.menubar_launch_agent_plist_current(args, app_dir))
+
+    def test_install_menubar_payload_installs_launch_agent_on_macos(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["install"])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_dir = Path(temp_dir) / "Cellar" / cli.PACKAGE_NAME / "0.1.14" / cli.MENUBAR_INSTALLED_DIR_NAME
+            app_dir.mkdir(parents=True)
+            with (
+                mock.patch.object(cli.sys, "platform", "darwin"),
+                mock.patch.object(cli, "menubar_gui_session_available", return_value=True),
+                mock.patch.object(cli, "resolve_menubar_dir", return_value=app_dir),
+                mock.patch.object(cli, "ensure_menubar_app_bundle", return_value=app_dir / ".build" / "release" / f"{cli.MENUBAR_PRODUCT_NAME}.app"),
+                mock.patch.object(cli, "install_menubar_launch_agent", return_value=True) as install_mock,
+                mock.patch.object(cli, "menubar_launch_agent_status_payload", return_value={"installed": True, "loaded": True}),
+            ):
+                payload = cli.install_menubar_payload(args)
+
+        self.assertTrue(payload["installed"])
+        self.assertTrue(payload["loaded"])
+        install_mock.assert_called_once_with(args, app_dir, quiet=True)
+
+    def test_install_menubar_payload_skips_on_non_macos(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["install"])
+        with (
+            mock.patch.object(cli.sys, "platform", "linux"),
+            mock.patch.object(cli, "resolve_menubar_dir") as resolve_mock,
+        ):
+            payload = cli.install_menubar_payload(args)
+
+        self.assertTrue(payload["skipped"])
+        self.assertEqual(payload["reason"], "unsupported_platform")
+        resolve_mock.assert_not_called()
+
+    def test_install_menubar_payload_dry_run_does_not_install_launch_agent(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["install", "--dry-run"])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_dir = Path(temp_dir) / "Cellar" / cli.PACKAGE_NAME / "0.1.14" / cli.MENUBAR_INSTALLED_DIR_NAME
+            app_dir.mkdir(parents=True)
+            with (
+                mock.patch.object(cli.sys, "platform", "darwin"),
+                mock.patch.object(cli, "menubar_gui_session_available", return_value=True),
+                mock.patch.object(cli, "resolve_menubar_dir", return_value=app_dir),
+                mock.patch.object(cli, "menubar_app_bundle_current", return_value=True),
+                mock.patch.object(cli, "menubar_launch_agent_plist_current", return_value=False),
+                mock.patch.object(cli, "install_menubar_launch_agent") as install_mock,
+            ):
+                payload = cli.install_menubar_payload(args)
+
+        self.assertTrue(payload["skipped"])
+        self.assertEqual(payload["reason"], "dry_run")
+        install_mock.assert_not_called()
+
+    def test_cmd_install_combines_instructions_and_menubar(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["install", "--skip-instructions"])
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "install_menubar_payload", return_value={"skipped": True, "reason": "unsupported_platform"}),
+            contextlib.redirect_stdout(stream),
+        ):
+            cli.cmd_install(args)
+
+        payload = json.loads(stream.getvalue())
+        self.assertEqual(payload["mode"], "install")
+        self.assertTrue(payload["instructions"]["skipped"])
+        self.assertEqual(payload["menubar"]["reason"], "unsupported_platform")
+        self.assertTrue(payload["workflow"]["complete"])
 
     def test_installed_menubar_defaults_to_release_build(self):
         parser = cli.build_parser()

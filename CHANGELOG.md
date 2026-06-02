@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.1.15 - 2026-06-02
+
+Simplifies first-run setup after Homebrew installs.
+
+- Adds `autopsy install` to install global agent instructions and, on macOS, install/start the menu bar LaunchAgent.
+- Keeps repo-local instruction installation opt-in through `autopsy install --repo`.
+- Updates Homebrew caveats so users do not need to know the lower-level `menubar --install-launch-agent` command.
+
 ## 0.1.14 - 2026-06-02
 
 Fixes the first public Homebrew install path for the native menu bar app.

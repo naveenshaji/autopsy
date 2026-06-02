@@ -131,10 +131,10 @@ class {FORMULA_CLASS} < Formula
 
   def caveats
     <<~EOS
-      To start the macOS menu bar utility and keep it visible at login:
-        autopsy menubar --install-launch-agent
+      To install agent instructions and start the macOS menu bar utility:
+        autopsy install
 
-      To stop it:
+      To stop only the menu bar utility:
         autopsy menubar --uninstall-launch-agent
     EOS
   end

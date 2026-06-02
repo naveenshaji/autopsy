@@ -10,14 +10,17 @@ must provide the repository URL when tapping it directly:
 ```bash
 brew tap naveenshaji/autopsy https://github.com/naveenshaji/autopsy
 brew install autopsy-memory
+autopsy install
 autopsy version --json
 autopsy doctor
 ```
 
-Start the macOS menu bar utility after install:
+`autopsy install` writes global agent instructions and, on macOS, installs and
+starts the menu bar LaunchAgent. Add repo-local instructions from a repository
+with:
 
 ```bash
-autopsy menubar --install-launch-agent
+autopsy install --repo
 ```
 
 That writes `~/Library/LaunchAgents/com.naveenshaji.autopsy.menubar.plist`
@@ -52,7 +55,7 @@ Then users can install with:
 ```bash
 brew tap naveenshaji/autopsy
 brew install autopsy-memory
-autopsy menubar --install-launch-agent
+autopsy install
 ```
 
 After a tap is installed, `brew install autopsy-memory` works because Homebrew

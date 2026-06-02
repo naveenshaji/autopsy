@@ -4,14 +4,25 @@
 
 ```bash
 ./scripts/install-global.sh
+autopsy install
 autopsy version --json
 autopsy doctor
-autopsy init
 ```
 
 The installer creates a versioned Homebrew-style layout under `/opt/homebrew` when writable, or `~/.local` otherwise. It backs up a non-standalone existing `autopsy` command before replacing it. On macOS, it also installs and starts the menu bar LaunchAgent by default; set `AUTOPSY_INSTALL_MENUBAR_AGENT=0` to skip that in CI or headless sessions.
 
-## First-Run Agent Setup
+## First-Run Setup
+
+```bash
+autopsy install
+autopsy install --dry-run
+autopsy install --repo
+autopsy install --skip-menubar
+```
+
+`install` is the normal first-run command. It installs managed global instruction blocks for supported agents and, on macOS, stages the menu bar app and installs the LaunchAgent that keeps it visible. Repo-local instructions are opt-in with `--repo`.
+
+## Agent Instructions
 
 ```bash
 autopsy init
@@ -21,7 +32,7 @@ autopsy init --print
 autopsy init --mcp
 ```
 
-`init` is CLI-first. It installs managed instruction blocks for global Codex, Claude Code, Gemini CLI, and OpenCode instruction files, plus repo-scoped files for Codex/AGENTS.md-aware tools, Claude Code, Gemini CLI, GitHub Copilot, and Windsurf. MCP configuration is optional and only printed when `--mcp` is passed.
+`init` is the lower-level instruction installer. It installs managed instruction blocks for global Codex, Claude Code, Gemini CLI, and OpenCode instruction files, plus repo-scoped files for Codex/AGENTS.md-aware tools, Claude Code, Gemini CLI, GitHub Copilot, and Windsurf. MCP configuration is optional and only printed when `--mcp` is passed.
 
 ## Health
 
