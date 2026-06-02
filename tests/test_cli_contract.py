@@ -218,6 +218,15 @@ class AutopsyCLIContractTests(unittest.TestCase):
             self.assertIn("AutopsyDefaultCLIPath", plist)
             self.assertTrue(cli.menubar_app_bundle_current(app_dir, release=False))
 
+    def test_menubar_default_cli_path_prefers_homebrew_opt_wrapper(self):
+        path = "/opt/homebrew/Cellar/autopsy-memory/0.1.18/libexec/bin/autopsy"
+        self.assertEqual(
+            cli.homebrew_opt_autopsy_path(path),
+            "/opt/homebrew/opt/autopsy-memory/bin/autopsy",
+        )
+        with mock.patch.object(cli.shutil, "which", return_value=path):
+            self.assertEqual(cli.menubar_default_cli_path(), "/opt/homebrew/opt/autopsy-memory/bin/autopsy")
+
     def test_menubar_swift_build_command_is_homebrew_sandbox_safe(self):
         app_dir = Path("/tmp/autopsy-menubar")
         command = cli.menubar_swift_build_command(app_dir, release=True)

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.1.19 - 2026-06-02
+
+Fixes the Homebrew menu bar activity reader and small-screen detail behavior.
+
+- Packages the menu bar app with the stable Homebrew wrapper path instead of the raw virtualenv entrypoint, so activity fetches use the same runtime environment as terminal `autopsy` commands.
+- Makes the Swift menu bar app normalize stale cached direct Cellar `libexec/bin/autopsy` paths to the stable Homebrew `opt` wrapper after upgrades.
+- Adds a defensive Swift process environment fallback for direct Cellar paths by setting unified memory mode and inferring the native FalkorDB module path.
+- Prevents hover detail flyouts from resizing the popover window on normal screens, avoiding left/right placement flicker.
+- Uses an in-place detail panel on narrow screens instead of opening a side flyout where there is no room.
+
 ## 0.1.18 - 2026-06-02
 
 Fixes the Homebrew test/default-path edge cases from v0.1.17.

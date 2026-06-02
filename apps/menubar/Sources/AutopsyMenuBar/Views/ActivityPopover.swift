@@ -9,29 +9,63 @@ struct ActivityPopover: View {
     @State private var selectedActivityTab: ActivityTab = .writes
 
     private let menuHeight: CGFloat = 500
+    private let menuWidth: CGFloat = 360
+    private let detailWidth: CGFloat = 310
+    private let compactDetailThreshold: CGFloat = 760
 
     var body: some View {
+        if usesCompactDetailLayout {
+            compactBody
+        } else {
+            sideBySideBody
+        }
+    }
+
+    private var usesCompactDetailLayout: Bool {
+        let screenWidth = NSScreen.main?.visibleFrame.width ?? compactDetailThreshold
+        return screenWidth < compactDetailThreshold
+    }
+
+    private var sideBySideBody: some View {
         HStack(alignment: .top, spacing: 0) {
-            menuContent
-            .frame(width: 360)
-            .frame(height: menuHeight)
+            menuContent(hoverDetailsEnabled: true)
+                .frame(width: menuWidth)
+                .frame(height: menuHeight)
 
             if let activeDetail {
                 Divider()
                     .frame(height: menuHeight)
 
                 ActivityHoverDetailPanel(detail: activeDetail, store: store)
-                    .frame(width: 310, height: menuHeight, alignment: .topLeading)
+                    .frame(width: detailWidth, height: menuHeight, alignment: .topLeading)
                     .onHover { hovering in
                         setDetailPanelHovered(hovering)
                     }
+            } else {
+                Color.clear
+                    .frame(width: detailWidth + 1, height: menuHeight)
             }
         }
-        .frame(width: activeDetail == nil ? 360 : 670, height: menuHeight, alignment: .leading)
-        .animation(.easeInOut(duration: 0.14), value: activeDetail != nil)
+        .frame(width: menuWidth + detailWidth + 1, height: menuHeight, alignment: .leading)
+        .animation(.easeInOut(duration: 0.12), value: activeDetail?.id)
     }
 
-    private var menuContent: some View {
+    private var compactBody: some View {
+        ZStack(alignment: .topLeading) {
+            menuContent(hoverDetailsEnabled: false)
+                .frame(width: menuWidth, height: menuHeight)
+
+            if let activeDetail {
+                CompactActivityDetailPanel(detail: activeDetail, store: store, close: closeDetail)
+                    .frame(width: menuWidth, height: menuHeight)
+                    .transition(.opacity)
+            }
+        }
+        .frame(width: menuWidth, height: menuHeight, alignment: .topLeading)
+        .animation(.easeInOut(duration: 0.12), value: activeDetail?.id)
+    }
+
+    private func menuContent(hoverDetailsEnabled: Bool) -> some View {
         VStack(spacing: 6) {
             if store.shouldShowOnboardingPrompt {
                 OnboardingPrompt(
@@ -59,7 +93,7 @@ struct ActivityPopover: View {
                 }
             )
 
-            activityList
+            activityList(hoverDetailsEnabled: hoverDetailsEnabled)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             Divider()
@@ -68,6 +102,7 @@ struct ActivityPopover: View {
                 targets: store.instructionTargets,
                 isLoading: store.instructionStatus == nil || store.isManagingInstructions,
                 activeDetail: activeDetail,
+                hoverDetailsEnabled: hoverDetailsEnabled,
                 activateDetail: activateDetail,
                 deactivateDetail: deactivateDetail
             )
@@ -127,10 +162,10 @@ struct ActivityPopover: View {
             }
         }
         .padding(8)
-        .frame(width: 360, height: menuHeight, alignment: .top)
+        .frame(width: menuWidth, height: menuHeight, alignment: .top)
     }
 
-    private var activityList: some View {
+    private func activityList(hoverDetailsEnabled: Bool) -> some View {
         List {
             switch selectedActivityTab {
             case .writes:
@@ -142,6 +177,7 @@ struct ActivityPopover: View {
                         WriteRow(
                             write: write,
                             activeDetail: activeDetail,
+                            hoverDetailsEnabled: hoverDetailsEnabled,
                             activateDetail: activateDetail,
                             deactivateDetail: deactivateDetail
                         )
@@ -157,6 +193,7 @@ struct ActivityPopover: View {
                         ConsultRow(
                             consult: consult,
                             activeDetail: activeDetail,
+                            hoverDetailsEnabled: hoverDetailsEnabled,
                             activateDetail: activateDetail,
                             deactivateDetail: deactivateDetail
                         )
@@ -165,7 +202,7 @@ struct ActivityPopover: View {
                 }
             }
         }
-        .environment(\.defaultMinListRowHeight, 1)
+        .environment(\.defaultMinListRowHeight, 18)
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
     }
@@ -369,6 +406,7 @@ private struct EmptyActivityRow: View {
 private struct WriteRow: View {
     var write: MemoryWrite
     var activeDetail: ActivityHoverDetail?
+    var hoverDetailsEnabled: Bool
     let activateDetail: (ActivityHoverDetail) -> Void
     let deactivateDetail: (ActivityHoverDetail) -> Void
     @State private var isHovered = false
@@ -417,6 +455,7 @@ private struct WriteRow: View {
         )
         .onHover { hovering in
             isHovered = hovering
+            guard hoverDetailsEnabled else { return }
             if hovering {
                 activateDetail(detail)
             } else {
@@ -445,6 +484,7 @@ private struct WriteRow: View {
 private struct ConsultRow: View {
     var consult: ConsultEvent
     var activeDetail: ActivityHoverDetail?
+    var hoverDetailsEnabled: Bool
     let activateDetail: (ActivityHoverDetail) -> Void
     let deactivateDetail: (ActivityHoverDetail) -> Void
     @State private var isHovered = false
@@ -490,6 +530,7 @@ private struct ConsultRow: View {
         )
         .onHover { hovering in
             isHovered = hovering
+            guard hoverDetailsEnabled else { return }
             if hovering {
                 activateDetail(detail)
             } else {
@@ -542,6 +583,7 @@ private struct AgentInstructionsRow: View {
     let targets: [InstructionTarget]
     let isLoading: Bool
     var activeDetail: ActivityHoverDetail?
+    var hoverDetailsEnabled: Bool
     let activateDetail: (ActivityHoverDetail) -> Void
     let deactivateDetail: (ActivityHoverDetail) -> Void
     @State private var isHovered = false
@@ -592,6 +634,7 @@ private struct AgentInstructionsRow: View {
         )
         .onHover { hovering in
             isHovered = hovering
+            guard hoverDetailsEnabled else { return }
             if hovering {
                 activateDetail(.instructions)
             } else {
@@ -601,6 +644,35 @@ private struct AgentInstructionsRow: View {
         .onTapGesture {
             activateDetail(.instructions)
         }
+    }
+}
+
+private struct CompactActivityDetailPanel: View {
+    let detail: ActivityHoverDetail
+    @ObservedObject var store: ActivityStore
+    let close: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button(action: close) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(width: 24, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                Spacer()
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+
+            Divider()
+
+            ActivityHoverDetailPanel(detail: detail, store: store)
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 }
 

@@ -27,6 +27,14 @@ struct AutopsyCLI {
             } else {
                 environment["PATH"] = fallbackPath
             }
+            if environment["AUTOPSY_UNIFIED_MEMORY"] == nil {
+                environment["AUTOPSY_UNIFIED_MEMORY"] = "1"
+            }
+            if environment["AUTOPSY_FALKORDB_MODULE_PATH"] == nil,
+               let modulePath = inferredHomebrewNativeModulePath(for: executable),
+               FileManager.default.isExecutableFile(atPath: modulePath) {
+                environment["AUTOPSY_FALKORDB_MODULE_PATH"] = modulePath
+            }
             process.environment = environment
             process.standardOutput = outputPipe
             process.standardError = errorPipe
@@ -57,6 +65,22 @@ struct AutopsyCLI {
             return outputText
         }.value
     }
+}
+
+private func inferredHomebrewNativeModulePath(for executable: String) -> String? {
+    let parts = executable.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+    guard let cellarIndex = parts.firstIndex(of: "Cellar"),
+          cellarIndex + 5 < parts.count,
+          parts[cellarIndex + 1] == "autopsy-memory",
+          parts[cellarIndex + 3] == "libexec",
+          parts[cellarIndex + 4] == "bin",
+          parts[cellarIndex + 5] == "autopsy"
+    else {
+        return nil
+    }
+    let cellarRoot = parts[...(cellarIndex + 2)].joined(separator: "/")
+    let normalizedRoot = cellarRoot.isEmpty ? "/" : cellarRoot
+    return "\(normalizedRoot)/libexec/share/autopsy/falkordb.so"
 }
 
 enum CLIError: LocalizedError {

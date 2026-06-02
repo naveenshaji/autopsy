@@ -15260,10 +15260,28 @@ def menubar_app_executable_path(app_dir: Path, *, release: bool) -> Path:
     return menubar_app_bundle_path(app_dir, release=release) / "Contents" / "MacOS" / MENUBAR_PRODUCT_NAME
 
 
+def homebrew_opt_autopsy_path(executable_path: str | Path) -> str | None:
+    path = Path(executable_path).expanduser()
+    parts = path.parts
+    for index, part in enumerate(parts):
+        if part != "Cellar" or index + 5 >= len(parts):
+            continue
+        if parts[index + 1] != PACKAGE_NAME:
+            continue
+        if parts[index + 3:index + 6] != ("libexec", "bin", "autopsy"):
+            continue
+        prefix = Path(*parts[:index])
+        return str(prefix / "opt" / PACKAGE_NAME / "bin" / "autopsy")
+    return None
+
+
 def menubar_default_cli_path() -> str:
+    explicit = str(os.environ.get("AUTOPSY_MENUBAR_CLI_PATH") or "").strip()
+    if explicit:
+        return explicit
     autopsy_path = shutil.which("autopsy")
     if autopsy_path:
-        return autopsy_path
+        return homebrew_opt_autopsy_path(autopsy_path) or autopsy_path
     return "autopsy"
 
 

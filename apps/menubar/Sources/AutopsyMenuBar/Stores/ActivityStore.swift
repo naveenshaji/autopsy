@@ -32,7 +32,11 @@ final class ActivityStore: ObservableObject {
     private var timer: Timer?
 
     init() {
-        cliPath = UserDefaults.standard.string(forKey: Defaults.cliPath) ?? Self.defaultCLIPath
+        let storedCLIPath = UserDefaults.standard.string(forKey: Defaults.cliPath)
+        cliPath = Self.normalizedCLIPath(storedCLIPath ?? Self.defaultCLIPath)
+        if storedCLIPath != nil && storedCLIPath != cliPath {
+            UserDefaults.standard.set(cliPath, forKey: Defaults.cliPath)
+        }
         loadCachedState()
         start()
     }
@@ -147,9 +151,31 @@ final class ActivityStore: ObservableObject {
     private static var defaultCLIPath: String {
         if let configured = Bundle.main.object(forInfoDictionaryKey: "AutopsyDefaultCLIPath") as? String,
            !configured.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return configured
+            return normalizedCLIPath(configured)
         }
         return "autopsy"
+    }
+
+    private static func normalizedCLIPath(_ path: String) -> String {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "autopsy" }
+        return homebrewOptCLIPath(for: trimmed) ?? trimmed
+    }
+
+    private static func homebrewOptCLIPath(for path: String) -> String? {
+        let parts = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        guard let cellarIndex = parts.firstIndex(of: "Cellar"),
+              cellarIndex + 5 < parts.count,
+              parts[cellarIndex + 1] == "autopsy-memory",
+              parts[cellarIndex + 3] == "libexec",
+              parts[cellarIndex + 4] == "bin",
+              parts[cellarIndex + 5] == "autopsy"
+        else {
+            return nil
+        }
+        let prefix = parts[..<cellarIndex].joined(separator: "/")
+        let normalizedPrefix = prefix.isEmpty ? "/" : prefix
+        return "\(normalizedPrefix)/opt/autopsy-memory/bin/autopsy"
     }
 
     func start() {
