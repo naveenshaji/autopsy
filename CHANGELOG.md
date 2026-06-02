@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.1.11 - 2026-06-02
+
+Moves the menu bar popover to a compact menu-stack structure.
+
+- Replaces the app-like sectioned `List` popover with divider-separated menu rows modeled after `codex-account-switcher`.
+- Uses plain row buttons with hover affordances for actions and toggles.
+- Narrows the popover and limits visible recent activity to the most useful writes and consults.
+- Keeps long row labels clipped with full text available through tooltips.
+
 ## 0.1.10 - 2026-06-01
 
 Makes the menu bar app useful immediately after launch.
