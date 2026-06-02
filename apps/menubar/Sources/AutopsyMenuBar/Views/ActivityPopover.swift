@@ -79,6 +79,20 @@ struct ActivityPopover: View {
                     store.runBackup()
                 }
 
+                if store.cliPath != store.detectedCLIPath {
+                    MenuActionRowButton(title: "Use Detected Command", systemImage: "location") {
+                        store.resetCLIPath()
+                    }
+                }
+
+                MenuToggleRowButton(
+                    title: "Open at Login",
+                    isOn: store.launchAtLoginEnabled,
+                    isLoading: store.isManagingLaunchAgent
+                ) {
+                    store.setLaunchAtLogin(!store.launchAtLoginEnabled)
+                }
+
                 MenuToggleRowButton(
                     title: "Notify on Writes",
                     isOn: store.notifyOnWrites,
@@ -90,15 +104,9 @@ struct ActivityPopover: View {
                 }
                 .help(store.notificationsAvailable ? "Notify when memory is written" : "Notifications require the app bundle")
 
-                MenuActionRowButton(title: "Settings", systemImage: "gearshape") {
-                    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-                }
-                .keyboardShortcut(",", modifiers: .command)
-
                 MenuActionRowButton(title: "Quit", systemImage: "power") {
                     NSApplication.shared.terminate(nil)
                 }
-                .keyboardShortcut("q", modifiers: .command)
             }
         }
         .padding(.horizontal, 12)
@@ -392,6 +400,7 @@ private struct MenuActionRowButton: View {
 private struct MenuToggleRowButton: View {
     let title: String
     let isOn: Bool
+    var isLoading = false
     var isDisabled = false
     let action: () -> Void
     @State private var isHovered = false
@@ -399,10 +408,17 @@ private struct MenuToggleRowButton: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 8) {
-                Image(systemName: isOn ? "checkmark" : "minus")
-                    .font(.system(size: 11, weight: .semibold))
-                    .frame(width: 14)
-                    .foregroundStyle(isDisabled ? .tertiary : .secondary)
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                        .scaleEffect(0.7)
+                        .frame(width: 14, height: 14)
+                } else {
+                    Image(systemName: isOn ? "checkmark" : "minus")
+                        .font(.system(size: 11, weight: .semibold))
+                        .frame(width: 14)
+                        .foregroundStyle(isDisabled ? .tertiary : .secondary)
+                }
                 Text(title)
                     .font(.subheadline)
                     .foregroundStyle(isDisabled ? .secondary : .primary)
@@ -418,7 +434,7 @@ private struct MenuToggleRowButton: View {
             .animation(.easeInOut(duration: 0.15), value: isHovered)
         }
         .buttonStyle(.plain)
-        .disabled(isDisabled)
+        .disabled(isDisabled || isLoading)
         .accessibilityLabel(title)
         .accessibilityValue(isOn ? "On" : "Off")
         .accessibilityIdentifier(title)

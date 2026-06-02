@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.1.12 - 2026-06-02
+
+Finishes moving the native utility to a menu-bar-only surface.
+
+- Removes the separate SwiftUI Settings scene and app command menu.
+- Moves login startup control into the compact popover as an **Open at Login** menu toggle row.
+- Keeps CLI recovery available through a conditional **Use Detected Command** row when the stored command differs from the bundled default.
+- Removes app-window style settings and quit shortcuts from the menu bar utility.
+
 ## 0.1.11 - 2026-06-02
 
 Moves the menu bar popover to a compact menu-stack structure.

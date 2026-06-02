@@ -13,42 +13,6 @@ struct AutopsyMenuBarApp: App {
             Label("Autopsy", systemImage: store.menuBarSystemImage)
         }
         .menuBarExtraStyle(.window)
-        .commands {
-            CommandMenu("Autopsy") {
-                Button("Refresh") {
-                    store.refresh()
-                }
-                .keyboardShortcut("r", modifiers: .command)
-
-                Divider()
-
-                Button("Health") {
-                    store.runHealth()
-                }
-
-                Button("Backup") {
-                    store.runBackup()
-                }
-            }
-
-            CommandGroup(replacing: .appSettings) {
-                Button("Settings") {
-                    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-                }
-                .keyboardShortcut(",", modifiers: .command)
-            }
-
-            CommandGroup(replacing: .appTermination) {
-                Button("Quit Autopsy") {
-                    NSApplication.shared.terminate(nil)
-                }
-                .keyboardShortcut("q", modifiers: .command)
-            }
-        }
-
-        Settings {
-            SettingsView(store: store)
-        }
     }
 }
 

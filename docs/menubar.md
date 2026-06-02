@@ -11,7 +11,7 @@ The app is intentionally not a memory browser. The installed `autopsy` CLI and F
 - `autopsy menubar` stages a minimal `.app` bundle before launch so macOS services such as notifications have a bundle identity.
 - `autopsy activity` for recent writes, recent consults, status, and attention items.
 - Manual `autopsy health` and `autopsy backup` controls.
-- Login startup is managed through the app's Settings window or the `autopsy menubar --install-launch-agent` command.
+- Login startup is managed through the popover's **Open at Login** row or the `autopsy menubar --install-launch-agent` command.
 
 ## Local Development
 
@@ -40,7 +40,7 @@ autopsy menubar --launch-agent-status
 autopsy menubar --uninstall-launch-agent
 ```
 
-Normal `autopsy menubar` launches the staged app bundle without forcing a rebuild when the bundle is current. Homebrew-style installs default to the release app bundle, and the global installer prestages that bundle on macOS so first launch does not need a debug build. The app caches the last successful activity payload and LaunchAgent status locally, so the popover can show recent writes, recent consults, attention, and startup state immediately after restart while a refresh runs in the background. The popover is a compact menu stack rather than a sectioned app-style list: short status rows, clipped recent activity, divider-separated action rows, and plain hover buttons. `--install-launch-agent` writes a user LaunchAgent at `~/Library/LaunchAgents/com.naveenshaji.autopsy.menubar.plist` so the utility opens at login. Homebrew-style installs write that LaunchAgent through the stable `<prefix>/opt/autopsy-memory/menubar` path when available, so login startup follows package updates instead of pinning to one Cellar version. The same startup state is visible and editable from Settings under **Open Autopsy at Login**.
+Normal `autopsy menubar` launches the staged app bundle without forcing a rebuild when the bundle is current. Homebrew-style installs default to the release app bundle, and the global installer prestages that bundle on macOS so first launch does not need a debug build. The app caches the last successful activity payload and LaunchAgent status locally, so the popover can show recent writes, recent consults, attention, and startup state immediately after restart while a refresh runs in the background. The popover is a compact menu stack rather than a sectioned app-style list: short status rows, clipped recent activity, divider-separated action rows, and plain hover buttons. `--install-launch-agent` writes a user LaunchAgent at `~/Library/LaunchAgents/com.naveenshaji.autopsy.menubar.plist` so the utility opens at login. Homebrew-style installs write that LaunchAgent through the stable `<prefix>/opt/autopsy-memory/menubar` path when available, so login startup follows package updates instead of pinning to one Cellar version. The same startup state is visible and editable from the popover's **Open at Login** row.
 
 For low-level SwiftPM debugging, run directly from the repo:
 
