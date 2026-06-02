@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.1.14 - 2026-06-02
+
+Fixes the first public Homebrew install path for the native menu bar app.
+
+- Disables SwiftPM's nested sandbox when the CLI builds the staged menu bar app bundle.
+- Redirects SwiftPM cache, configuration, and security state into the package-local `.build` directory.
+- Keeps `brew install autopsy-memory` from failing before Homebrew can link the `autopsy` command.
+
 ## 0.1.13 - 2026-06-02
 
 Publishes the public Homebrew-ready menu bar utility.

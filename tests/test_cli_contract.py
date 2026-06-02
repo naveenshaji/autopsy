@@ -195,6 +195,26 @@ class AutopsyCLIContractTests(unittest.TestCase):
             self.assertIn("AutopsyDefaultCLIPath", plist)
             self.assertTrue(cli.menubar_app_bundle_current(app_dir, release=False))
 
+    def test_menubar_swift_build_command_is_homebrew_sandbox_safe(self):
+        app_dir = Path("/tmp/autopsy-menubar")
+        command = cli.menubar_swift_build_command(app_dir, release=True)
+
+        self.assertEqual(command[:5], ["swift", "build", "-c", "release", "--disable-sandbox"])
+        self.assertIn("--manifest-cache", command)
+        self.assertIn("local", command)
+        self.assertEqual(command[command.index("--cache-path") + 1], "/tmp/autopsy-menubar/.build/swiftpm/cache")
+        self.assertEqual(command[command.index("--config-path") + 1], "/tmp/autopsy-menubar/.build/swiftpm/configuration")
+        self.assertEqual(command[command.index("--security-path") + 1], "/tmp/autopsy-menubar/.build/swiftpm/security")
+
+    def test_prepare_menubar_swiftpm_support_dirs_uses_package_local_paths(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_dir = Path(temp_dir)
+            cli.prepare_menubar_swiftpm_support_dirs(app_dir)
+
+            self.assertTrue((app_dir / ".build" / "swiftpm" / "cache").is_dir())
+            self.assertTrue((app_dir / ".build" / "swiftpm" / "configuration").is_dir())
+            self.assertTrue((app_dir / ".build" / "swiftpm" / "security").is_dir())
+
     def test_menubar_launch_agent_plist_runs_app_executable(self):
         parser = cli.build_parser()
         args = parser.parse_args(["menubar", "--install-launch-agent", "--dir", "/tmp/autopsy-menubar"])

@@ -15162,6 +15162,36 @@ def menubar_source_mtime(app_dir: Path) -> float:
     return max(newest_mtime(app_dir / "Package.swift"), newest_mtime(app_dir / "Sources"))
 
 
+def menubar_swiftpm_support_dir(app_dir: Path) -> Path:
+    return app_dir / ".build" / "swiftpm"
+
+
+def prepare_menubar_swiftpm_support_dirs(app_dir: Path) -> None:
+    support_dir = menubar_swiftpm_support_dir(app_dir)
+    for child in ("cache", "configuration", "security"):
+        (support_dir / child).mkdir(parents=True, exist_ok=True)
+
+
+def menubar_swift_build_command(app_dir: Path, *, release: bool) -> list[str]:
+    configuration = "release" if release else "debug"
+    support_dir = menubar_swiftpm_support_dir(app_dir)
+    return [
+        "swift",
+        "build",
+        "-c",
+        configuration,
+        "--disable-sandbox",
+        "--cache-path",
+        str(support_dir / "cache"),
+        "--config-path",
+        str(support_dir / "configuration"),
+        "--security-path",
+        str(support_dir / "security"),
+        "--manifest-cache",
+        "local",
+    ]
+
+
 def stage_menubar_app_bundle(app_dir: Path, *, release: bool) -> Path:
     binary_path = menubar_binary_path(app_dir, release=release)
     if not binary_path.exists():
@@ -15220,8 +15250,8 @@ def menubar_app_bundle_current(app_dir: Path, *, release: bool) -> bool:
 
 def ensure_menubar_app_bundle(app_dir: Path, *, release: bool, rebuild: bool = False) -> Path:
     if rebuild or not menubar_app_bundle_current(app_dir, release=release):
-        configuration = "release" if release else "debug"
-        build_status = call_menubar_process(["swift", "build", "-c", configuration], cwd=app_dir)
+        prepare_menubar_swiftpm_support_dirs(app_dir)
+        build_status = call_menubar_process(menubar_swift_build_command(app_dir, release=release), cwd=app_dir)
         if build_status != 0:
             raise SystemExit(build_status)
         return stage_menubar_app_bundle(app_dir, release=release)
