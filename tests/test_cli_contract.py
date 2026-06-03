@@ -299,6 +299,28 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertNotIn(str(cellar_menubar), payload["ProgramArguments"])
         self.assertEqual(payload["WorkingDirectory"], str(stable_menubar))
 
+    def test_menubar_candidates_prefer_installed_package_before_cwd(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["install"])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            cwd = root / "checkout"
+            prefix = root / "Cellar" / cli.PACKAGE_NAME / "0.1.21"
+            executable = prefix / "libexec" / "bin" / "python"
+            cwd.mkdir(parents=True)
+            executable.parent.mkdir(parents=True)
+
+            with (
+                mock.patch.object(cli.Path, "cwd", return_value=cwd),
+                mock.patch.object(cli.sys, "prefix", str(prefix)),
+                mock.patch.object(cli.sys, "executable", str(executable)),
+            ):
+                candidates = cli.menubar_candidate_dirs(args)
+
+        installed_index = candidates.index(prefix.resolve() / cli.MENUBAR_INSTALLED_DIR_NAME)
+        cwd_index = candidates.index(cwd / cli.MENUBAR_RELATIVE_DIR)
+        self.assertLess(installed_index, cwd_index)
+
     def test_menubar_launch_agent_plist_current_detects_stale_payload(self):
         parser = cli.build_parser()
         args = parser.parse_args(["menubar", "--install-launch-agent"])

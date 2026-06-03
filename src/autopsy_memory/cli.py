@@ -15307,15 +15307,15 @@ def menubar_candidate_dirs(args: argparse.Namespace) -> list[Path]:
     if os.environ.get("AUTOPSY_MENUBAR_DIR"):
         candidates.append(Path(os.environ["AUTOPSY_MENUBAR_DIR"]).expanduser())
 
+    executable = Path(sys.executable).resolve()
+    install_roots = [Path(sys.prefix).resolve(), Path(sys.prefix).resolve().parent, executable.parent, *executable.parents[:4]]
+    candidates.extend(root / MENUBAR_INSTALLED_DIR_NAME for root in install_roots)
+
     cwd = Path.cwd()
     candidates.extend(parent / MENUBAR_RELATIVE_DIR for parent in (cwd, *cwd.parents))
 
     module_root = Path(__file__).resolve().parents[2]
     candidates.append(module_root / MENUBAR_RELATIVE_DIR)
-
-    executable = Path(sys.executable).resolve()
-    install_roots = [Path(sys.prefix).resolve(), Path(sys.prefix).resolve().parent, executable.parent, *executable.parents[:4]]
-    candidates.extend(root / MENUBAR_INSTALLED_DIR_NAME for root in install_roots)
 
     seen: set[Path] = set()
     unique: list[Path] = []
