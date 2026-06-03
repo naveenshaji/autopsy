@@ -385,12 +385,14 @@ class AutopsyCLIContractTests(unittest.TestCase):
                 mock.patch.object(cli, "resolve_menubar_dir", return_value=app_dir),
                 mock.patch.object(cli, "menubar_app_bundle_current", return_value=True),
                 mock.patch.object(cli, "menubar_launch_agent_plist_current", return_value=False),
+                mock.patch.object(cli, "launchctl_print_loaded") as loaded_mock,
                 mock.patch.object(cli, "install_menubar_launch_agent") as install_mock,
             ):
                 payload = cli.install_menubar_payload(args)
 
         self.assertTrue(payload["skipped"])
         self.assertEqual(payload["reason"], "dry_run")
+        loaded_mock.assert_not_called()
         install_mock.assert_not_called()
 
     def test_install_path_repair_payload_skips_when_command_is_valid(self):

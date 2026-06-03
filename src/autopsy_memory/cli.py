@@ -15585,13 +15585,13 @@ def menubar_gui_session_available() -> bool:
     return result.returncode == 0
 
 
-def menubar_launch_agent_status_payload() -> dict[str, Any]:
+def menubar_launch_agent_status_payload(*, include_loaded: bool = True) -> dict[str, Any]:
     plist_path = menubar_launch_agent_path()
     payload: dict[str, Any] = {
         "label": MENUBAR_LAUNCH_AGENT_LABEL,
         "path": str(plist_path),
         "installed": plist_path.exists(),
-        "loaded": launchctl_print_loaded() if sys.platform == "darwin" else False,
+        "loaded": launchctl_print_loaded() if include_loaded and sys.platform == "darwin" else False,
     }
     if plist_path.exists():
         try:
@@ -15686,7 +15686,7 @@ def install_menubar_payload(args: argparse.Namespace) -> dict[str, Any]:
             "app_bundle_path": str(bundle_path),
         })
         if getattr(args, "dry_run", False):
-            status = menubar_launch_agent_status_payload()
+            status = menubar_launch_agent_status_payload(include_loaded=False)
             payload.update({
                 "skipped": True,
                 "reason": "dry_run",
