@@ -17,7 +17,7 @@ This repository is the standalone memory product extraction. It intentionally do
 - Audits memory governance with relation coverage, duplicate, conflict, poisoning-risk, sensitive-data, low-signal, stale-lineage, and expired-fact checks.
 - Reports product health with runtime, graph, index, backup, vector, and init-instruction status.
 - Restores exported backups with dry-run validation, safe merge defaults, and explicit replace confirmation.
-- Includes a native macOS menu bar utility for quiet memory activity, health, and backup controls.
+- Includes a native macOS menu bar utility for quiet memory activity, agent setup, updates, and repair prompts.
 - Exposes the same semantics through an MCP bridge for coding agents.
 
 ## Install
@@ -290,7 +290,7 @@ The release checklist lives at [docs/release-checklist.md](docs/release-checklis
 
 ## Menu Bar App
 
-The native macOS menu bar utility lives in [apps/menubar](apps/menubar). It is intentionally small: tabbed recent memory writes and consult telemetry, global agent instruction status, attention states, manual health, backup, restart, and quit controls. It does not browse the graph or own memory storage; the `autopsy` CLI and Falkor graph remain canonical.
+The native macOS menu bar utility lives in [apps/menubar](apps/menubar). It is intentionally small: tabbed recent memory writes and consult telemetry, global agent instruction status, attention states, update/setup repair when needed, and quit. It does not browse the graph or own memory storage; the `autopsy` CLI and Falkor graph remain canonical.
 
 ```bash
 autopsy menubar
@@ -305,7 +305,7 @@ cd apps/menubar
 swift run AutopsyMenuBar
 ```
 
-The app polls `autopsy activity`, which is the lightweight JSON feed for UI clients. See [docs/menubar.md](docs/menubar.md).
+The app watches the local activity snapshot written by the CLI/worker for instant reads. See [docs/menubar.md](docs/menubar.md).
 The global installer starts a supervised LaunchAgent by default, and `autopsy menubar --install-launch-agent` can refresh it manually.
 
 ## Repository Split

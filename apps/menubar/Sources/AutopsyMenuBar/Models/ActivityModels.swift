@@ -133,6 +133,15 @@ struct WorkflowPayload: Decodable {
     var coverage: String?
     var complete: Bool?
     var message: String?
+    var nextSteps: [String]?
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case coverage
+        case complete
+        case message
+        case nextSteps = "next_steps"
+    }
 }
 
 struct LaunchAgentStatus: Decodable {
@@ -153,6 +162,14 @@ struct LaunchAgentStatus: Decodable {
 
 struct InstructionStatusPayload: Decodable {
     var targets: [InstructionTarget]?
+    var workflow: WorkflowPayload?
+    var dryRun: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case targets
+        case workflow
+        case dryRun = "dry_run"
+    }
 }
 
 struct InstructionTarget: Decodable, Identifiable {
@@ -179,4 +196,100 @@ struct InstructionTarget: Decodable, Identifiable {
         case changed
         case dryRun = "dry_run"
     }
+}
+
+struct SetupStatusPayload: Decodable {
+    var pathRepair: SetupPathRepairPayload?
+    var instructions: InstructionStatusPayload?
+    var menubar: SetupMenubarPayload?
+    var doctor: DoctorStatusPayload?
+    var workflow: WorkflowPayload?
+
+    enum CodingKeys: String, CodingKey {
+        case pathRepair = "path_repair"
+        case instructions
+        case menubar
+        case doctor
+        case workflow
+    }
+}
+
+struct SetupPathRepairPayload: Decodable {
+    var ok: Bool?
+    var skipped: Bool?
+    var repaired: Bool?
+    var repairAvailable: Bool?
+    var reason: String?
+    var error: String?
+    var checkBefore: DoctorCheckPayload?
+    var checkAfter: DoctorCheckPayload?
+
+    enum CodingKeys: String, CodingKey {
+        case ok
+        case skipped
+        case repaired
+        case repairAvailable = "repair_available"
+        case reason
+        case error
+        case checkBefore = "check_before"
+        case checkAfter = "check_after"
+    }
+}
+
+struct SetupMenubarPayload: Decodable {
+    var supported: Bool?
+    var skipped: Bool?
+    var installed: Bool?
+    var loaded: Bool?
+    var reason: String?
+    var error: String?
+    var appBundleCurrent: Bool?
+    var launchAgentCurrent: Bool?
+    var status: LaunchAgentStatus?
+
+    enum CodingKeys: String, CodingKey {
+        case supported
+        case skipped
+        case installed
+        case loaded
+        case reason
+        case error
+        case appBundleCurrent = "app_bundle_current"
+        case launchAgentCurrent = "launch_agent_current"
+        case status
+    }
+}
+
+struct DoctorStatusPayload: Decodable {
+    var ok: Bool?
+    var checks: [DoctorCheckPayload]?
+}
+
+struct DoctorCheckPayload: Decodable {
+    var name: String?
+    var required: Bool?
+    var ok: Bool?
+    var path: String?
+    var error: String?
+    var legacyWrapper: Bool?
+    var standaloneWrapper: Bool?
+    var packageEntrypoint: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case required
+        case ok
+        case path
+        case error
+        case legacyWrapper = "legacy_wrapper"
+        case standaloneWrapper = "standalone_wrapper"
+        case packageEntrypoint = "package_entrypoint"
+    }
+}
+
+struct SetupHealthIssue: Identifiable, Equatable {
+    let id: String
+    let title: String
+    let detail: String
+    let systemImage: String
 }

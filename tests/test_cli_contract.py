@@ -191,11 +191,33 @@ class AutopsyCLIContractTests(unittest.TestCase):
         agent_args = parser.parse_args(["menubar", "--install-launch-agent", "--rebuild"])
         self.assertTrue(agent_args.install_launch_agent)
         self.assertTrue(agent_args.rebuild)
-        install_args = parser.parse_args(["install", "--repo", "/tmp/project", "--agent", "codex", "--skip-menubar"])
+        install_args = parser.parse_args(["install", "--repo", "/tmp/project", "--agent", "codex", "--skip-menubar", "--skip-path-repair", "--skip-doctor"])
         self.assertEqual(install_args.command, "install")
         self.assertEqual(install_args.repo_path, "/tmp/project")
         self.assertEqual(install_args.agent, "codex")
         self.assertTrue(install_args.skip_menubar)
+        self.assertTrue(install_args.skip_path_repair)
+        self.assertTrue(install_args.skip_doctor)
+
+    def test_activity_snapshot_writer_writes_atomic_payload_with_metadata(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            snapshot_path = Path(temp_dir) / "Activity" / "activity.json"
+            payload = {
+                "workspace": {"title": "Unit Memory"},
+                "activity": {"recent_writes": [], "recent_consults": [], "attention": []},
+                "workflow": {"complete": True},
+            }
+
+            with mock.patch.dict(cli.os.environ, {"AUTOPSY_ACTIVITY_SNAPSHOT_PATH": str(snapshot_path)}):
+                written = cli.write_activity_snapshot_payload(payload)
+
+            self.assertEqual(written["snapshot"]["schema_version"], 1)
+            self.assertEqual(written["snapshot"]["path"], str(snapshot_path))
+            self.assertTrue(snapshot_path.exists())
+            on_disk = json.loads(snapshot_path.read_text(encoding="utf-8"))
+            self.assertEqual(on_disk["workspace"]["title"], "Unit Memory")
+            self.assertEqual(on_disk["snapshot"]["schema_version"], 1)
+            self.assertEqual(list(snapshot_path.parent.glob(".activity.json.*.tmp")), [])
 
     def test_stage_menubar_app_bundle_writes_launchservices_plist(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -349,11 +371,47 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["reason"], "dry_run")
         install_mock.assert_not_called()
 
+    def test_install_path_repair_payload_skips_when_command_is_valid(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["install"])
+        with (
+            mock.patch.object(cli, "installed_autopsy_command_check", return_value={"name": "installed_autopsy_command", "ok": True, "path": "/opt/homebrew/bin/autopsy"}),
+            mock.patch.object(cli.shutil, "which") as which_mock,
+        ):
+            payload = cli.install_path_repair_payload(args)
+
+        self.assertTrue(payload["ok"])
+        self.assertFalse(payload["repaired"])
+        which_mock.assert_not_called()
+
+    def test_install_path_repair_payload_dry_run_reports_homebrew_repair(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["install", "--dry-run"])
+        check = {
+            "name": "installed_autopsy_command",
+            "ok": False,
+            "path": "/opt/homebrew/bin/autopsy",
+            "error": "legacy wrapper",
+        }
+        with (
+            mock.patch.object(cli, "installed_autopsy_command_check", return_value=check),
+            mock.patch.object(cli.shutil, "which", return_value="/opt/homebrew/bin/brew"),
+            mock.patch.object(cli, "homebrew_package_prefix", return_value=("/opt/homebrew/opt/autopsy-memory", {"args": ["brew", "--prefix"], "returncode": 0})),
+            mock.patch.object(cli, "run_install_subprocess") as run_mock,
+        ):
+            payload = cli.install_path_repair_payload(args)
+
+        self.assertFalse(payload["ok"])
+        self.assertTrue(payload["repair_available"])
+        self.assertEqual(payload["would_run"][-1], ["/opt/homebrew/bin/brew", "link", "--overwrite", cli.PACKAGE_NAME])
+        run_mock.assert_not_called()
+
     def test_cmd_install_combines_instructions_and_menubar(self):
         parser = cli.build_parser()
-        args = parser.parse_args(["install", "--skip-instructions"])
+        args = parser.parse_args(["install", "--skip-instructions", "--skip-doctor"])
         stream = io.StringIO()
         with (
+            mock.patch.object(cli, "install_path_repair_payload", return_value={"ok": True, "skipped": False, "repaired": False}),
             mock.patch.object(cli, "install_menubar_payload", return_value={"skipped": True, "reason": "unsupported_platform"}),
             contextlib.redirect_stdout(stream),
         ):
@@ -361,8 +419,10 @@ class AutopsyCLIContractTests(unittest.TestCase):
 
         payload = json.loads(stream.getvalue())
         self.assertEqual(payload["mode"], "install")
+        self.assertTrue(payload["path_repair"]["ok"])
         self.assertTrue(payload["instructions"]["skipped"])
         self.assertEqual(payload["menubar"]["reason"], "unsupported_platform")
+        self.assertIsNone(payload["doctor"])
         self.assertTrue(payload["workflow"]["complete"])
 
     def test_installed_menubar_defaults_to_release_build(self):

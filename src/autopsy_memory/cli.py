@@ -28,6 +28,7 @@ APP_SUPPORT_DIR_DEFAULT = Path(os.environ.get("AUTOPSY_APP_SUPPORT_DIR") or Path
 FALKORDB_LITE_PATH_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "FalkorDB" / "autopsy-memory.db"
 GLOBAL_MEMORY_SETTINGS_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "Config" / "memory-settings.json"
 UNIFIED_MEMORY_ROOT_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "MemoryRoot"
+ACTIVITY_SNAPSHOT_PATH_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "Activity" / "activity.json"
 STATUS_WINDOW_DAYS_DEFAULT = 21
 MENUBAR_RELATIVE_DIR = Path("apps") / "menubar"
 MENUBAR_INSTALLED_DIR_NAME = "menubar"
@@ -3356,6 +3357,113 @@ def build_activity_payload(
             "message": f"{len(writes)} recent writes, {len(consults)} recent consults",
         },
     }
+
+
+def activity_snapshot_path() -> Path:
+    raw_path = str(os.environ.get("AUTOPSY_ACTIVITY_SNAPSHOT_PATH") or "").strip()
+    if raw_path:
+        return Path(raw_path).expanduser()
+    return ACTIVITY_SNAPSHOT_PATH_DEFAULT
+
+
+def write_json_atomic(path: Path, payload: dict[str, Any]) -> Path:
+    target = Path(path).expanduser()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    serialized = json.dumps(payload, indent=2) + "\n"
+    temp_path: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=str(target.parent),
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temp_path = handle.name
+            handle.write(serialized)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, target)
+        return target
+    finally:
+        if temp_path:
+            try:
+                if Path(temp_path).exists():
+                    Path(temp_path).unlink()
+            except Exception:
+                pass
+
+
+def activity_snapshot_payload(payload: dict[str, Any], *, path: Path | None = None) -> dict[str, Any]:
+    snapshot_path = Path(path).expanduser() if path is not None else activity_snapshot_path()
+    snapshot = copy.deepcopy(payload)
+    snapshot["snapshot"] = {
+        "schema_version": 1,
+        "written_at": utc_now_iso(),
+        "path": str(snapshot_path),
+    }
+    return snapshot
+
+
+def write_activity_snapshot_payload(payload: dict[str, Any], *, path: Path | None = None) -> dict[str, Any]:
+    snapshot_path = Path(path).expanduser() if path is not None else activity_snapshot_path()
+    snapshot = activity_snapshot_payload(payload, path=snapshot_path)
+    write_json_atomic(snapshot_path, snapshot)
+    return snapshot
+
+
+def write_activity_snapshot(
+    graph,
+    *,
+    tool,
+    workspace: dict[str, Any],
+    limit: int = 20,
+    writes_limit: int | None = 20,
+    consults_limit: int | None = 20,
+    section_limit: int = 3,
+    recent_days: int = STATUS_WINDOW_DAYS_DEFAULT,
+) -> dict[str, Any]:
+    payload = build_activity_payload(
+        graph,
+        tool=tool,
+        workspace=workspace,
+        limit=limit,
+        writes_limit=writes_limit,
+        consults_limit=consults_limit,
+        section_limit=section_limit,
+        recent_days=recent_days,
+    )
+    return write_activity_snapshot_payload(payload)
+
+
+def refresh_activity_snapshot(
+    graph,
+    *,
+    tool,
+    workspace: dict[str, Any],
+    limit: int = 20,
+    writes_limit: int | None = 20,
+    consults_limit: int | None = 20,
+    section_limit: int = 3,
+    recent_days: int = STATUS_WINDOW_DAYS_DEFAULT,
+) -> dict[str, Any]:
+    try:
+        return {
+            "ok": True,
+            "snapshot": write_activity_snapshot(
+                graph,
+                tool=tool,
+                workspace=workspace,
+                limit=limit,
+                writes_limit=writes_limit,
+                consults_limit=consults_limit,
+                section_limit=section_limit,
+                recent_days=recent_days,
+            ).get("snapshot", {}),
+        }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 def build_graph_item_detail_payload(graph, *, tool, workspace: dict[str, Any], stable_key: str) -> dict[str, Any]:
@@ -13476,6 +13584,7 @@ def cmd_consult(args: argparse.Namespace) -> None:
             current_only=bool(getattr(args, "current_only", False)),
             as_of=str(getattr(args, "as_of", "") or "") or None,
         )
+    refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
     print(json.dumps(payload, indent=2))
 
 
@@ -13571,6 +13680,8 @@ def cmd_context(args: argparse.Namespace) -> None:
         lineage=lineage,
         graph_context=graph_context,
     )
+    if query:
+        refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
     if str(getattr(args, "format", "json") or "json") == "text":
         print(str(payload.get("context_block") or render_context_block(payload)), end="")
         return
@@ -13723,6 +13834,7 @@ def cmd_activity(args: argparse.Namespace) -> None:
         section_limit=args.section_limit,
         recent_days=args.recent_days,
     )
+    payload = write_activity_snapshot_payload(payload)
     print(json.dumps(payload, indent=2))
 
 
@@ -14452,6 +14564,7 @@ def cmd_create_note(args: argparse.Namespace) -> None:
             payload = build_graph_item_detail_payload(graph, tool=tool, workspace=workspace, stable_key=stable_key)
             payload["created_relations"] = relations
     payload["write_quality"] = write_quality
+    refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
     print(json.dumps(payload, indent=2))
 
 
@@ -14509,12 +14622,14 @@ def cmd_update_item(args: argparse.Namespace) -> None:
             "created_relations": payload["created_relations"]
         }
     payload["write_quality"] = write_quality
+    refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
     print(json.dumps(payload, indent=2))
 
 
 def cmd_delete_item(args: argparse.Namespace) -> None:
-    _tool, _workspace, _config, graph = open_workspace_graph(args)
+    tool, workspace, _config, graph = open_workspace_graph(args)
     delete_graph_item_payload(graph, stable_key=args.stable_key)
+    refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
     print(json.dumps({"deleted": True, "stable_key": args.stable_key}, indent=2))
 
 
@@ -14529,6 +14644,7 @@ def cmd_expire_item(args: argparse.Namespace) -> None:
         reason=str(getattr(args, "reason", "") or ""),
         clear=bool(getattr(args, "clear", False)),
     )
+    refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
     print(json.dumps(payload, indent=2))
 
 
@@ -14547,6 +14663,7 @@ def cmd_pin_item(args: argparse.Namespace) -> None:
         shared=getattr(args, "shared", None),
         clear=bool(getattr(args, "clear", False)),
     )
+    refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
     print(json.dumps(payload, indent=2))
 
 
@@ -15569,11 +15686,15 @@ def install_menubar_payload(args: argparse.Namespace) -> dict[str, Any]:
             "app_bundle_path": str(bundle_path),
         })
         if getattr(args, "dry_run", False):
+            status = menubar_launch_agent_status_payload()
             payload.update({
                 "skipped": True,
                 "reason": "dry_run",
                 "app_bundle_current": menubar_app_bundle_current(app_dir, release=release),
                 "launch_agent_current": menubar_launch_agent_plist_current(args, app_dir),
+                "installed": bool(status.get("installed")),
+                "loaded": bool(status.get("loaded")),
+                "status": status,
             })
             return payload
         bundle_path = ensure_menubar_app_bundle(app_dir, release=release, rebuild=bool(getattr(args, "rebuild", False)))
@@ -15592,10 +15713,185 @@ def install_menubar_payload(args: argparse.Namespace) -> dict[str, Any]:
         return payload
 
 
+def install_command_output(text: str, *, limit: int = 4000) -> str:
+    stripped = text.strip()
+    if len(stripped) <= limit:
+        return stripped
+    return stripped[: limit - 3] + "..."
+
+
+def run_install_subprocess(command: list[str]) -> dict[str, Any]:
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
+    payload: dict[str, Any] = {
+        "args": command,
+        "returncode": result.returncode,
+    }
+    if result.stdout.strip():
+        payload["stdout"] = install_command_output(result.stdout)
+    if result.stderr.strip():
+        payload["stderr"] = install_command_output(result.stderr)
+    return payload
+
+
+def homebrew_package_prefix(brew_path: str) -> tuple[str | None, dict[str, Any]]:
+    result = run_install_subprocess([brew_path, "--prefix", PACKAGE_NAME])
+    if result.get("returncode") != 0:
+        return None, result
+    output = str(result.get("stdout") or "").strip().splitlines()
+    return (output[-1].strip() if output else None), result
+
+
+def homebrew_install_prefix_from_formula_prefix(formula_prefix: str | None) -> Path | None:
+    if not formula_prefix:
+        return None
+    path = Path(formula_prefix).expanduser()
+    parts = path.parts
+    for index, part in enumerate(parts):
+        if part == "opt" and index + 1 < len(parts) and parts[index + 1] == PACKAGE_NAME:
+            return Path(*parts[:index])
+        if part == "Cellar" and index + 1 < len(parts) and parts[index + 1] == PACKAGE_NAME:
+            return Path(*parts[:index])
+    return path.parent.parent if path.name == PACKAGE_NAME and path.parent.name == "opt" else None
+
+
+def repairable_homebrew_command_path(path: str | None, *, brew_prefix: Path | None) -> bool:
+    if not path or brew_prefix is None:
+        return False
+    command_path = Path(path).expanduser()
+    candidates = {
+        brew_prefix / "bin" / "autopsy",
+        Path("/opt/homebrew/bin/autopsy"),
+        Path("/usr/local/bin/autopsy"),
+    }
+    return command_path in candidates
+
+
+def backup_existing_command(path: Path) -> str | None:
+    if not path.exists() or path.is_symlink():
+        return None
+    backup_dir = APP_SUPPORT_DIR_DEFAULT / "Backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    backup_path = backup_dir / f"legacy-autopsy-wrapper-{timestamp}"
+    shutil.copy2(path, backup_path)
+    return str(backup_path)
+
+
+def install_path_repair_payload(args: argparse.Namespace) -> dict[str, Any]:
+    check_before = installed_autopsy_command_check()
+    payload: dict[str, Any] = {
+        "skipped": False,
+        "ok": bool(check_before.get("ok")),
+        "repaired": False,
+        "check_before": check_before,
+        "check_after": None,
+        "commands": [],
+        "backups": [],
+        "error": None,
+    }
+    if getattr(args, "skip_path_repair", False):
+        payload.update({"skipped": True, "reason": "skip_path_repair"})
+        return payload
+    if check_before.get("ok"):
+        return payload
+
+    brew_path = shutil.which("brew")
+    if not brew_path:
+        payload["error"] = "Homebrew was not found on PATH, so Autopsy cannot repair the linked command automatically."
+        return payload
+
+    formula_prefix, prefix_command = homebrew_package_prefix(brew_path)
+    payload["commands"].append(prefix_command)
+    if not formula_prefix:
+        payload["error"] = "Homebrew package autopsy-memory is not installed."
+        return payload
+
+    brew_prefix = homebrew_install_prefix_from_formula_prefix(formula_prefix)
+    command_path = str(check_before.get("path") or "")
+    if not repairable_homebrew_command_path(command_path, brew_prefix=brew_prefix):
+        payload["error"] = "The autopsy command on PATH is outside the Homebrew bin directory; refusing to overwrite it automatically."
+        return payload
+
+    payload.update({
+        "repair_available": True,
+        "homebrew_prefix": str(brew_prefix) if brew_prefix else None,
+        "formula_prefix": formula_prefix,
+    })
+    if getattr(args, "dry_run", False):
+        payload["would_run"] = [
+            [brew_path, "unlink", PACKAGE_NAME],
+            [brew_path, "link", "--overwrite", PACKAGE_NAME],
+        ]
+        if command_path and Path(command_path).exists() and not Path(command_path).is_symlink():
+            payload["would_backup"] = command_path
+        return payload
+
+    backup_path = backup_existing_command(Path(command_path))
+    if backup_path:
+        payload["backups"].append(backup_path)
+
+    unlink_result = run_install_subprocess([brew_path, "unlink", PACKAGE_NAME])
+    payload["commands"].append(unlink_result)
+    link_result = run_install_subprocess([brew_path, "link", "--overwrite", PACKAGE_NAME])
+    payload["commands"].append(link_result)
+    if link_result.get("returncode") != 0:
+        payload["error"] = "brew link --overwrite autopsy-memory failed."
+        return payload
+
+    check_after = installed_autopsy_command_check()
+    payload["check_after"] = check_after
+    payload["ok"] = bool(check_after.get("ok"))
+    payload["repaired"] = bool(check_after.get("ok"))
+    if not check_after.get("ok"):
+        payload["error"] = str(check_after.get("error") or "Autopsy command repair did not produce a valid command.")
+    return payload
+
+
+def build_doctor_payload(args: argparse.Namespace) -> dict[str, Any]:
+    checks = [
+        python_version_check(),
+        installed_autopsy_command_check(),
+        import_check("falkordb", required=True),
+        import_check("redis", required=True),
+        import_check("redislite.falkordb_client", required=True),
+        falkordb_runtime_check(args),
+        import_check("sentence_transformers", required=False),
+    ]
+    required_ok = all(check["ok"] for check in checks if check["required"])
+    return {
+        "ok": required_ok,
+        "checks": checks,
+        "paths": {
+            "app_support_dir": str(APP_SUPPORT_DIR_DEFAULT),
+            "falkordb_lite_path": str(resolved_lite_path(args) or ""),
+            "memory_settings": str(GLOBAL_MEMORY_SETTINGS_DEFAULT),
+            "unified_memory_root": str(unified_memory_root_path()),
+        },
+        "environment": {
+            "AUTOPSY_APP_SUPPORT_DIR": os.environ.get("AUTOPSY_APP_SUPPORT_DIR"),
+            "AUTOPSY_FALKORDB_HOST": os.environ.get("AUTOPSY_FALKORDB_HOST"),
+            "AUTOPSY_FALKORDB_PORT": os.environ.get("AUTOPSY_FALKORDB_PORT"),
+            "AUTOPSY_FALKORDB_LITE_PATH": os.environ.get("AUTOPSY_FALKORDB_LITE_PATH"),
+            "AUTOPSY_UNIFIED_MEMORY": os.environ.get("AUTOPSY_UNIFIED_MEMORY"),
+            "AUTOPSY_UNIFIED_MEMORY_ROOT": os.environ.get("AUTOPSY_UNIFIED_MEMORY_ROOT"),
+        },
+    }
+
+
 def cmd_install(args: argparse.Namespace) -> None:
+    path_repair_payload = install_path_repair_payload(args)
     instructions_payload = install_instruction_payload(args)
     menubar_payload = install_menubar_payload(args)
+    doctor_payload: dict[str, Any] | None = None
+    if not getattr(args, "skip_doctor", False) and not getattr(args, "dry_run", False):
+        doctor_payload = build_doctor_payload(args)
+
     next_steps: list[str] = []
+    if not path_repair_payload.get("ok") and not path_repair_payload.get("skipped"):
+        if path_repair_payload.get("repair_available") and getattr(args, "dry_run", False):
+            next_steps.append("Run autopsy install to repair the Homebrew autopsy command on PATH.")
+        else:
+            next_steps.append(str(path_repair_payload.get("error") or "Repair the autopsy command on PATH."))
     instructions_workflow = instructions_payload.get("workflow") if isinstance(instructions_payload, dict) else None
     if isinstance(instructions_workflow, dict) and not instructions_workflow.get("complete", True):
         next_steps.extend(str(item) for item in instructions_workflow.get("next_steps", []))
@@ -15603,18 +15899,23 @@ def cmd_install(args: argparse.Namespace) -> None:
         next_steps.append("Run autopsy menubar --install-launch-agent for detailed menu bar startup diagnostics.")
     if menubar_payload.get("reason") == "no_gui_launchd_session":
         next_steps.append("Run autopsy install from a normal macOS user session to start the menu bar app.")
+    if doctor_payload is not None and not doctor_payload.get("ok"):
+        failed = [str(check.get("name")) for check in doctor_payload.get("checks", []) if check.get("required") and not check.get("ok")]
+        next_steps.append(f"Run autopsy doctor for details. Failed checks: {', '.join(failed) or 'required runtime'}")
 
     payload = {
         "mode": "install",
+        "path_repair": path_repair_payload,
         "instructions": instructions_payload,
         "menubar": menubar_payload,
+        "doctor": doctor_payload,
         "workflow": {
             "complete": not next_steps,
             "next_steps": next_steps,
         },
     }
     print(json.dumps(payload, indent=2))
-    if next_steps:
+    if next_steps and not getattr(args, "dry_run", False):
         raise SystemExit(1)
 
 
@@ -15706,36 +16007,9 @@ def falkordb_runtime_check(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def cmd_doctor(args: argparse.Namespace) -> None:
-    checks = [
-        python_version_check(),
-        installed_autopsy_command_check(),
-        import_check("falkordb", required=True),
-        import_check("redis", required=True),
-        import_check("redislite.falkordb_client", required=True),
-        falkordb_runtime_check(args),
-        import_check("sentence_transformers", required=False),
-    ]
-    required_ok = all(check["ok"] for check in checks if check["required"])
-    payload = {
-        "ok": required_ok,
-        "checks": checks,
-        "paths": {
-            "app_support_dir": str(APP_SUPPORT_DIR_DEFAULT),
-            "falkordb_lite_path": str(resolved_lite_path(args) or ""),
-            "memory_settings": str(GLOBAL_MEMORY_SETTINGS_DEFAULT),
-            "unified_memory_root": str(unified_memory_root_path()),
-        },
-        "environment": {
-            "AUTOPSY_APP_SUPPORT_DIR": os.environ.get("AUTOPSY_APP_SUPPORT_DIR"),
-            "AUTOPSY_FALKORDB_HOST": os.environ.get("AUTOPSY_FALKORDB_HOST"),
-            "AUTOPSY_FALKORDB_PORT": os.environ.get("AUTOPSY_FALKORDB_PORT"),
-            "AUTOPSY_FALKORDB_LITE_PATH": os.environ.get("AUTOPSY_FALKORDB_LITE_PATH"),
-            "AUTOPSY_UNIFIED_MEMORY": os.environ.get("AUTOPSY_UNIFIED_MEMORY"),
-            "AUTOPSY_UNIFIED_MEMORY_ROOT": os.environ.get("AUTOPSY_UNIFIED_MEMORY_ROOT"),
-        },
-    }
+    payload = build_doctor_payload(args)
     print(json.dumps(payload, indent=2))
-    if not required_ok:
+    if not payload.get("ok"):
         raise SystemExit(1)
 
 

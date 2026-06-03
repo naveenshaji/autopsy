@@ -7,6 +7,7 @@ struct ActivityPopover: View {
     @State private var detailClearGeneration = 0
     @State private var isDetailPanelHovered = false
     @State private var selectedActivityTab: ActivityTab = .writes
+    @State private var userSelectedActivityTab = false
 
     private let menuHeight: CGFloat = 500
     private let menuWidth: CGFloat = 360
@@ -14,10 +15,18 @@ struct ActivityPopover: View {
     private let compactDetailThreshold: CGFloat = 760
 
     var body: some View {
-        if usesCompactDetailLayout {
-            compactBody
-        } else {
-            sideBySideBody
+        Group {
+            if usesCompactDetailLayout {
+                compactBody
+            } else {
+                sideBySideBody
+            }
+        }
+        .onAppear {
+            handlePopoverAppear()
+        }
+        .onChange(of: activitySignature) { _ in
+            selectDefaultActivityIfNeeded()
         }
     }
 
@@ -69,8 +78,8 @@ struct ActivityPopover: View {
         VStack(spacing: 6) {
             if store.shouldShowOnboardingPrompt {
                 OnboardingPrompt(
-                    isLoading: store.isManagingInstructions,
-                    install: store.installAllInstructions
+                    isLoading: store.isRepairingSetup || store.isManagingInstructions,
+                    install: store.repairSetup
                 )
             }
 
@@ -87,9 +96,12 @@ struct ActivityPopover: View {
 
             ActivityTabBar(
                 selectedTab: selectedActivityTab,
+                writesCount: store.recentWrites.count,
+                consultsCount: store.recentConsults.count,
                 selectTab: { tab in
+                    userSelectedActivityTab = true
                     selectedActivityTab = tab
-                    closeDetail()
+                    selectFirstDetail(for: tab)
                 }
             )
 
@@ -97,6 +109,18 @@ struct ActivityPopover: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             Divider()
+
+            if !store.setupHealthIssues.isEmpty || store.isRepairingSetup {
+                SetupHealthRow(
+                    issues: store.setupHealthIssues,
+                    statusText: store.setupHealthStatusText,
+                    isLoading: store.isRepairingSetup,
+                    activeDetail: activeDetail,
+                    hoverDetailsEnabled: hoverDetailsEnabled,
+                    activateDetail: activateDetail,
+                    deactivateDetail: deactivateDetail
+                )
+            }
 
             AgentInstructionsRow(
                 targets: store.instructionTargets,
@@ -107,58 +131,28 @@ struct ActivityPopover: View {
                 deactivateDetail: deactivateDetail
             )
 
-            MenuActionRowButton(title: "Health", systemImage: "stethoscope") {
-                closeDetail()
-                store.runHealth()
-            }
-            .onHover { hovering in
-                if hovering {
-                    closeDetail()
-                }
-            }
-
-            MenuActionRowButton(title: "Backup", systemImage: "externaldrive") {
-                closeDetail()
-                store.runBackup()
-            }
-            .onHover { hovering in
-                if hovering {
-                    closeDetail()
+            MenuStatusActionRowButton(
+                title: store.softwareUpdateTitle,
+                detail: store.softwareUpdateStatusText,
+                systemImage: store.softwareUpdateSystemImage,
+                isLoading: store.isCheckingForSoftwareUpdates || store.isUpdatingAutopsy,
+                isDisabled: store.isUpdatingAutopsy
+            ) {
+                if store.softwareUpdateStatus?.updateAvailable == true {
+                    store.updateAutopsy()
+                } else {
+                    store.checkForSoftwareUpdates()
                 }
             }
 
             if store.cliPath != store.detectedCLIPath {
                 MenuActionRowButton(title: "Use Detected Command", systemImage: "location") {
-                    closeDetail()
                     store.resetCLIPath()
-                }
-                .onHover { hovering in
-                    if hovering {
-                        closeDetail()
-                    }
-                }
-            }
-
-            if store.launchAtLoginLoaded {
-                MenuActionRowButton(title: "Restart", systemImage: "arrow.clockwise") {
-                    closeDetail()
-                    NSApplication.shared.terminate(nil)
-                }
-                .onHover { hovering in
-                    if hovering {
-                        closeDetail()
-                    }
                 }
             }
 
             MenuActionRowButton(title: "Quit", systemImage: "power") {
-                closeDetail()
                 store.quit()
-            }
-            .onHover { hovering in
-                if hovering {
-                    closeDetail()
-                }
             }
         }
         .padding(8)
@@ -212,6 +206,70 @@ struct ActivityPopover: View {
         activeDetail = detail
     }
 
+    private var activitySignature: String {
+        [
+            store.recentWrites.first?.updatedAt ?? "",
+            store.recentConsults.first?.accessedAt ?? "",
+            "\(store.recentWrites.count)",
+            "\(store.recentConsults.count)",
+        ].joined(separator: "|")
+    }
+
+    private func handlePopoverAppear() {
+        userSelectedActivityTab = false
+        store.refresh(includeLaunchAgent: false)
+        selectDefaultActivityIfNeeded(force: true)
+    }
+
+    private func selectDefaultActivityIfNeeded(force: Bool = false) {
+        guard !userSelectedActivityTab else { return }
+
+        if let write = store.recentWrites.first {
+            selectedActivityTab = .writes
+            setDefaultDetail(.write(write), force: force)
+            return
+        }
+
+        if let consult = store.recentConsults.first {
+            selectedActivityTab = .consults
+            setDefaultDetail(.consult(consult), force: force)
+            return
+        }
+
+        activeDetail = nil
+    }
+
+    private func selectFirstDetail(for tab: ActivityTab) {
+        guard !usesCompactDetailLayout else {
+            activeDetail = nil
+            return
+        }
+
+        switch tab {
+        case .writes:
+            if let write = store.recentWrites.first {
+                activateDetail(.write(write))
+            } else {
+                activeDetail = nil
+            }
+        case .consults:
+            if let consult = store.recentConsults.first {
+                activateDetail(.consult(consult))
+            } else {
+                activeDetail = nil
+            }
+        }
+    }
+
+    private func setDefaultDetail(_ detail: ActivityHoverDetail, force: Bool) {
+        guard !usesCompactDetailLayout else {
+            activeDetail = nil
+            return
+        }
+        guard force || activeDetail?.id != detail.id else { return }
+        activateDetail(detail)
+    }
+
     private func deactivateDetail(_ detail: ActivityHoverDetail) {
         guard activeDetail?.id == detail.id else { return }
         scheduleDetailClose()
@@ -231,7 +289,7 @@ struct ActivityPopover: View {
         detailClearGeneration = generation
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
             if detailClearGeneration == generation && !isDetailPanelHovered {
-                activeDetail = nil
+                restoreFallbackDetail()
             }
         }
     }
@@ -241,11 +299,24 @@ struct ActivityPopover: View {
         isDetailPanelHovered = false
         activeDetail = nil
     }
+
+    private func restoreFallbackDetail() {
+        if usesCompactDetailLayout {
+            activeDetail = nil
+            return
+        }
+        if userSelectedActivityTab {
+            selectFirstDetail(for: selectedActivityTab)
+        } else {
+            selectDefaultActivityIfNeeded(force: true)
+        }
+    }
 }
 
 private enum ActivityHoverDetail: Identifiable {
     case write(MemoryWrite)
     case consult(ConsultEvent)
+    case setupHealth
     case instructions
 
     var id: String {
@@ -254,6 +325,8 @@ private enum ActivityHoverDetail: Identifiable {
             return "write-\(write.id)"
         case .consult(let consult):
             return "consult-\(consult.id)"
+        case .setupHealth:
+            return "setup-health"
         case .instructions:
             return "instructions"
         }
@@ -316,6 +389,8 @@ private struct SectionHeader: View {
 
 private struct ActivityTabBar: View {
     let selectedTab: ActivityTab
+    let writesCount: Int
+    let consultsCount: Int
     let selectTab: (ActivityTab) -> Void
 
     var body: some View {
@@ -324,16 +399,21 @@ private struct ActivityTabBar: View {
                 Button {
                     selectTab(tab)
                 } label: {
-                    Text(tab.title)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(selectedTab == tab ? .primary : .secondary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 5)
-                        .contentShape(Rectangle())
-                        .background(
-                            RoundedRectangle(cornerRadius: 5)
-                                .fill(selectedTab == tab ? Color.secondary.opacity(0.16) : Color.clear)
-                        )
+                    HStack(spacing: 5) {
+                        Text(tab.title)
+                        Text("\(count(for: tab))")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(selectedTab == tab ? .primary : .secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 5)
+                    .contentShape(Rectangle())
+                    .background(
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(selectedTab == tab ? Color.secondary.opacity(0.16) : Color.clear)
+                    )
                 }
                 .buttonStyle(.plain)
             }
@@ -345,6 +425,15 @@ private struct ActivityTabBar: View {
                 .fill(Color.secondary.opacity(0.08))
         )
         .padding(.horizontal, 8)
+    }
+
+    private func count(for tab: ActivityTab) -> Int {
+        switch tab {
+        case .writes:
+            return writesCount
+        case .consults:
+            return consultsCount
+        }
     }
 }
 
@@ -372,7 +461,7 @@ private struct OnboardingPrompt: View {
                             .foregroundStyle(.secondary)
                     }
 
-                    Text("Install Agent Instructions")
+                    Text("Run Setup")
                         .font(.subheadline)
                     Spacer()
                 }
@@ -431,20 +520,15 @@ private struct WriteRow: View {
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
-                if let summary = write.summary, !summary.isEmpty {
-                    Text(summary.clippedForMenuBarDetail())
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
+            if let summary = write.summary, !summary.isEmpty {
+                Text(summary.clippedForMenuBarDetail())
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
             }
-
-            Image(systemName: "chevron.right")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(.tertiary)
-                .frame(width: 8)
-                .opacity(isActive || isHovered ? 1 : 0)
         }
+        }
+        .padding(.trailing, 16)
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -453,6 +537,14 @@ private struct WriteRow: View {
             RoundedRectangle(cornerRadius: 6)
                 .fill((isActive || isHovered) ? Color.secondary.opacity(0.14) : Color.clear)
         )
+        .overlay(alignment: .trailing) {
+            Image(systemName: "chevron.right")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.tertiary)
+                .frame(width: 8)
+                .padding(.trailing, 8)
+                .opacity(isActive || isHovered ? 1 : 0)
+        }
         .onHover { hovering in
             isHovered = hovering
             guard hoverDetailsEnabled else { return }
@@ -513,13 +605,8 @@ private struct ConsultRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-
-            Image(systemName: "chevron.right")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(.tertiary)
-                .frame(width: 8)
-                .opacity(isActive || isHovered ? 1 : 0)
         }
+        .padding(.trailing, 16)
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -528,6 +615,14 @@ private struct ConsultRow: View {
             RoundedRectangle(cornerRadius: 6)
                 .fill((isActive || isHovered) ? Color.secondary.opacity(0.14) : Color.clear)
         )
+        .overlay(alignment: .trailing) {
+            Image(systemName: "chevron.right")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.tertiary)
+                .frame(width: 8)
+                .padding(.trailing, 8)
+                .opacity(isActive || isHovered ? 1 : 0)
+        }
         .onHover { hovering in
             isHovered = hovering
             guard hoverDetailsEnabled else { return }
@@ -576,6 +671,70 @@ private struct AttentionRow: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
+    }
+}
+
+private struct SetupHealthRow: View {
+    let issues: [SetupHealthIssue]
+    let statusText: String
+    let isLoading: Bool
+    var activeDetail: ActivityHoverDetail?
+    var hoverDetailsEnabled: Bool
+    let activateDetail: (ActivityHoverDetail) -> Void
+    let deactivateDetail: (ActivityHoverDetail) -> Void
+    @State private var isHovered = false
+
+    private var isActive: Bool {
+        activeDetail?.id == ActivityHoverDetail.setupHealth.id
+    }
+
+    var body: some View {
+        let detail = ActivityHoverDetail.setupHealth
+
+        HStack(spacing: 8) {
+            if isLoading {
+                ProgressView()
+                    .controlSize(.small)
+                    .scaleEffect(0.7)
+                    .frame(width: 14, height: 14)
+            } else {
+                Image(systemName: issues.first?.systemImage ?? "exclamationmark.triangle")
+                    .font(.system(size: 12, weight: .semibold))
+                    .frame(width: 14)
+                    .foregroundStyle(.orange)
+            }
+
+            Text(isLoading ? "Repairing Setup" : "Setup Needs Attention")
+                .font(.subheadline)
+            Spacer(minLength: 8)
+            Text(statusText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Image(systemName: "chevron.right")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.tertiary)
+                .frame(width: 8)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill((isActive || isHovered) ? Color.secondary.opacity(0.14) : Color.clear)
+        )
+        .onHover { hovering in
+            isHovered = hovering
+            guard hoverDetailsEnabled else { return }
+            if hovering {
+                activateDetail(detail)
+            } else {
+                deactivateDetail(detail)
+            }
+        }
+        .onTapGesture {
+            activateDetail(detail)
+        }
     }
 }
 
@@ -688,6 +847,8 @@ private struct ActivityHoverDetailPanel: View {
                     WriteDetailView(write: write)
                 case .consult(let consult):
                     ConsultDetailView(consult: consult)
+                case .setupHealth:
+                    SetupHealthDetailView(store: store)
                 case .instructions:
                     InstructionsDetailView(store: store)
                 }
@@ -701,6 +862,87 @@ private struct ActivityHoverDetailPanel: View {
     }
 }
 
+private struct SetupHealthDetailView: View {
+    @ObservedObject var store: ActivityStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            DetailEyebrow("Setup")
+            DetailTitle(store.isRepairingSetup ? "Repairing Autopsy" : "Setup Needs Attention")
+
+            if store.setupHealthIssues.isEmpty {
+                DetailBody(store.isRepairingSetup ? "Autopsy is repairing the command, agent instructions, and menu bar startup." : "Setup looks ready.")
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(store.setupHealthIssues) { issue in
+                        SetupIssueRow(issue: issue)
+                    }
+                }
+            }
+
+            Button(action: store.repairSetup) {
+                HStack(spacing: 8) {
+                    if store.isRepairingSetup {
+                        ProgressView()
+                            .controlSize(.small)
+                            .scaleEffect(0.7)
+                            .frame(width: 14, height: 14)
+                    } else {
+                        Image(systemName: "wrench.and.screwdriver")
+                            .font(.system(size: 12, weight: .semibold))
+                            .frame(width: 14)
+                            .foregroundStyle(.secondary)
+                    }
+                    Text(store.isRepairingSetup ? "Repairing" : "Repair Setup")
+                        .font(.subheadline)
+                    Spacer()
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .contentShape(Rectangle())
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.secondary.opacity(0.08))
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(store.isRepairingSetup)
+
+            if store.lastActionMessage == "Setup repaired" {
+                DetailBody("Setup repaired.")
+            }
+        }
+    }
+}
+
+private struct SetupIssueRow: View {
+    let issue: SetupHealthIssue
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: issue.systemImage)
+                .font(.system(size: 11, weight: .semibold))
+                .frame(width: 14)
+                .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(issue.title)
+                    .font(.subheadline)
+                Text(issue.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.secondary.opacity(0.08))
+        )
+    }
+}
+
 private struct InstructionsDetailView: View {
     @ObservedObject var store: ActivityStore
 
@@ -709,8 +951,42 @@ private struct InstructionsDetailView: View {
             DetailEyebrow("Agent Instructions")
             DetailTitle("Autopsy Setup")
 
-            if let error = nonEmpty(store.instructionStatusError) {
-                DetailBody(error)
+            DetailBody("Manual setup: copy these instructions and paste them into your agent's global instructions file.\nUse the install buttons below when Autopsy can manage the file automatically.")
+
+            Button(action: store.copyInstructions) {
+                HStack(spacing: 8) {
+                    if store.isCopyingInstructions {
+                        ProgressView()
+                            .controlSize(.small)
+                            .scaleEffect(0.7)
+                            .frame(width: 14, height: 14)
+                    } else {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 12, weight: .semibold))
+                            .frame(width: 14)
+                            .foregroundStyle(.secondary)
+                    }
+                    Text("Copy Instructions")
+                        .font(.subheadline)
+                    Spacer()
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .contentShape(Rectangle())
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.secondary.opacity(0.08))
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(store.isCopyingInstructions)
+
+            if store.lastActionMessage == "Instructions copied" {
+                DetailBody("Copied to clipboard.")
+            }
+
+            if store.instructionStatusError != nil {
+                DetailBody("Instruction status could not be refreshed.")
             }
 
             VStack(alignment: .leading, spacing: 6) {
@@ -1056,15 +1332,105 @@ private struct MenuActionRowButton: View {
     }
 }
 
+private struct MenuStatusActionRowButton: View {
+    let title: String
+    let detail: String
+    let systemImage: String
+    var isLoading = false
+    var isDisabled = false
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                        .scaleEffect(0.7)
+                        .frame(width: 14, height: 14)
+                } else {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(width: 14)
+                        .foregroundStyle(isDisabled ? .tertiary : .secondary)
+                }
+
+                Text(title)
+                    .font(.subheadline)
+                    .foregroundStyle(isDisabled ? .secondary : .primary)
+                    .lineLimit(1)
+
+                Spacer(minLength: 8)
+
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill((isHovered && !isDisabled) ? Color.secondary.opacity(0.14) : Color.clear)
+            )
+            .animation(.easeInOut(duration: 0.15), value: isHovered)
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .accessibilityLabel(title)
+        .accessibilityIdentifier(title)
+        .help("\(title): \(detail)")
+        .onHover { hovering in
+            isHovered = hovering
+        }
+    }
+}
+
 private func relativeLabel(_ value: String?) -> String {
     guard let value, !value.isEmpty else { return "" }
     guard let date = isoDate(value) else { return "" }
-    return date.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated))
+    return compactRelativeLabel(since: date)
 }
 
 private func timestampLabel(_ value: String?) -> String? {
-    guard let value = nonEmpty(value), let date = isoDate(value) else { return nil }
-    return date.formatted(date: .abbreviated, time: .shortened)
+    relativeLabel(value)
+}
+
+private func compactRelativeLabel(since date: Date, now: Date = Date()) -> String {
+    let elapsedSeconds = max(0, Int(now.timeIntervalSince(date)))
+    if elapsedSeconds < 60 {
+        return "\(max(1, elapsedSeconds))s"
+    }
+
+    let minutes = elapsedSeconds / 60
+    if minutes < 60 {
+        return "\(minutes)m"
+    }
+
+    let hours = elapsedSeconds / 3_600
+    if hours < 24 {
+        return "\(hours)h"
+    }
+
+    let days = elapsedSeconds / 86_400
+    if days < 7 {
+        return "\(days)d"
+    }
+    if days < 21 {
+        return "\(max(1, days / 7))wk"
+    }
+    if days < 30 {
+        return "\(days)d"
+    }
+
+    let months = days / 30
+    if months < 12 {
+        return "\(max(1, months))mo"
+    }
+
+    return "\(max(1, days / 365))y"
 }
 
 private func isoDate(_ value: String) -> Date? {
@@ -1073,7 +1439,7 @@ private func isoDate(_ value: String) -> Date? {
     return formatter.date(from: value) ?? ISO8601DateFormatter().date(from: value)
 }
 
-private func compactLabel(_ value: String?, fallback: String, limit: Int = 30) -> String {
+private func compactLabel(_ value: String?, fallback: String, limit: Int = 72) -> String {
     guard let value, !value.isEmpty else { return fallback }
     return value.clippedForMenuBar(limit: limit)
 }

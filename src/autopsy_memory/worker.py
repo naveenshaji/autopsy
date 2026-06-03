@@ -907,10 +907,22 @@ def require_falkor_context(payload: dict, *, include_embeddings_status: bool = T
     return context
 
 
+def refresh_activity_snapshot_for_worker(module, falkor: dict, tool, workspace: dict) -> None:
+    try:
+        run_falkor_operation(
+            falkor,
+            lambda graph: module.refresh_activity_snapshot(graph, tool=tool, workspace=workspace),
+        )
+    except Exception:
+        pass
+
+
 def handle_memory_consult(payload: dict) -> dict:
     request = payload.get('request') or {}
-    tool, _module, workspace, embeddings_config, embeddings_status, falkor = require_falkor_context(payload)
-    return consult_via_falkor(tool, workspace, embeddings_config, embeddings_status, falkor, request)
+    tool, module, workspace, embeddings_config, embeddings_status, falkor = require_falkor_context(payload)
+    response = consult_via_falkor(tool, workspace, embeddings_config, embeddings_status, falkor, request)
+    refresh_activity_snapshot_for_worker(module, falkor, tool, workspace)
+    return response
 
 
 def handle_memory_health(payload: dict) -> dict:
@@ -1076,6 +1088,7 @@ def handle_memory_graph_note_create(payload: dict) -> dict:
                 response = module.build_graph_item_detail_payload(graph, tool=tool, workspace=workspace, stable_key=stable_key)
                 response['created_relations'] = relations
         response['write_quality'] = write_quality
+        module.refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
         return response
 
     return run_falkor_operation(
@@ -1119,6 +1132,7 @@ def handle_memory_graph_item_update(payload: dict) -> dict:
             metadata=metadata_request_argument(request) if request.get('metadata') is not None else None,
         )
         response['write_quality'] = write_quality
+        module.refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
         return response
 
     return run_falkor_operation(
@@ -1130,7 +1144,7 @@ def handle_memory_graph_item_update(payload: dict) -> dict:
 def handle_memory_graph_conflict_resolve(payload: dict) -> dict:
     request = payload.get('request') or {}
     tool, _module, workspace, _embeddings_config, _embeddings_status, falkor = require_falkor_context(payload)
-    return run_falkor_operation(
+    response = run_falkor_operation(
         falkor,
         lambda graph: falkor['module'].resolve_graph_conflict_payload(
             graph,
@@ -1142,16 +1156,21 @@ def handle_memory_graph_conflict_resolve(payload: dict) -> dict:
             summary=str(request.get('summary') or '') or None,
         ),
     )
+    refresh_activity_snapshot_for_worker(falkor['module'], falkor, tool, workspace)
+    return response
 
 
 def handle_memory_graph_item_delete(payload: dict) -> dict:
     request = payload.get('request') or {}
-    _tool, _module, _workspace, _embeddings_config, _embeddings_status, falkor = require_falkor_context(payload)
+    tool, module, workspace, _embeddings_config, _embeddings_status, falkor = require_falkor_context(payload)
     run_falkor_operation(
         falkor,
-        lambda graph: falkor['module'].delete_graph_item_payload(
-            graph,
-            stable_key=str(request.get('stable_key') or ''),
+        lambda graph: (
+            module.delete_graph_item_payload(
+                graph,
+                stable_key=str(request.get('stable_key') or ''),
+            ),
+            module.refresh_activity_snapshot(graph, tool=tool, workspace=workspace),
         ),
     )
     return {"deleted": True}
