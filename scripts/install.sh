@@ -10,7 +10,7 @@ if [ -z "${PYTHON:-}" ]; then
   fi
 fi
 VENV_DIR="${AUTOPSY_MEMORY_VENV:-$ROOT_DIR/.venv}"
-EXTRA="${AUTOPSY_MEMORY_EXTRA:-ml,dev}"
+EXTRA="${AUTOPSY_MEMORY_EXTRA:-dev}"
 
 "$PYTHON" - <<'PY'
 import sys

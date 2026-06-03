@@ -13,9 +13,6 @@ Required modules:
 - `falkordb`
 - `redis`
 - `redislite.falkordb_client`
-
-Optional module:
-
 - `sentence_transformers`
 
 ## Installed Command Is Wrong

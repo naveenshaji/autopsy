@@ -13,7 +13,7 @@ Autopsy does not require hosted sync for local operation.
 
 ## Model Downloads
 
-If the `ml` extra is installed, sentence-transformer models may be downloaded by the model provider. If you need a no-download setup, install without the `ml` extra and rely on lexical/Falkor retrieval.
+Autopsy includes the local ML runtime used for semantic retrieval and reranking. Sentence-transformer model weights may be downloaded by the model provider on first semantic or reranker use.
 
 ## Secrets
 

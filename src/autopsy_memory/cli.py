@@ -15213,7 +15213,7 @@ def build_health_payload(args: argparse.Namespace) -> dict[str, Any]:
         import_check("falkordb", required=True),
         import_check("redis", required=True),
         import_check("redislite.falkordb_client", required=True),
-        import_check("sentence_transformers", required=False),
+        import_check("sentence_transformers", required=True),
     ]
     required_ok = all(check["ok"] for check in checks if check["required"])
     repo_hint = repository_path_from_args(args) or str(Path.cwd().resolve())
@@ -15855,7 +15855,7 @@ def build_doctor_payload(args: argparse.Namespace) -> dict[str, Any]:
         import_check("redis", required=True),
         import_check("redislite.falkordb_client", required=True),
         falkordb_runtime_check(args),
-        import_check("sentence_transformers", required=False),
+        import_check("sentence_transformers", required=True),
     ]
     required_ok = all(check["ok"] for check in checks if check["required"])
     return {

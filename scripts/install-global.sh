@@ -19,7 +19,7 @@ Environment:
   PYTHON                 Python 3.12+ interpreter to bootstrap with.
   AUTOPSY_INSTALL_PREFIX Install prefix. Defaults to /opt/homebrew when writable,
                          otherwise ~/.local.
-  AUTOPSY_INSTALL_EXTRA  Package extra to install. Defaults to ml.
+  AUTOPSY_INSTALL_EXTRA  Package extra to install. ML is included by default.
   AUTOPSY_INSTALL_MENUBAR_AGENT
                          Set to 0 to skip installing the macOS menu bar
                          LaunchAgent. Defaults to 1 on macOS.
@@ -27,7 +27,7 @@ EOF
 }
 
 PREFIX="${AUTOPSY_INSTALL_PREFIX:-}"
-EXTRA="${AUTOPSY_INSTALL_EXTRA:-ml}"
+EXTRA="${AUTOPSY_INSTALL_EXTRA:-}"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -40,6 +40,7 @@ while [ "$#" -gt 0 ]; do
       shift 2
       ;;
     --no-ml)
+      # Compatibility no-op. ML is part of the base Autopsy runtime now.
       EXTRA=""
       shift
       ;;

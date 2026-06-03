@@ -174,9 +174,9 @@ Autopsy is local-first, but durable memory is still durable memory.
 - Treat Autopsy as project context, not a password manager.
 - If Falkor cannot initialize, Autopsy fails loudly instead of silently falling
   back to another persistence backend.
-- If the optional `ml` extra is installed, sentence-transformer models may be
-  downloaded by the model provider. The Homebrew install is self-contained for
-  normal local operation.
+- Autopsy includes the local ML runtime used for semantic retrieval and
+  reranking. Sentence-transformer model weights may be downloaded on first use
+  by the model provider.
 
 More detail: [docs/privacy-security.md](docs/privacy-security.md).
 

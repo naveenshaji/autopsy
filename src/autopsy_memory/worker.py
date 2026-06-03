@@ -781,7 +781,7 @@ def health_via_falkor(tool, workspace, embeddings_config, falkor, request: dict)
         module.import_check("falkordb", required=True),
         module.import_check("redis", required=True),
         module.import_check("redislite.falkordb_client", required=True),
-        module.import_check("sentence_transformers", required=False),
+        module.import_check("sentence_transformers", required=True),
     ]
     required_ok = all(check["ok"] for check in checks if check["required"])
     repo_hint = str(request.get('repo') or workspace.get('root_path') or os.getcwd())

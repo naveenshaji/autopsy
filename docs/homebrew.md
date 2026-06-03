@@ -29,8 +29,9 @@ pointing at the stable Homebrew `opt` path:
 ```
 
 The Homebrew formula is the preferred self-contained macOS distribution because
-it pins the Python dependencies and vendors the native Apple Silicon FalkorDB
-module used by the embedded graph backend.
+it pins the Python dependencies, includes the local semantic retrieval/reranker
+runtime, and vendors the native Apple Silicon FalkorDB module used by the
+embedded graph backend.
 
 Stop and remove the menu bar LaunchAgent with:
 

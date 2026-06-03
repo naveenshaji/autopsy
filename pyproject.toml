@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "autopsy-memory"
-version = "0.1.21"
+version = "0.1.22"
 description = "Local-first Falkor-backed memory layer and CLI for coding agents."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -26,19 +26,17 @@ dependencies = [
   "falkordb>=1.2.0",
   "falkordblite>=0.10.0",
   "redis>=7.1,<8",
+  "sentence-transformers>=2.7",
 ]
 
 [project.optional-dependencies]
-ml = [
-  "sentence-transformers>=2.7",
-]
+ml = []
 dev = [
   "build>=1.2",
   "pytest>=8.0",
 ]
 all = [
   "build>=1.2",
-  "sentence-transformers>=2.7",
   "pytest>=8.0",
 ]
 

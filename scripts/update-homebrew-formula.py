@@ -65,36 +65,51 @@ def pip_dependency_report(python: str) -> list[dict[str, Any]]:
         return json.loads(report_path.read_text())["install"]
 
 
-def pypi_release_file(name: str, version: str) -> tuple[str, str]:
+def report_distribution(item: dict[str, Any]) -> tuple[str, str]:
+    download_info = item.get("download_info") or {}
+    url = str(download_info.get("url") or "")
+    archive_info = download_info.get("archive_info") or {}
+    hashes = archive_info.get("hashes") or {}
+    sha = str(hashes.get("sha256") or "")
+    if url and sha:
+        return url, sha
+
+    metadata = item.get("metadata") or {}
+    name = metadata.get("name")
+    version = metadata.get("version")
+    if not name or not version:
+        raise RuntimeError(f"Cannot resolve distribution for install report item: {item!r}")
+
     data = json.loads(fetch_bytes(f"https://pypi.org/pypi/{name}/{version}/json"))
     urls = data["urls"]
-    for item in urls:
-        if item["packagetype"] == "sdist":
-            return item["url"], item["digests"]["sha256"]
-    for item in urls:
-        if item["packagetype"] == "bdist_wheel":
-            return item["url"], item["digests"]["sha256"]
+    for release_file in urls:
+        if release_file["packagetype"] == "bdist_wheel":
+            return release_file["url"], release_file["digests"]["sha256"]
+    for release_file in urls:
+        if release_file["packagetype"] == "sdist":
+            return release_file["url"], release_file["digests"]["sha256"]
     raise RuntimeError(f"No source or wheel distribution found for {name}=={version}")
 
 
 def resource_blocks(python: str) -> str:
-    resources: list[tuple[str, str, str]] = []
+    resources: list[tuple[str, str, str, bool]] = []
     for item in pip_dependency_report(python):
         metadata = item.get("metadata") or {}
         name = metadata.get("name")
         version = metadata.get("version")
         if not name or not version or name.lower().replace("_", "-") == PACKAGE_NAME:
             continue
-        url, sha = pypi_release_file(name, version)
-        resources.append((name.lower().replace("_", "-"), url, sha))
+        url, sha = report_distribution(item)
+        resources.append((name.lower().replace("_", "-"), url, sha, url.endswith(".whl")))
 
     blocks = []
-    for name, url, sha in sorted(resources):
+    for name, url, sha, is_wheel in sorted(resources):
+        url_suffix = ", using: :nounzip" if is_wheel else ""
         blocks.append(
             textwrap.dedent(
                 f"""\
                 resource "{name}" do
-                  url "{url}"
+                  url "{url}"{url_suffix}
                   sha256 "{sha}"
                 end
                 """
@@ -128,8 +143,30 @@ class {FORMULA_CLASS} < Formula
     sha256 "{FALKORDB_MACOS_ARM64_SHA256}"
   end
 
+  def autopsy_pip_install(target)
+    system Formula["python@3.12"].opt_bin/"python3.12", "-m", "pip",
+           "--python=#{{libexec}}/bin/python", "install",
+           "--verbose", "--no-deps", "--ignore-installed", "--no-compile",
+           target
+  end
+
+  def autopsy_resource_target
+    wheel = Dir["*.whl"].first
+    return Pathname.pwd/wheel if wheel
+
+    Pathname.pwd
+  end
+
   def install
-    virtualenv_install_with_resources without: "falkordb-macos-arm64v8"
+    venv = virtualenv_create(libexec, "python3.12", system_site_packages: true, without_pip: true)
+    resources.each do |resource|
+      next if resource.name == "falkordb-macos-arm64v8"
+
+      resource.stage do
+        autopsy_pip_install autopsy_resource_target
+      end
+    end
+    venv.pip_install_and_link buildpath
 
     native_module = libexec/"share/autopsy/falkordb.so"
     native_module.dirname.mkpath
