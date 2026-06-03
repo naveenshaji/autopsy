@@ -116,8 +116,8 @@ class {FORMULA_CLASS} < Formula
   sha256 "{source_sha}"
   license :cannot_represent
 
-  depends_on :macos
   depends_on arch: :arm64
+  depends_on :macos
   depends_on "openssl@3"
   depends_on "python@3.12"
 
@@ -146,7 +146,7 @@ class {FORMULA_CLASS} < Formula
     end
 
     wrapper_env = {{
-      AUTOPSY_UNIFIED_MEMORY: "1",
+      AUTOPSY_UNIFIED_MEMORY:       "1",
       AUTOPSY_FALKORDB_MODULE_PATH: native_module.to_s,
     }}
     %w[autopsy autopsy-memory-mcp autopsy-memory-worker].each do |script|

@@ -5,12 +5,12 @@ class AutopsyMemory < Formula
 
   desc "Local-first Falkor-backed memory layer and CLI for coding agents"
   homepage "https://github.com/naveenshaji/autopsy"
-  url "https://github.com/naveenshaji/autopsy/archive/refs/tags/v0.1.19.tar.gz"
-  sha256 "f314b95f64c9f4f8923e47c88f73227ba52b517eb0785ed40992a32d7b5184bd"
+  url "https://github.com/naveenshaji/autopsy/archive/refs/tags/v0.1.20.tar.gz"
+  sha256 "f084cde710b149e1996156a1009738a40789e77a32c6d6ba2835638f89001230"
   license :cannot_represent
 
-  depends_on :macos
   depends_on arch: :arm64
+  depends_on :macos
   depends_on "openssl@3"
   depends_on "python@3.12"
 
@@ -72,7 +72,7 @@ class AutopsyMemory < Formula
     end
 
     wrapper_env = {
-      AUTOPSY_UNIFIED_MEMORY: "1",
+      AUTOPSY_UNIFIED_MEMORY:       "1",
       AUTOPSY_FALKORDB_MODULE_PATH: native_module.to_s,
     }
     %w[autopsy autopsy-memory-mcp autopsy-memory-worker].each do |script|
