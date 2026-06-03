@@ -29,6 +29,7 @@ FALKORDB_LITE_PATH_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "FalkorDB" / "autopsy-mem
 GLOBAL_MEMORY_SETTINGS_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "Config" / "memory-settings.json"
 UNIFIED_MEMORY_ROOT_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "MemoryRoot"
 ACTIVITY_SNAPSHOT_PATH_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "Activity" / "activity.json"
+MODEL_WARMUP_STATUS_PATH_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "ML" / "model-warmup.json"
 STATUS_WINDOW_DAYS_DEFAULT = 21
 MENUBAR_RELATIVE_DIR = Path("apps") / "menubar"
 MENUBAR_INSTALLED_DIR_NAME = "menubar"
@@ -760,6 +761,142 @@ def load_cross_encoder(model_name: str, device: str):
         model = CrossEncoder(model_name, device=device)
         _RERANKER_MODEL_CACHE[key] = model
     return model
+
+
+def model_warmup_log_path() -> Path:
+    return APP_SUPPORT_DIR_DEFAULT / "Logs" / "model-warmup.log"
+
+
+def write_model_warmup_status(payload: dict[str, Any]) -> None:
+    MODEL_WARMUP_STATUS_PATH_DEFAULT.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = MODEL_WARMUP_STATUS_PATH_DEFAULT.with_suffix(".json.tmp")
+    temporary_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    temporary_path.replace(MODEL_WARMUP_STATUS_PATH_DEFAULT)
+
+
+def run_model_warmup(root_dir: Path | None = None) -> dict[str, Any]:
+    root = Path(root_dir or unified_memory_root_path()).expanduser()
+    started_at = datetime.now(timezone.utc).isoformat()
+    config = load_embeddings_config(root)
+    payload: dict[str, Any] = {
+        "ok": False,
+        "state": "running",
+        "started_at": started_at,
+        "completed_at": None,
+        "root": str(root),
+        "status_path": str(MODEL_WARMUP_STATUS_PATH_DEFAULT),
+        "models": [],
+    }
+    write_model_warmup_status(payload)
+
+    models: list[dict[str, Any]] = []
+
+    def append_model(kind: str, model_name: str, device: str, ok: bool, *, error: str | None = None, skipped: bool = False) -> None:
+        model_payload: dict[str, Any] = {
+            "kind": kind,
+            "model": model_name,
+            "device": device,
+            "ok": ok,
+            "skipped": skipped,
+        }
+        if error:
+            model_payload["error"] = error
+        models.append(model_payload)
+
+    provider = str(config.get("provider") or "").strip().lower()
+    embedding_model = str(config.get("model") or "").strip()
+    embedding_device = str(config.get("device") or "cpu")
+    if not config.get("enabled", True):
+        append_model("embedding", embedding_model, embedding_device, True, skipped=True, error="disabled")
+    elif provider != "sentence_transformers" or not embedding_model:
+        append_model("embedding", embedding_model, embedding_device, False, error=f"unsupported provider or missing model: {provider}")
+    else:
+        try:
+            model = load_sentence_transformer(embedding_model, embedding_device)
+            model.encode(
+                ["Autopsy model warmup"],
+                batch_size=1,
+                show_progress_bar=False,
+                normalize_embeddings=True,
+                convert_to_numpy=True,
+            )
+            append_model("embedding", embedding_model, embedding_device, True)
+        except Exception as exc:
+            append_model("embedding", embedding_model, embedding_device, False, error=str(exc))
+
+    reranker = reranker_config(config)
+    reranker_provider = str(reranker.get("provider") or "").strip().lower()
+    reranker_model = str(reranker.get("model") or "").strip()
+    reranker_device = str(reranker.get("device") or "cpu")
+    if not reranker.get("enabled", False):
+        append_model("reranker", reranker_model, reranker_device, True, skipped=True, error="disabled")
+    elif reranker_provider != "sentence_transformers" or not reranker_model:
+        append_model("reranker", reranker_model, reranker_device, False, error=f"unsupported provider or missing model: {reranker_provider}")
+    else:
+        try:
+            model = load_cross_encoder(reranker_model, reranker_device)
+            model.predict(
+                [["Autopsy model warmup", "Autopsy retrieval quality warmup document"]],
+                batch_size=1,
+                show_progress_bar=False,
+            )
+            append_model("reranker", reranker_model, reranker_device, True)
+        except Exception as exc:
+            append_model("reranker", reranker_model, reranker_device, False, error=str(exc))
+
+    ok = all(model.get("ok") for model in models)
+    payload.update({
+        "ok": ok,
+        "state": "complete" if ok else "failed",
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "models": models,
+    })
+    write_model_warmup_status(payload)
+    return payload
+
+
+def start_model_warmup_background(args: argparse.Namespace) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "skipped": False,
+        "started": False,
+        "pid": None,
+        "log_path": str(model_warmup_log_path()),
+        "status_path": str(MODEL_WARMUP_STATUS_PATH_DEFAULT),
+        "error": None,
+    }
+    if getattr(args, "dry_run", False):
+        payload.update({"skipped": True, "reason": "dry_run"})
+        return payload
+
+    root = Path(unified_memory_root_path())
+    command = [sys.executable, "-m", "autopsy_memory.cli", "model-warmup", "--root", str(root)]
+    log_path = model_warmup_log_path()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+    env["AUTOPSY_MODEL_WARMUP_BACKGROUND"] = "1"
+    try:
+        with log_path.open("ab") as log:
+            header = f"\n--- Autopsy model warmup {datetime.now(timezone.utc).isoformat()} ---\n"
+            log.write(header.encode("utf-8"))
+            process = subprocess.Popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                close_fds=True,
+                start_new_session=True,
+                env=env,
+            )
+        payload.update({
+            "started": True,
+            "pid": process.pid,
+            "command": command,
+            "root": str(root),
+        })
+    except Exception as exc:
+        payload["error"] = str(exc)
+    return payload
 
 
 def embed_texts_with_provider(texts: list[str], config: dict[str, Any]) -> list[list[float]]:
@@ -15324,7 +15461,7 @@ def menubar_candidate_dirs(args: argparse.Namespace) -> list[Path]:
         if resolved in seen:
             continue
         seen.add(resolved)
-        unique.append(candidate)
+        unique.append(resolved)
     return unique
 
 
@@ -15885,6 +16022,7 @@ def cmd_install(args: argparse.Namespace) -> None:
     doctor_payload: dict[str, Any] | None = None
     if not getattr(args, "skip_doctor", False) and not getattr(args, "dry_run", False):
         doctor_payload = build_doctor_payload(args)
+    model_warmup_payload = start_model_warmup_background(args)
 
     next_steps: list[str] = []
     if not path_repair_payload.get("ok") and not path_repair_payload.get("skipped"):
@@ -15902,6 +16040,8 @@ def cmd_install(args: argparse.Namespace) -> None:
     if doctor_payload is not None and not doctor_payload.get("ok"):
         failed = [str(check.get("name")) for check in doctor_payload.get("checks", []) if check.get("required") and not check.get("ok")]
         next_steps.append(f"Run autopsy doctor for details. Failed checks: {', '.join(failed) or 'required runtime'}")
+    if model_warmup_payload.get("error"):
+        next_steps.append("Run autopsy model-warmup to download local ML model weights.")
 
     payload = {
         "mode": "install",
@@ -15909,6 +16049,7 @@ def cmd_install(args: argparse.Namespace) -> None:
         "instructions": instructions_payload,
         "menubar": menubar_payload,
         "doctor": doctor_payload,
+        "model_warmup": model_warmup_payload,
         "workflow": {
             "complete": not next_steps,
             "next_steps": next_steps,
@@ -15916,6 +16057,13 @@ def cmd_install(args: argparse.Namespace) -> None:
     }
     print(json.dumps(payload, indent=2))
     if next_steps and not getattr(args, "dry_run", False):
+        raise SystemExit(1)
+
+
+def cmd_model_warmup(args: argparse.Namespace) -> None:
+    payload = run_model_warmup(Path(args.root).expanduser() if getattr(args, "root", None) else None)
+    print(json.dumps(payload, indent=2))
+    if not payload.get("ok"):
         raise SystemExit(1)
 
 
@@ -15967,6 +16115,8 @@ def cmd_menubar(args: argparse.Namespace) -> None:
         return
 
     bundle_path = ensure_menubar_app_bundle(app_dir, release=release, rebuild=bool(getattr(args, "rebuild", False)))
+    if menubar_gui_session_available() and install_menubar_launch_agent(args, app_dir, quiet=True):
+        return
     run_menubar_process(["open", str(bundle_path)], cwd=app_dir)
 
 
@@ -16034,6 +16184,7 @@ def build_parser() -> argparse.ArgumentParser:
             health=cmd_health,
             activity=cmd_activity,
             menubar=cmd_menubar,
+            model_warmup=cmd_model_warmup,
             create_note=cmd_create_note,
             update_item=cmd_update_item,
             delete_item=cmd_delete_item,

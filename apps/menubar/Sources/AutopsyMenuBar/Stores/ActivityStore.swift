@@ -210,22 +210,24 @@ final class ActivityStore: ObservableObject {
                     ))
                 }
 
-                if menubar.appBundleCurrent == false {
-                    issues.append(SetupHealthIssue(
-                        id: "menubar-app-stale",
-                        title: "Menu bar app is stale",
-                        detail: "The installed app bundle needs to be rebuilt.",
-                        systemImage: "arrow.triangle.2.circlepath"
-                    ))
-                }
+                if menubar.installed == true {
+                    if menubar.appBundleCurrent == false {
+                        issues.append(SetupHealthIssue(
+                            id: "menubar-app-stale",
+                            title: "Menu bar app is stale",
+                            detail: "The installed app bundle needs to be rebuilt.",
+                            systemImage: "arrow.triangle.2.circlepath"
+                        ))
+                    }
 
-                if menubar.launchAgentCurrent == false {
-                    issues.append(SetupHealthIssue(
-                        id: "menubar-agent-stale",
-                        title: "Login item points at old app",
-                        detail: "The LaunchAgent needs to be reinstalled.",
-                        systemImage: "arrow.triangle.2.circlepath"
-                    ))
+                    if menubar.launchAgentCurrent == false {
+                        issues.append(SetupHealthIssue(
+                            id: "menubar-agent-stale",
+                            title: "Login item points at old app",
+                            detail: "The LaunchAgent needs to be reinstalled.",
+                            systemImage: "arrow.triangle.2.circlepath"
+                        ))
+                    }
                 }
             }
         }

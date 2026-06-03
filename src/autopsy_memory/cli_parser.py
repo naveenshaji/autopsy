@@ -34,6 +34,7 @@ class CommandHandlers:
     health: CommandHandler
     activity: CommandHandler
     menubar: CommandHandler
+    model_warmup: CommandHandler
     create_note: CommandHandler
     update_item: CommandHandler
     delete_item: CommandHandler
@@ -344,6 +345,10 @@ def build_parser(
     menubar_parser.add_argument("--uninstall-launch-agent", action="store_true", help="Remove the Autopsy menu bar LaunchAgent.")
     menubar_parser.add_argument("--launch-agent-status", action="store_true", help="Print LaunchAgent installation and loaded status as JSON.")
     menubar_parser.set_defaults(func=handlers.menubar)
+
+    model_warmup_parser = subparsers.add_parser("model-warmup", help="Download and warm the local Autopsy ML models.")
+    model_warmup_parser.add_argument("--root", help="Memory root whose embedding configuration should be used. Defaults to the unified memory root.")
+    model_warmup_parser.set_defaults(func=handlers.model_warmup)
 
     create_parser = subparsers.add_parser("create", parents=[common], help="Create a typed Falkor memory note.")
     add_note_write_arguments(create_parser, include_kind=True)

@@ -110,18 +110,6 @@ struct ActivityPopover: View {
 
             Divider()
 
-            if !store.setupHealthIssues.isEmpty || store.isRepairingSetup {
-                SetupHealthRow(
-                    issues: store.setupHealthIssues,
-                    statusText: store.setupHealthStatusText,
-                    isLoading: store.isRepairingSetup,
-                    activeDetail: activeDetail,
-                    hoverDetailsEnabled: hoverDetailsEnabled,
-                    activateDetail: activateDetail,
-                    deactivateDetail: deactivateDetail
-                )
-            }
-
             AgentInstructionsRow(
                 targets: store.instructionTargets,
                 isLoading: store.instructionStatus == nil || store.isManagingInstructions,

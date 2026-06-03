@@ -191,6 +191,9 @@ class AutopsyCLIContractTests(unittest.TestCase):
         agent_args = parser.parse_args(["menubar", "--install-launch-agent", "--rebuild"])
         self.assertTrue(agent_args.install_launch_agent)
         self.assertTrue(agent_args.rebuild)
+        warmup_args = parser.parse_args(["model-warmup", "--root", "/tmp/autopsy-memory"])
+        self.assertEqual(warmup_args.command, "model-warmup")
+        self.assertEqual(warmup_args.root, "/tmp/autopsy-memory")
         install_args = parser.parse_args(["install", "--repo", "/tmp/project", "--agent", "codex", "--skip-menubar", "--skip-path-repair", "--skip-doctor"])
         self.assertEqual(install_args.command, "install")
         self.assertEqual(install_args.repo_path, "/tmp/project")
@@ -321,6 +324,20 @@ class AutopsyCLIContractTests(unittest.TestCase):
         cwd_index = candidates.index(cwd / cli.MENUBAR_RELATIVE_DIR)
         self.assertLess(installed_index, cwd_index)
 
+    def test_resolve_menubar_dir_returns_absolute_path_for_relative_dir(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["menubar", "--dir", "apps/menubar"])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            menubar_dir = root / "apps" / "menubar"
+            (menubar_dir / "Sources" / cli.MENUBAR_PRODUCT_NAME).mkdir(parents=True)
+            (menubar_dir / "Package.swift").write_text("// test package\n", encoding="utf-8")
+            with contextlib.chdir(root):
+                resolved = cli.resolve_menubar_dir(args)
+
+        self.assertTrue(resolved.is_absolute())
+        self.assertEqual(resolved, menubar_dir.resolve())
+
     def test_menubar_launch_agent_plist_current_detects_stale_payload(self):
         parser = cli.build_parser()
         args = parser.parse_args(["menubar", "--install-launch-agent"])
@@ -437,6 +454,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         with (
             mock.patch.object(cli, "install_path_repair_payload", return_value={"ok": True, "skipped": False, "repaired": False}),
             mock.patch.object(cli, "install_menubar_payload", return_value={"skipped": True, "reason": "unsupported_platform"}),
+            mock.patch.object(cli, "start_model_warmup_background", return_value={"skipped": False, "started": True, "error": None}),
             contextlib.redirect_stdout(stream),
         ):
             cli.cmd_install(args)
@@ -477,6 +495,83 @@ class AutopsyCLIContractTests(unittest.TestCase):
         ):
             cli.cmd_menubar(args)
         self.assertEqual(json.loads(stream.getvalue()), {"installed": False, "loaded": False})
+
+    def test_menubar_command_installs_launch_agent_by_default(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["menubar", "--dir", "/tmp/autopsy-menubar"])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_dir = Path(temp_dir) / "menubar"
+            app_dir.mkdir()
+            with (
+                mock.patch.object(cli.sys, "platform", "darwin"),
+                mock.patch.object(cli, "resolve_menubar_dir", return_value=app_dir),
+                mock.patch.object(cli, "ensure_menubar_app_bundle", return_value=app_dir / ".build" / "debug" / f"{cli.MENUBAR_PRODUCT_NAME}.app"),
+                mock.patch.object(cli, "menubar_gui_session_available", return_value=True),
+                mock.patch.object(cli, "install_menubar_launch_agent", return_value=True) as install_mock,
+                mock.patch.object(cli, "run_menubar_process") as run_mock,
+            ):
+                cli.cmd_menubar(args)
+
+        install_mock.assert_called_once_with(args, app_dir, quiet=True)
+        run_mock.assert_not_called()
+
+    def test_model_warmup_uses_embedding_and_reranker_loaders(self):
+        class FakeEmbeddingModel:
+            def encode(self, texts, **_kwargs):
+                return [[0.1, 0.2] for _text in texts]
+
+        class FakeRerankerModel:
+            def predict(self, pairs, **_kwargs):
+                return [0.5 for _pair in pairs]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            status_path = Path(temp_dir) / "model-warmup.json"
+            with (
+                mock.patch.object(cli, "MODEL_WARMUP_STATUS_PATH_DEFAULT", status_path),
+                mock.patch.object(cli, "load_sentence_transformer", return_value=FakeEmbeddingModel()) as embedding_mock,
+                mock.patch.object(cli, "load_cross_encoder", return_value=FakeRerankerModel()) as reranker_mock,
+            ):
+                payload = cli.run_model_warmup(Path(temp_dir))
+                status_exists = status_path.exists()
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["state"], "complete")
+        self.assertEqual({model["kind"] for model in payload["models"]}, {"embedding", "reranker"})
+        self.assertTrue(status_exists)
+        embedding_mock.assert_called_once_with("BAAI/bge-base-en-v1.5", "cpu")
+        reranker_mock.assert_called_once_with("BAAI/bge-reranker-base", "cpu")
+
+    def test_install_starts_model_warmup_background(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["install", "--skip-doctor"])
+        stream = io.StringIO()
+        warmup_payload = {
+            "skipped": False,
+            "started": True,
+            "pid": 12345,
+            "log_path": "/tmp/autopsy-model-warmup.log",
+            "status_path": "/tmp/autopsy-model-warmup.json",
+            "error": None,
+        }
+        with (
+            mock.patch.object(cli, "install_path_repair_payload", return_value={"ok": True, "skipped": False}),
+            mock.patch.object(cli, "install_instruction_payload", return_value={"workflow": {"complete": True, "next_steps": []}}),
+            mock.patch.object(cli, "install_menubar_payload", return_value={"skipped": True, "reason": "unsupported_platform"}),
+            mock.patch.object(cli, "start_model_warmup_background", return_value=warmup_payload) as warmup_mock,
+            contextlib.redirect_stdout(stream),
+        ):
+            cli.cmd_install(args)
+
+        payload = json.loads(stream.getvalue())
+        self.assertEqual(payload["model_warmup"], warmup_payload)
+        warmup_mock.assert_called_once_with(args)
+
+    def test_model_warmup_background_skips_dry_run(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["install", "--dry-run"])
+        payload = cli.start_model_warmup_background(args)
+        self.assertTrue(payload["skipped"])
+        self.assertEqual(payload["reason"], "dry_run")
 
     def test_restore_normalization_skips_operational_by_default(self):
         payload = {

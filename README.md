@@ -6,7 +6,7 @@ It gives tools like Codex, Claude Code, Gemini CLI, OpenCode, Cursor, GitHub
 Copilot, and Windsurf a durable place to remember decisions, fixes, preferences,
 procedures, and open questions across sessions and repos. It runs on your Mac,
 stores memory locally in a Falkor graph, and includes a quiet menu bar companion
-that shows recent writes, recent consults, setup state, and update/repair
+that shows recent writes, recent consults, agent instruction status, and update
 actions.
 
 Autopsy is meant to feel like a background utility: always available, mostly
@@ -14,18 +14,56 @@ silent, and only visible when something needs judgment.
 
 ## Why Use It
 
-Agents are powerful, but they forget. Autopsy helps them carry forward the parts
-of prior work that actually matter:
+Autopsy is for people who already try to give agents memory through markdown
+files, copied summaries, project notes, or hosted memory tools and want something
+more precise.
 
-- "We already tried that and it failed because..."
-- "This repo ships through this release checklist."
-- "The default memory root must stay neutral, not tied to one personal folder."
-- "The menu bar app should run from the Homebrew `opt` path."
-- "This instruction was superseded by a later fix."
+Markdown memory is useful for stable instructions, but it is a weak fit for
+operational memory. A file can say "use this release process," but it cannot
+easily answer which attempt superseded an older one, which decision a fix
+implemented, whether a remembered fact expired, or what neighboring work should
+be inspected before trusting a recall. As notes grow, agents either miss the
+right paragraph or over-read stale context.
+
+Hosted memory systems and API-backed vector stores solve some retrieval
+problems, but they usually add another account, another set of API keys, another
+sync boundary, and another place where durable repo context can leave your
+machine. Autopsy is local-first: the graph, activity snapshots, settings, and
+model cache live under `~/Library/Application Support/Autopsy`, and the default
+retrieval stack runs without external API keys.
+
+Compared with common agent-memory approaches:
+
+| Approach | Good For | Where Autopsy Is Stronger |
+| --- | --- | --- |
+| Markdown files / `AGENTS.md` | Stable rules, repo setup notes, human-editable instructions. | Typed memories, explicit relations, temporal history, and targeted recall without forcing agents to reread a growing note file. |
+| Copied summaries | Short handoff between two sessions. | Durable writes with provenance, update history, expiration, and later inspection commands. |
+| Plain vector memory | Finding semantically similar snippets. | Combining semantic recall with graph neighbors, lineage, relation evidence, and stale/superseded filtering. |
+| Hosted memory services | Cross-device sync and managed infrastructure. | Local-first storage, no required API keys, no external memory account, and repo context stays on your machine by default. |
+
+Autopsy's main difference is that memory is a graph, not just text chunks:
+
+- Memories are typed: `decision`, `attempt`, `observation`, `procedure`,
+  `preference`, `plan`, `question`, and more.
+- Relations are explicit: `refines`, `answers`, `supersedes`, `depends-on`,
+  `implements`, `constrains`, and `informed-by`.
+- Recall can walk nearby context instead of returning isolated snippets.
+- Temporal history records creates, updates, expiration, pinning, and deletion,
+  so agents can ask what was true then versus what is current now.
+- Stale or superseded facts can be filtered, inspected through timeline/history,
+  or kept as evidence without being treated as current guidance.
+
+That means Autopsy can answer agent-sized questions like:
+
+- "What did we already try, and why did it fail?"
+- "Which release checklist is current for this repo?"
+- "What decision does this implementation refine?"
+- "What changed since the last time this memory was written?"
+- "Is this memory current, expired, superseded, or only weakly related?"
 
 Autopsy is not a graph browser, note-taking app, or hosted memory service. It is
-a local memory layer for people who build with coding agents and want continuity
-without handing durable project context to another cloud product.
+a local graph memory layer for coding agents: quiet by default, technical enough
+to preserve lineage, and private enough to use for real project context.
 
 ## Quickstart
 
@@ -86,13 +124,13 @@ complete.
 **A quiet menu bar utility**
 
 The native macOS menu bar app watches a local activity snapshot. It shows recent
-memory writes, recent consults, agent instruction setup, update checks, and
-setup repair only when needed. It does not own storage and it does not browse
-the graph.
+memory writes, recent consults, agent instruction setup, and update checks. It
+does not own storage and it does not browse the graph.
 
 **Local-first operation**
 
-Autopsy does not require hosted sync. The default data directory is:
+Autopsy does not require hosted sync or API keys for its default retrieval
+stack. The default data directory is:
 
 ```text
 ~/Library/Application Support/Autopsy
@@ -175,8 +213,8 @@ Autopsy is local-first, but durable memory is still durable memory.
 - If Falkor cannot initialize, Autopsy fails loudly instead of silently falling
   back to another persistence backend.
 - Autopsy includes the local ML runtime used for semantic retrieval and
-  reranking. Sentence-transformer model weights may be downloaded on first use
-  by the model provider.
+  reranking. `autopsy install` starts a background model warmup so the
+  sentence-transformer weights are cached before normal retrieval work.
 
 More detail: [docs/privacy-security.md](docs/privacy-security.md).
 

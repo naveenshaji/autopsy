@@ -36,10 +36,11 @@ python -m pip install -U pip
 python -m pip install -e ".[dev]"
 ```
 
-For optional local embedding and reranker support:
+Local embedding and reranker support is part of the core runtime. To prefetch
+the model weights during local development:
 
 ```bash
-python -m pip install -e ".[ml,dev]"
+autopsy model-warmup
 ```
 
 On macOS, the menu bar app requires SwiftPM:
@@ -93,7 +94,7 @@ the failure.
 - Preserve local-first behavior. Autopsy should fail loudly when the graph
   runtime is unavailable.
 - Avoid storing secrets in tests, docs, fixtures, or memory examples.
-- Keep menu bar behavior quiet, fast, and scoped to useful activity/setup state.
+- Keep menu bar behavior quiet, fast, and scoped to useful activity and agent instruction status.
 - Prefer explicit semantic relations for durable memory writes in examples and
   tests when a relation applies.
 - Add narrowly scoped tests for CLI behavior, packaging behavior, and regression
@@ -125,4 +126,3 @@ Include:
 
 Do not include secrets, private keys, tokens, or sensitive project data in issue
 reports.
-
