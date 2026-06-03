@@ -5,8 +5,8 @@ class AutopsyMemory < Formula
 
   desc "Local-first Falkor-backed memory layer and CLI for coding agents"
   homepage "https://github.com/naveenshaji/autopsy"
-  url "https://github.com/naveenshaji/autopsy/archive/refs/tags/v0.1.20.tar.gz"
-  sha256 "f084cde710b149e1996156a1009738a40789e77a32c6d6ba2835638f89001230"
+  url "https://github.com/naveenshaji/autopsy/archive/refs/tags/v0.1.21.tar.gz"
+  sha256 "8db31ab8da2cf6b89ecc38f1766481346ce1f6bacaac0f289d4a90c80dde6093"
   license :cannot_represent
 
   depends_on arch: :arm64
