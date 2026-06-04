@@ -7,7 +7,7 @@ class AutopsyMemory < Formula
   homepage "https://github.com/naveenshaji/autopsy"
   url "https://github.com/naveenshaji/autopsy/archive/refs/tags/v0.1.23.tar.gz"
   sha256 "e883d044552e6355b9446de490d0dd72c412a7b6039a4038018d94daff53f84b"
-  license :cannot_represent
+  license "Apache-2.0"
 
   depends_on arch: :arm64
   depends_on "libyaml"

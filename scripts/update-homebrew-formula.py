@@ -129,7 +129,7 @@ class {FORMULA_CLASS} < Formula
   homepage "https://github.com/naveenshaji/autopsy"
   url "{source_url}"
   sha256 "{source_sha}"
-  license :cannot_represent
+  license "Apache-2.0"
 
   depends_on arch: :arm64
   depends_on "libyaml"

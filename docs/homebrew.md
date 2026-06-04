@@ -53,8 +53,7 @@ Plain `brew install autopsy-memory` without a tap requires acceptance into
 `homebrew/core`. The formula name is currently available, but core acceptance is
 a separate upstream review. Before submitting to core:
 
-- Replace the current all-rights-reserved license with a real open-source
-  license.
+- Keep the formula license as `Apache-2.0`.
 - Expect Homebrew core review to evaluate notability and formula acceptability.
 - Consider whether the menu bar app should stay in the formula or move to a
   separate cask; the owned tap is the most flexible path for shipping CLI plus

@@ -1,69 +1,24 @@
 # Autopsy Memory
 
-Autopsy is local memory for coding agents.
+Local graph memory for coding agents.
 
-It gives tools like Codex, Claude Code, Gemini CLI, OpenCode, Cursor, GitHub
-Copilot, and Windsurf a durable place to remember decisions, fixes, preferences,
-procedures, and open questions across sessions and repos. It runs on your Mac,
-stores memory locally in a Falkor graph, and includes a quiet menu bar companion
-that shows recent writes, recent consults, agent instruction status, and update
-actions.
+Autopsy gives Codex, Claude Code, Gemini CLI, OpenCode, Cursor, GitHub Copilot,
+and Windsurf a shared memory layer that survives across sessions and repos.
 
-Autopsy is meant to feel like a background utility: always available, mostly
-silent, and only visible when something needs judgment.
+It is built for agent work with history:
 
-## Why Use It
+- what was decided,
+- what failed,
+- what superseded what,
+- which procedure is current,
+- what context should be recalled before touching this repo again.
 
-Autopsy is for people who already try to give agents memory through markdown
-files, copied summaries, project notes, or hosted memory tools and want something
-more precise.
+Everything runs locally by default: graph storage, activity snapshots, settings,
+embeddings, reranking, and the menu bar companion. No hosted memory account. No
+required API keys.
 
-Markdown memory is useful for stable instructions, but it is a weak fit for
-operational memory. A file can say "use this release process," but it cannot
-easily answer which attempt superseded an older one, which decision a fix
-implemented, whether a remembered fact expired, or what neighboring work should
-be inspected before trusting a recall. As notes grow, agents either miss the
-right paragraph or over-read stale context.
-
-Hosted memory systems and API-backed vector stores solve some retrieval
-problems, but they usually add another account, another set of API keys, another
-sync boundary, and another place where durable repo context can leave your
-machine. Autopsy is local-first: the graph, activity snapshots, settings, and
-model cache live under `~/Library/Application Support/Autopsy`, and the default
-retrieval stack runs without external API keys.
-
-Compared with common agent-memory approaches:
-
-| Approach | Good For | Where Autopsy Is Stronger |
-| --- | --- | --- |
-| Markdown files / `AGENTS.md` | Stable rules, repo setup notes, human-editable instructions. | Typed memories, explicit relations, temporal history, and targeted recall without forcing agents to reread a growing note file. |
-| Copied summaries | Short handoff between two sessions. | Durable writes with provenance, update history, expiration, and later inspection commands. |
-| Plain vector memory | Finding semantically similar snippets. | Combining semantic recall with graph neighbors, lineage, relation evidence, and stale/superseded filtering. |
-| Hosted memory services | Cross-device sync and managed infrastructure. | Local-first storage, no required API keys, no external memory account, and repo context stays on your machine by default. |
-
-Autopsy's main difference is that memory is a graph, not just text chunks:
-
-- Memories are typed: `decision`, `attempt`, `observation`, `procedure`,
-  `preference`, `plan`, `question`, and more.
-- Relations are explicit: `refines`, `answers`, `supersedes`, `depends-on`,
-  `implements`, `constrains`, and `informed-by`.
-- Recall can walk nearby context instead of returning isolated snippets.
-- Temporal history records creates, updates, expiration, pinning, and deletion,
-  so agents can ask what was true then versus what is current now.
-- Stale or superseded facts can be filtered, inspected through timeline/history,
-  or kept as evidence without being treated as current guidance.
-
-That means Autopsy can answer agent-sized questions like:
-
-- "What did we already try, and why did it fail?"
-- "Which release checklist is current for this repo?"
-- "What decision does this implementation refine?"
-- "What changed since the last time this memory was written?"
-- "Is this memory current, expired, superseded, or only weakly related?"
-
-Autopsy is not a graph browser, note-taking app, or hosted memory service. It is
-a local graph memory layer for coding agents: quiet by default, technical enough
-to preserve lineage, and private enough to use for real project context.
+The macOS menu bar app stays quiet. It shows recent writes, recent consults,
+agent instruction status, and updates.
 
 ## Quickstart
 
@@ -71,9 +26,8 @@ Requirements:
 
 - macOS on Apple Silicon.
 - Homebrew.
-- Python is installed by the Homebrew formula.
 
-Install Autopsy:
+Install:
 
 ```bash
 brew tap naveenshaji/autopsy
@@ -83,10 +37,10 @@ autopsy install
 
 `autopsy install` is the normal setup command. It:
 
-- verifies and repairs the `autopsy` command on your PATH when possible,
+- verifies the `autopsy` command on your PATH,
 - installs global agent instructions,
-- starts the macOS menu bar app through a supervised LaunchAgent,
-- runs `autopsy doctor` so setup problems fail loudly.
+- starts the macOS menu bar app,
+- warms up the local retrieval models.
 
 Check that everything is ready:
 
@@ -99,6 +53,23 @@ autopsy status --current-only
 After setup, use your coding agent normally. The installed agent instructions
 tell supported agents when to consult Autopsy before substantial work and when
 to write durable outcomes after material work.
+
+## Why Autopsy
+
+Markdown files are good instructions. They are bad operational memory.
+
+Autopsy stores memory as typed graph records instead of a growing note file.
+That gives agents:
+
+- **Lineage:** what refined, implemented, superseded, or depended on what.
+- **Temporal recall:** what was true then versus what is current now.
+- **Local semantic retrieval:** embeddings and reranking without external APIs.
+- **Bounded context:** compact answers with evidence instead of whole-file dumps.
+- **Inspectability:** exact reads through `item`, `timeline`, `history`, and
+  `neighbors`.
+
+Use it when you want agents to stop rediscovering the same repo facts and start
+carrying forward the state of the work.
 
 ## What You Get
 
@@ -251,10 +222,14 @@ More detail: [docs/troubleshooting.md](docs/troubleshooting.md).
 - [Benchmarks](docs/benchmarks.md)
 - [Release checklist](docs/release-checklist.md)
 
+## License
+
+Autopsy is licensed under the Apache License, Version 2.0. See
+[LICENSE.md](LICENSE.md).
+
 ## For Contributors
 
-Autopsy is alpha software and the repository is public, but it is not yet under
-an open-source license. See [LICENSE.md](LICENSE.md) and coordinate before
-spending significant time on external code contributions.
+Autopsy is alpha software. Please coordinate before spending significant time on
+larger external code contributions.
 
 Start here: [CONTRIBUTING.md](CONTRIBUTING.md).

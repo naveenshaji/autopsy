@@ -33,9 +33,9 @@ Use this checklist before tagging or publishing Autopsy Memory.
 - Version in `pyproject.toml` matches `src/autopsy_memory/__init__.py`.
 - README install commands work from a clean checkout.
 - CLI entrypoints exist: `autopsy`, `autopsy-memory-worker`, and `autopsy-memory-mcp`.
-- The license file is intentional for the release channel.
+- `LICENSE.md` contains the Apache License, Version 2.0.
+- Package metadata and Homebrew formula license fields use `Apache-2.0`.
 - If publishing through the owned Homebrew tap, copy `Formula/autopsy-memory.rb` to `naveenshaji/homebrew-autopsy`.
-- If submitting to `homebrew/core`, replace the current all-rights-reserved license before opening the PR.
 
 ## Product Safety
 
@@ -49,7 +49,7 @@ Use this checklist before tagging or publishing Autopsy Memory.
 
 ## Optional Public Release
 
-- Select a real open-source license before making the repo public.
+- Confirm release notes and package metadata reflect the Apache-2.0 license.
 - Add GitHub release notes.
 - Add signed artifacts or package provenance if distributing binaries.
 - Add a public benchmark harness before making comparative claims.

@@ -2,11 +2,12 @@
 
 Thanks for taking the time to look at Autopsy.
 
-This repository is public, but it is not yet under an open-source license. Until
-`LICENSE.md` is replaced with an explicit open-source license, treat the code as
-all-rights-reserved. Issues, bug reports, design feedback, and small coordinated
-patches are welcome; please discuss larger code contributions before investing
-significant time.
+Autopsy is licensed under the Apache License, Version 2.0. Unless you
+explicitly state otherwise, any contribution intentionally submitted for
+inclusion in Autopsy is submitted under that license.
+
+Issues, bug reports, design feedback, and small coordinated patches are welcome;
+please discuss larger code contributions before investing significant time.
 
 ## Good First Contributions
 
