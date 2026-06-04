@@ -1,5 +1,11 @@
 # Autopsy Memory
 
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+![macOS](https://img.shields.io/badge/platform-macOS-black.svg)
+![Homebrew](https://img.shields.io/badge/install-Homebrew-fbb040.svg)
+![Python](https://img.shields.io/badge/python-3.12%2B-3776ab.svg)
+![Status](https://img.shields.io/badge/status-Alpha-orange.svg)
+
 Local graph memory for coding agents.
 
 Autopsy gives Codex, Claude Code, Gemini CLI, OpenCode, Cursor, GitHub Copilot,
@@ -225,7 +231,7 @@ More detail: [docs/troubleshooting.md](docs/troubleshooting.md).
 ## License
 
 Autopsy is licensed under the Apache License, Version 2.0. See
-[LICENSE.md](LICENSE.md).
+[LICENSE](LICENSE).
 
 ## For Contributors
 
