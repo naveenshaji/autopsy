@@ -54,6 +54,10 @@ class HomebrewFormulaGeneratorTests(unittest.TestCase):
         self.assertIn("install --dry-run --skip-menubar --smoke-test --skip-write-smoke", formula)
         self.assertIn('if install_payload["smoke_test"]', formula)
         self.assertIn('install_payload.dig("smoke_test", "reason") == "dry_run"', formula)
+        self.assertIn("empty_status = JSON.parse", formula)
+        self.assertIn('empty_status.dig("status", "summary")', formula)
+        self.assertIn('empty_status.dig("workflow", "next_step")', formula)
+        self.assertIn('empty_status.dig("onboarding", "empty")', formula)
 
     def test_formula_generator_rejects_wrong_python_version(self):
         generator = load_generator()

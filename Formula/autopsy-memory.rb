@@ -343,6 +343,18 @@ class AutopsyMemory < Formula
         assert install_payload.dig("smoke_test", "reason") == "dry_run", "expected dry-run smoke test skip"
       end
 
+      with_env(
+        AUTOPSY_APP_SUPPORT_DIR:     (testpath/"empty-app-support").to_s,
+        AUTOPSY_UNIFIED_MEMORY_ROOT: (testpath/"empty-root").to_s,
+      ) do
+        empty_status = JSON.parse(shell_output("#{bin}/autopsy status --current-only --limit 1 --section-limit 1"))
+        assert_equal "No memory has been written yet.", empty_status.dig("status", "summary")
+        assert_equal "empty", empty_status.dig("workflow", "status")
+        refute empty_status.dig("workflow", "complete"), "expected empty status workflow to be incomplete"
+        assert_equal "write_memory", empty_status.dig("workflow", "next_step")
+        assert empty_status.dig("onboarding", "empty"), "expected fresh status onboarding"
+      end
+
       menubar_paths = JSON.parse(shell_output("#{bin}/autopsy menubar --print-path"))
       assert menubar_paths["app_bundle_exists"], "expected prebuilt menu bar app bundle"
       assert menubar_paths["app_bundle_current"], "expected current menu bar app bundle"
