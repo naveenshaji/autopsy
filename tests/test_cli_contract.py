@@ -897,6 +897,91 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertTrue(payload["skipped"])
         self.assertEqual(payload["reason"], "dry_run")
 
+    def test_model_warmup_check_reports_not_started_without_failure(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            status_path = Path(temp_dir) / "model-warmup.json"
+            log_path = Path(temp_dir) / "model-warmup.log"
+            with (
+                mock.patch.object(cli, "MODEL_WARMUP_STATUS_PATH_DEFAULT", status_path),
+                mock.patch.object(cli, "model_warmup_log_path", return_value=log_path),
+            ):
+                payload = cli.model_warmup_check()
+
+        self.assertTrue(payload["ok"])
+        self.assertFalse(payload["required"])
+        self.assertEqual(payload["state"], "not_started")
+        self.assertIn("autopsy install", payload["message"])
+
+    def test_model_warmup_check_reports_failed_status(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            status_path = Path(temp_dir) / "model-warmup.json"
+            log_path = Path(temp_dir) / "model-warmup.log"
+            status_path.write_text(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "state": "failed",
+                        "started_at": "2026-06-05T00:00:00Z",
+                        "completed_at": "2026-06-05T00:01:00Z",
+                        "models": [
+                            {
+                                "kind": "embedding",
+                                "model": "BAAI/bge-base-en-v1.5",
+                                "ok": False,
+                                "error": "network",
+                            },
+                            {"kind": "reranker", "model": "BAAI/bge-reranker-base", "ok": True},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(cli, "MODEL_WARMUP_STATUS_PATH_DEFAULT", status_path),
+                mock.patch.object(cli, "model_warmup_log_path", return_value=log_path),
+            ):
+                payload = cli.model_warmup_check()
+
+        self.assertFalse(payload["ok"])
+        self.assertFalse(payload["required"])
+        self.assertEqual(payload["state"], "failed")
+        self.assertEqual(payload["failed_models"][0]["kind"], "embedding")
+        self.assertIn("autopsy model-warmup", payload["error"])
+
+    def test_doctor_includes_non_required_model_warmup_check(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["doctor"])
+        warmup_payload = {"name": "model_warmup", "required": False, "ok": False, "state": "failed"}
+        with (
+            mock.patch.object(
+                cli,
+                "python_version_check",
+                return_value={"name": "python_version", "required": True, "ok": True},
+            ),
+            mock.patch.object(
+                cli,
+                "installed_autopsy_command_check",
+                return_value={"name": "installed_autopsy_command", "required": True, "ok": True},
+            ),
+            mock.patch.object(
+                cli,
+                "import_check",
+                side_effect=lambda module, *, required: {"name": module, "required": required, "ok": True},
+            ),
+            mock.patch.object(
+                cli,
+                "falkordb_runtime_check",
+                return_value={"name": "falkordb_runtime", "required": True, "ok": True},
+            ),
+            mock.patch.object(cli, "model_warmup_check", return_value=warmup_payload),
+        ):
+            payload = cli.build_doctor_payload(args)
+
+        self.assertTrue(payload["ok"])
+        self.assertIn(warmup_payload, payload["checks"])
+        self.assertIn("model_warmup_status", payload["paths"])
+        self.assertIn("model_warmup_log", payload["paths"])
+
     def test_restore_normalization_skips_operational_by_default(self):
         payload = {
             "items": [

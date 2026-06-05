@@ -775,6 +775,51 @@ def write_model_warmup_status(payload: dict[str, Any]) -> None:
     temporary_path.replace(MODEL_WARMUP_STATUS_PATH_DEFAULT)
 
 
+def model_warmup_check() -> dict[str, Any]:
+    status_path = MODEL_WARMUP_STATUS_PATH_DEFAULT
+    payload: dict[str, Any] = {
+        "name": "model_warmup",
+        "required": False,
+        "ok": True,
+        "status_path": str(status_path),
+        "log_path": str(model_warmup_log_path()),
+    }
+    if not status_path.exists():
+        payload.update({
+            "state": "not_started",
+            "message": (
+                "Model warmup has not run yet. Run autopsy install or "
+                "autopsy model-warmup to cache local ML model weights."
+            ),
+        })
+        return payload
+
+    try:
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        payload.update({
+            "ok": False,
+            "state": "invalid",
+            "error": f"Could not read model warmup status: {exc}",
+        })
+        return payload
+
+    state = str(status.get("state") or "unknown")
+    models = status.get("models") if isinstance(status.get("models"), list) else []
+    payload.update({
+        "ok": bool(status.get("ok")) or state == "running",
+        "state": state,
+        "started_at": status.get("started_at"),
+        "completed_at": status.get("completed_at"),
+        "models": models,
+    })
+    if not payload["ok"]:
+        failed_models = [model for model in models if isinstance(model, dict) and not model.get("ok")]
+        payload["failed_models"] = failed_models
+        payload["error"] = "Model warmup failed. Run autopsy model-warmup and inspect the warmup log."
+    return payload
+
+
 def run_model_warmup(root_dir: Path | None = None) -> dict[str, Any]:
     root = Path(root_dir or unified_memory_root_path()).expanduser()
     started_at = datetime.now(timezone.utc).isoformat()
@@ -16123,6 +16168,7 @@ def build_doctor_payload(args: argparse.Namespace) -> dict[str, Any]:
         import_check("redislite.falkordb_client", required=True),
         falkordb_runtime_check(args),
         import_check("sentence_transformers", required=True),
+        model_warmup_check(),
     ]
     required_ok = all(check["ok"] for check in checks if check["required"])
     return {
@@ -16133,6 +16179,8 @@ def build_doctor_payload(args: argparse.Namespace) -> dict[str, Any]:
             "falkordb_lite_path": str(resolved_lite_path(args) or ""),
             "memory_settings": str(GLOBAL_MEMORY_SETTINGS_DEFAULT),
             "unified_memory_root": str(unified_memory_root_path()),
+            "model_warmup_status": str(MODEL_WARMUP_STATUS_PATH_DEFAULT),
+            "model_warmup_log": str(model_warmup_log_path()),
         },
         "environment": {
             "AUTOPSY_APP_SUPPORT_DIR": os.environ.get("AUTOPSY_APP_SUPPORT_DIR"),

@@ -15,6 +15,15 @@ Required modules:
 - `redislite.falkordb_client`
 - `sentence_transformers`
 
+`doctor` also reports a non-required `model_warmup` check. If it shows
+`failed` or `invalid`, run:
+
+```bash
+autopsy model-warmup
+```
+
+Then inspect the model warmup log path shown by `doctor`.
+
 ## Installed Command Is Wrong
 
 If `autopsy doctor` reports that `autopsy` is missing, shadowed, or still the

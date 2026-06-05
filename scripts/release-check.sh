@@ -35,7 +35,20 @@ fi
 
 PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" --help >/dev/null
 PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" version --json >/dev/null
-PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" doctor >/dev/null
+PATH="$TMP_DIR/venv/bin:$PATH" AUTOPSY_APP_SUPPORT_DIR="$TMP_DIR/doctor-app-support" "$TMP_DIR/venv/bin/autopsy" doctor > "$TMP_DIR/doctor.json"
+"$PYTHON" - "$TMP_DIR/doctor.json" <<'PY'
+import json
+import sys
+
+payload = json.loads(open(sys.argv[1], encoding="utf-8").read())
+assert payload.get("ok") is True, payload
+checks = {check.get("name"): check for check in payload.get("checks", [])}
+warmup = checks.get("model_warmup") or {}
+assert warmup.get("required") is False, warmup
+assert warmup.get("state") == "not_started", warmup
+assert payload.get("paths", {}).get("model_warmup_status"), payload.get("paths")
+assert payload.get("paths", {}).get("model_warmup_log"), payload.get("paths")
+PY
 PATH="$TMP_DIR/venv/bin:$PATH" AUTOPSY_APP_SUPPORT_DIR="$TMP_DIR/fresh-app-support" AUTOPSY_UNIFIED_MEMORY_ROOT="$TMP_DIR/fresh-root" "$TMP_DIR/venv/bin/autopsy" status --current-only --limit 1 --section-limit 1 >/dev/null
 PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" install --dry-run --skip-menubar >/dev/null
 PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" install --dry-run --skip-menubar --smoke-test --skip-write-smoke > "$TMP_DIR/install-dry-run-smoke.json"
