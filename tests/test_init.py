@@ -75,6 +75,35 @@ Old memory instructions.
             )
         self.assertEqual(targets, [])
 
+    def test_build_init_payload_writes_all_global_agent_targets(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            home = Path(tmp_dir) / "home"
+            args = argparse.Namespace(
+                global_scope=True,
+                repo_path=None,
+                agent="all",
+                print_instructions=False,
+                mcp=False,
+                dry_run=False,
+                check=False,
+                yes=False,
+                smoke_test=False,
+                skip_write_smoke=True,
+                autopsy_command_path="/opt/homebrew/bin/autopsy",
+            )
+            with mock.patch.object(init_module.Path, "home", return_value=home):
+                payload = init_module.build_init_payload(args)
+
+            targets = payload["targets"]
+            self.assertEqual({target["agent"] for target in targets}, {"codex", "claude", "gemini", "opencode"})
+            self.assertTrue(all(target["scope"] == "global" for target in targets))
+            self.assertTrue(all(target["state"] == "managed" for target in targets))
+            self.assertTrue(all(target["action"] == "added" for target in targets))
+            for target in targets:
+                path = Path(target["path"])
+                self.assertTrue(path.exists(), target)
+                self.assertIn(init_module.MANAGED_START, path.read_text(encoding="utf-8"))
+
     def test_dry_run_does_not_write_files(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             repo = Path(tmp_dir) / "repo"

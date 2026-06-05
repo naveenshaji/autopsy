@@ -84,7 +84,17 @@ assert payload.get("instructions", {}).get("workflow", {}).get("complete") is Tr
 assert payload.get("model_warmup", {}).get("reason") == "skip_model_warmup", payload.get("model_warmup")
 smoke = payload.get("smoke_test") or {}
 assert smoke.get("ok") is True, smoke
-assert (home / ".codex" / "AGENTS.md").exists(), payload.get("instructions")
+targets = payload.get("instructions", {}).get("targets") or []
+global_targets = [target for target in targets if target.get("scope") == "global"]
+assert {target.get("agent") for target in global_targets} == {"codex", "claude", "gemini", "opencode"}, global_targets
+for target in global_targets:
+    assert target.get("state") == "managed", target
+    assert target.get("action") in {"added", "updated", "unchanged"}, target
+    path = Path(str(target.get("path") or ""))
+    assert path.exists(), target
+    assert home in path.parents, target
+    text = path.read_text(encoding="utf-8")
+    assert "AUTOPSY_MEMORY_START" in text and "AUTOPSY_MEMORY_END" in text, target
 PY
 PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" init --check >/dev/null
 PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" instructions >/dev/null
