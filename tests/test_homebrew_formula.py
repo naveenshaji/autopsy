@@ -49,6 +49,8 @@ class HomebrewFormulaGeneratorTests(unittest.TestCase):
         self.assertIn('next if resource.name == "falkordb-macos-arm64v8"', formula)
         self.assertIn('with_env(PATH: "#{bin}:#{ENV.fetch("PATH", "")}")', formula)
         self.assertIn("autopsy install --smoke-test", formula)
+        self.assertIn("install --dry-run --skip-menubar --smoke-test --skip-write-smoke", formula)
+        self.assertIn('assert_equal "dry_run", install_payload.dig("smoke_test", "reason")', formula)
 
 
 if __name__ == "__main__":

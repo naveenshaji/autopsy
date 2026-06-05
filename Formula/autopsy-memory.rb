@@ -335,6 +335,12 @@ class AutopsyMemory < Formula
       system bin/"autopsy", "version", "--json"
       system bin/"autopsy", "doctor"
 
+      install_payload = JSON.parse(
+        shell_output("#{bin}/autopsy install --dry-run --skip-menubar --smoke-test --skip-write-smoke"),
+      )
+      assert install_payload.dig("workflow", "complete"), "expected dry-run install workflow to complete"
+      assert_equal "dry_run", install_payload.dig("smoke_test", "reason")
+
       menubar_paths = JSON.parse(shell_output("#{bin}/autopsy menubar --print-path"))
       assert menubar_paths["app_bundle_exists"], "expected prebuilt menu bar app bundle"
       assert menubar_paths["app_bundle_current"], "expected current menu bar app bundle"
