@@ -69,6 +69,8 @@ payload = json.loads(open(sys.argv[1], encoding="utf-8").read())
 onboarding = payload.get("onboarding") or {}
 assert onboarding.get("empty") is True, onboarding
 assert onboarding.get("state") == "empty", onboarding
+assert "autopsy install" in onboarding.get("message", ""), onboarding
+assert payload.get("activity", {}).get("attention") == [], payload.get("activity")
 assert payload.get("snapshot", {}).get("schema_version") == 1, payload.get("snapshot")
 PY
 PYTHON="$TMP_DIR/venv/bin/python" AUTOPSY_INSTALL_MATRIX_REQUIRE_RUNTIME=1 ./scripts/install-matrix-check.sh >/dev/null

@@ -146,6 +146,8 @@ onboarding = payload.get("onboarding") or {}
 assert onboarding.get("state") == "empty", onboarding
 assert onboarding.get("empty") is True, onboarding
 assert "No memory" in onboarding.get("title", ""), onboarding
+assert "autopsy install" in onboarding.get("message", ""), onboarding
+assert payload.get("activity", {}).get("attention") == [], payload.get("activity")
 assert payload.get("snapshot", {}).get("schema_version") == 1, payload.get("snapshot")
 PY
 elif [ "${AUTOPSY_INSTALL_MATRIX_REQUIRE_RUNTIME:-0}" = "1" ]; then
