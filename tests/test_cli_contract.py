@@ -194,13 +194,26 @@ class AutopsyCLIContractTests(unittest.TestCase):
         warmup_args = parser.parse_args(["model-warmup", "--root", "/tmp/autopsy-memory"])
         self.assertEqual(warmup_args.command, "model-warmup")
         self.assertEqual(warmup_args.root, "/tmp/autopsy-memory")
-        install_args = parser.parse_args(["install", "--repo", "/tmp/project", "--agent", "codex", "--skip-menubar", "--skip-path-repair", "--skip-doctor", "--smoke-test", "--skip-write-smoke"])
+        install_args = parser.parse_args([
+            "install",
+            "--repo",
+            "/tmp/project",
+            "--agent",
+            "codex",
+            "--skip-menubar",
+            "--skip-path-repair",
+            "--skip-doctor",
+            "--skip-model-warmup",
+            "--smoke-test",
+            "--skip-write-smoke",
+        ])
         self.assertEqual(install_args.command, "install")
         self.assertEqual(install_args.repo_path, "/tmp/project")
         self.assertEqual(install_args.agent, "codex")
         self.assertTrue(install_args.skip_menubar)
         self.assertTrue(install_args.skip_path_repair)
         self.assertTrue(install_args.skip_doctor)
+        self.assertTrue(install_args.skip_model_warmup)
         self.assertTrue(install_args.smoke_test)
         self.assertTrue(install_args.skip_write_smoke)
 
@@ -896,6 +909,13 @@ class AutopsyCLIContractTests(unittest.TestCase):
         payload = cli.start_model_warmup_background(args)
         self.assertTrue(payload["skipped"])
         self.assertEqual(payload["reason"], "dry_run")
+
+    def test_model_warmup_background_honors_skip_flag(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["install", "--skip-model-warmup"])
+        payload = cli.start_model_warmup_background(args)
+        self.assertTrue(payload["skipped"])
+        self.assertEqual(payload["reason"], "skip_model_warmup")
 
     def test_model_warmup_check_reports_not_started_without_failure(self):
         with tempfile.TemporaryDirectory() as temp_dir:

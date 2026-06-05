@@ -913,6 +913,9 @@ def start_model_warmup_background(args: argparse.Namespace) -> dict[str, Any]:
     if getattr(args, "dry_run", False):
         payload.update({"skipped": True, "reason": "dry_run"})
         return payload
+    if getattr(args, "skip_model_warmup", False):
+        payload.update({"skipped": True, "reason": "skip_model_warmup"})
+        return payload
 
     root = Path(unified_memory_root_path())
     command = [sys.executable, "-m", "autopsy_memory.cli", "model-warmup", "--root", str(root)]

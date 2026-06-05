@@ -150,6 +150,7 @@ def build_parser(
     install_parser.add_argument("--skip-instructions", action="store_true", help="Do not install agent instructions.")
     install_parser.add_argument("--skip-menubar", action="store_true", help="Do not install the macOS menu bar LaunchAgent.")
     install_parser.add_argument("--skip-doctor", action="store_true", help="Do not run doctor after setup.")
+    install_parser.add_argument("--skip-model-warmup", action="store_true", help="Do not start the background local ML model warmup.")
     install_parser.add_argument("--menubar-dir", help="Path to the Swift menu bar app package.")
     install_parser.add_argument("--rebuild", action="store_true", help="Force rebuilding the Swift menu bar app before installing startup.")
     install_parser.add_argument("--release", action="store_true", help="Use a release SwiftPM build for the menu bar app.")

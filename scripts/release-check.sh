@@ -62,6 +62,30 @@ assert smoke.get("skipped") is True, smoke
 assert smoke.get("reason") == "dry_run", smoke
 assert payload.get("workflow", {}).get("complete") is True, payload.get("workflow")
 PY
+mkdir -p "$TMP_DIR/install-home"
+PATH="$TMP_DIR/venv/bin:$PATH" \
+  HOME="$TMP_DIR/install-home" \
+  AUTOPSY_APP_SUPPORT_DIR="$TMP_DIR/install-app-support" \
+  AUTOPSY_UNIFIED_MEMORY_ROOT="$TMP_DIR/install-root" \
+  "$TMP_DIR/venv/bin/autopsy" install \
+    --skip-menubar \
+    --skip-model-warmup \
+    --smoke-test \
+    --skip-write-smoke > "$TMP_DIR/install-real-smoke.json"
+"$PYTHON" - "$TMP_DIR/install-real-smoke.json" "$TMP_DIR/install-home" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(open(sys.argv[1], encoding="utf-8").read())
+home = Path(sys.argv[2])
+assert payload.get("workflow", {}).get("complete") is True, payload.get("workflow")
+assert payload.get("instructions", {}).get("workflow", {}).get("complete") is True, payload.get("instructions")
+assert payload.get("model_warmup", {}).get("reason") == "skip_model_warmup", payload.get("model_warmup")
+smoke = payload.get("smoke_test") or {}
+assert smoke.get("ok") is True, smoke
+assert (home / ".codex" / "AGENTS.md").exists(), payload.get("instructions")
+PY
 PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" init --check >/dev/null
 PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" instructions >/dev/null
 PATH="$TMP_DIR/venv/bin:$PATH" AUTOPSY_UNIFIED_MEMORY=0 AUTOPSY_APP_SUPPORT_DIR="$TMP_DIR/app-support" AUTOPSY_FALKORDB_LITE_PATH="$TMP_DIR/app-support/FalkorDB/autopsy-memory.db" "$TMP_DIR/venv/bin/autopsy" health --workspace "$TMP_DIR/workspace" >/dev/null
