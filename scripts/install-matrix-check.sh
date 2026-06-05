@@ -215,6 +215,103 @@ PY
 grep -F 'with_env(PATH: "#{bin}:#{ENV.fetch("PATH", "")}")' Formula/autopsy-memory.rb >/dev/null
 grep -F 'with_env(PATH: "#{{bin}}:#{{ENV.fetch("PATH", "")}}")' scripts/update-homebrew-formula.py >/dev/null
 
+homebrew_current_root="$TMP_DIR/homebrew-current"
+homebrew_current_fake_bin="$homebrew_current_root/bin"
+homebrew_current_repo="$homebrew_current_root/repo"
+homebrew_current_state="$homebrew_current_root/state"
+homebrew_current_log="$homebrew_current_root/brew.log"
+mkdir -p "$homebrew_current_fake_bin" "$homebrew_current_state" "$homebrew_current_repo/Library/Taps/naveenshaji/homebrew-autopsy/Formula"
+: > "$homebrew_current_log"
+touch "$homebrew_current_state/installed"
+cat > "$homebrew_current_repo/Library/Taps/naveenshaji/homebrew-autopsy/Formula/autopsy-memory.rb" <<'RUBY'
+class AutopsyMemory < Formula
+end
+RUBY
+
+cat > "$homebrew_current_fake_bin/uname" <<'SH'
+#!/bin/sh
+case "${1:-}" in
+  -s) printf 'Darwin\n' ;;
+  -m) printf 'arm64\n' ;;
+  *) /usr/bin/uname "$@" ;;
+esac
+SH
+chmod 0755 "$homebrew_current_fake_bin/uname"
+
+cat > "$homebrew_current_fake_bin/brew" <<SH
+#!/bin/sh
+repo="$homebrew_current_repo"
+state="$homebrew_current_state"
+log="$homebrew_current_log"
+printf '%s\n' "\$*" >> "\$log"
+
+if [ "\${1:-}" = "--repository" ]; then
+  printf '%s\n' "\$repo"
+  exit 0
+fi
+if [ "\${1:-}" = "tap-new" ]; then
+  exit 0
+fi
+if [ "\${1:-}" = "style" ]; then
+  [ -f "\${2:-}" ] || exit 3
+  exit 0
+fi
+if [ "\${1:-}" = "list" ] && [ "\${2:-}" = "--formula" ] && [ "\${3:-}" = "--full-name" ] && [ "\${4:-}" = "autopsy-memory" ]; then
+  [ -f "\$state/installed" ] || exit 1
+  printf 'naveenshaji/autopsy/autopsy-memory\n'
+  exit 0
+fi
+if [ "\${1:-}" = "list" ] && [ "\${2:-}" = "--formula" ] && [ "\${3:-}" = "autopsy-memory" ]; then
+  [ -f "\$state/installed" ] || exit 1
+  exit 0
+fi
+if [ "\${1:-}" = "uninstall" ] && [ "\${2:-}" = "--force" ]; then
+  rm -f "\$state/installed"
+  exit 0
+fi
+if [ "\${1:-}" = "tap" ] && [ "\$#" -eq 1 ]; then
+  printf 'naveenshaji/autopsy\n'
+  exit 0
+fi
+if [ "\${1:-}" = "tap" ]; then
+  printf 'retapped %s\n' "\${2:-}" >> "\$log"
+  exit 0
+fi
+if [ "\${1:-}" = "untap" ]; then
+  exit 0
+fi
+if [ "\${1:-}" = "install" ] && [ "\${2:-}" = "--build-from-source" ]; then
+  touch "\$state/temp-installed"
+  exit 0
+fi
+if [ "\${1:-}" = "install" ]; then
+  printf '%s\n' "\${2:-}" > "\$state/restored-formula"
+  touch "\$state/installed"
+  exit 0
+fi
+if [ "\${1:-}" = "test" ] && [ "\${2:-}" = "--force" ]; then
+  exit 0
+fi
+printf 'unexpected brew invocation: %s\n' "\$*" >&2
+exit 2
+SH
+chmod 0755 "$homebrew_current_fake_bin/brew"
+
+PYTHON="$PYTHON_BIN" \
+  PATH="$homebrew_current_fake_bin:$PATH" \
+  AUTOPSY_HOMEBREW_CURRENT_INSTALL=1 \
+  AUTOPSY_HOMEBREW_CURRENT_ALLOW_LOCAL=1 \
+  AUTOPSY_HOMEBREW_CURRENT_REPLACE_LOCAL=1 \
+  ./scripts/homebrew-current-check.sh > "$homebrew_current_root/check.out"
+grep -F "homebrew-current-check: ok" "$homebrew_current_root/check.out" >/dev/null
+grep -F "homebrew-current-check: restoring previous naveenshaji/autopsy/autopsy-memory install" "$homebrew_current_root/check.out" >/dev/null
+grep -F "uninstall --force autopsy-memory" "$homebrew_current_log" >/dev/null
+grep -F "install --build-from-source" "$homebrew_current_log" >/dev/null
+grep -F "test --force" "$homebrew_current_log" >/dev/null
+grep -F "retapped naveenshaji/autopsy" "$homebrew_current_log" >/dev/null
+grep -F "install naveenshaji/autopsy/autopsy-memory" "$homebrew_current_log" >/dev/null
+grep -F "naveenshaji/autopsy/autopsy-memory" "$homebrew_current_state/restored-formula" >/dev/null
+
 runtime_available=0
 if PYTHONPATH="$ROOT_DIR/src" "$PYTHON_BIN" - >/dev/null 2>&1 <<'PY'
 import falkordb

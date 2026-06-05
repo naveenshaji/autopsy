@@ -119,6 +119,10 @@ uses a local Homebrew tap:
 AUTOPSY_HOMEBREW_CURRENT_INSTALL=1 ./scripts/homebrew-current-check.sh
 ```
 
-Outside CI, add `AUTOPSY_HOMEBREW_CURRENT_ALLOW_LOCAL=1` only on a disposable
-Homebrew prefix. If `autopsy-memory` is already installed, the script refuses to
-replace it unless `AUTOPSY_HOMEBREW_CURRENT_REPLACE_LOCAL=1` is also set.
+Outside CI, add `AUTOPSY_HOMEBREW_CURRENT_ALLOW_LOCAL=1` when you intentionally
+want to run the install locally. If `autopsy-memory` is already installed, the
+script refuses to replace it unless `AUTOPSY_HOMEBREW_CURRENT_REPLACE_LOCAL=1`
+is also set. By default, local replacement checks reinstall the previously
+installed formula during cleanup; set `AUTOPSY_HOMEBREW_CURRENT_KEEP_LOCAL=1`
+only when you intentionally want to keep the generated current-checkout formula
+installed.

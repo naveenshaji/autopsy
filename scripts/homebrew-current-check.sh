@@ -18,6 +18,8 @@ if ! command -v brew >/dev/null 2>&1; then
   echo "homebrew-current-check: Homebrew is not installed" >&2
   exit 1
 fi
+export HOMEBREW_NO_AUTO_UPDATE="${HOMEBREW_NO_AUTO_UPDATE:-1}"
+export HOMEBREW_NO_ENV_HINTS="${HOMEBREW_NO_ENV_HINTS:-1}"
 
 cd "$ROOT_DIR"
 
@@ -28,10 +30,14 @@ TAP_REPO="${TAP_NAME#*/}"
 TAP_DIR="$(brew --repository)/Library/Taps/$TAP_USER/homebrew-$TAP_REPO"
 FORMULA_PATH="$TAP_DIR/Formula/autopsy-memory.rb"
 CONFLICT_TAPS="$TMP_DIR/conflict-taps"
+AUTOPSY_HOMEBREW_CURRENT_INSTALL_ATTEMPTED=0
 AUTOPSY_HOMEBREW_CURRENT_INSTALLED_TEMP=0
+AUTOPSY_HOMEBREW_CURRENT_PREVIOUS_INSTALLED=0
+AUTOPSY_HOMEBREW_CURRENT_PREVIOUS_FORMULA=""
 
 cleanup() {
-  if [ "$AUTOPSY_HOMEBREW_CURRENT_INSTALLED_TEMP" = "1" ] && [ "${CI:-}" != "true" ] && [ "${AUTOPSY_HOMEBREW_CURRENT_KEEP_LOCAL:-0}" != "1" ]; then
+  status=$?
+  if [ "$AUTOPSY_HOMEBREW_CURRENT_INSTALL_ATTEMPTED" = "1" ] && [ "${CI:-}" != "true" ] && [ "${AUTOPSY_HOMEBREW_CURRENT_KEEP_LOCAL:-0}" != "1" ]; then
     brew uninstall --force "$TAP_NAME/autopsy-memory" >/dev/null 2>&1 || brew uninstall --force autopsy-memory >/dev/null 2>&1 || true
   fi
   if [ "$AUTOPSY_HOMEBREW_CURRENT_INSTALLED_TEMP" != "1" ] || [ "${AUTOPSY_HOMEBREW_CURRENT_KEEP_LOCAL:-0}" != "1" ]; then
@@ -43,7 +49,17 @@ cleanup() {
       brew tap "$tap_name" >/dev/null 2>&1 || true
     done < "$CONFLICT_TAPS"
   fi
+  if [ "$AUTOPSY_HOMEBREW_CURRENT_PREVIOUS_INSTALLED" = "1" ] && [ "${CI:-}" != "true" ] && [ "${AUTOPSY_HOMEBREW_CURRENT_KEEP_LOCAL:-0}" != "1" ] && [ "${AUTOPSY_HOMEBREW_CURRENT_RESTORE_LOCAL:-1}" != "0" ]; then
+    restore_formula="$AUTOPSY_HOMEBREW_CURRENT_PREVIOUS_FORMULA"
+    [ -n "$restore_formula" ] || restore_formula="autopsy-memory"
+    echo "homebrew-current-check: restoring previous $restore_formula install"
+    if ! HOMEBREW_NO_INSTALL_CLEANUP=1 brew install "$restore_formula" >/dev/null 2>&1; then
+      echo "homebrew-current-check: failed to restore previous $restore_formula install" >&2
+      status=1
+    fi
+  fi
   rm -rf "$TMP_DIR"
+  exit "$status"
 }
 trap cleanup EXIT INT TERM HUP
 
@@ -124,11 +140,14 @@ if [ "${CI:-}" != "true" ] && [ "${AUTOPSY_HOMEBREW_CURRENT_ALLOW_LOCAL:-0}" != 
 fi
 
 if brew list --formula autopsy-memory >/dev/null 2>&1; then
+  AUTOPSY_HOMEBREW_CURRENT_PREVIOUS_INSTALLED=1
+  AUTOPSY_HOMEBREW_CURRENT_PREVIOUS_FORMULA="$(brew list --formula --full-name autopsy-memory 2>/dev/null | sed -n '1p' || true)"
   if [ "${CI:-}" = "true" ] || [ "${AUTOPSY_HOMEBREW_CURRENT_REPLACE_LOCAL:-0}" = "1" ]; then
     brew uninstall --force autopsy-memory
   else
     echo "homebrew-current-check: autopsy-memory is already installed; use CI or a disposable Homebrew prefix for current-source install checks" >&2
     echo "homebrew-current-check: set AUTOPSY_HOMEBREW_CURRENT_REPLACE_LOCAL=1 only if replacing the local install is intentional" >&2
+    echo "homebrew-current-check: by default the previous install is restored after the check unless AUTOPSY_HOMEBREW_CURRENT_KEEP_LOCAL=1 is set" >&2
     exit 1
   fi
 fi
@@ -152,6 +171,7 @@ while IFS= read -r tap_name; do
   brew untap "$tap_name" >/dev/null
 done < "$CONFLICT_TAPS"
 
+AUTOPSY_HOMEBREW_CURRENT_INSTALL_ATTEMPTED=1
 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install --build-from-source "$TAP_NAME/autopsy-memory"
 AUTOPSY_HOMEBREW_CURRENT_INSTALLED_TEMP=1
 HOMEBREW_NO_INSTALL_CLEANUP=1 brew test --force "$TAP_NAME/autopsy-memory"
