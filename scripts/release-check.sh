@@ -26,6 +26,7 @@ sh -n scripts/install-global.sh
 sh -n scripts/menubar-check.sh
 sh -n scripts/install-matrix-check.sh
 sh -n scripts/homebrew-current-check.sh
+test -s scripts/homebrew-constraints.txt
 
 TMP_DIR="${TMPDIR:-/tmp}/autopsy-release-check-$$"
 trap 'rm -rf "$TMP_DIR"' EXIT INT TERM HUP

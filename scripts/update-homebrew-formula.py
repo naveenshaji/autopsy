@@ -18,6 +18,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = ROOT / "Formula" / "autopsy-memory.rb"
+HOMEBREW_CONSTRAINTS = ROOT / "scripts" / "homebrew-constraints.txt"
 PACKAGE_NAME = "autopsy-memory"
 FORMULA_CLASS = "AutopsyMemory"
 FALKORDB_NATIVE_VERSION = "v4.18.3"
@@ -44,7 +45,25 @@ def public_tag_sha256(version: str) -> tuple[str, str]:
     return url, hashlib.sha256(payload).hexdigest()
 
 
+def homebrew_constraints_path() -> Path:
+    if not HOMEBREW_CONSTRAINTS.exists():
+        raise RuntimeError(
+            f"Homebrew dependency constraints file is missing: {HOMEBREW_CONSTRAINTS}"
+        )
+    lines = [
+        line.strip()
+        for line in HOMEBREW_CONSTRAINTS.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    if not lines:
+        raise RuntimeError(
+            f"Homebrew dependency constraints file is empty: {HOMEBREW_CONSTRAINTS}"
+        )
+    return HOMEBREW_CONSTRAINTS
+
+
 def pip_dependency_report(python: str) -> list[dict[str, Any]]:
+    constraints_path = homebrew_constraints_path()
     with tempfile.TemporaryDirectory(prefix="autopsy-homebrew-report-") as tmp:
         report_path = Path(tmp) / "pip-report.json"
         subprocess.run(
@@ -55,6 +74,8 @@ def pip_dependency_report(python: str) -> list[dict[str, Any]]:
                 "install",
                 "--dry-run",
                 "--ignore-installed",
+                "--constraint",
+                str(constraints_path),
                 "--report",
                 str(report_path),
                 str(ROOT),

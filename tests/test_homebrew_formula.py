@@ -1,6 +1,8 @@
 import importlib.util
+import json
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 def load_generator():
@@ -90,6 +92,44 @@ class HomebrewFormulaGeneratorTests(unittest.TestCase):
             self.assertEqual(generator.validate_formula_python("python3.12"), report)
         finally:
             generator.python_platform_report = original_report
+
+    def test_pip_dependency_report_uses_homebrew_constraints(self):
+        generator = load_generator()
+        calls = []
+
+        def fake_run(command, **_kwargs):
+            calls.append(command)
+            report_path = Path(command[command.index("--report") + 1])
+            report_path.write_text(json.dumps({"install": []}), encoding="utf-8")
+
+        with mock.patch.object(generator.subprocess, "run", side_effect=fake_run):
+            self.assertEqual(generator.pip_dependency_report("python3.12"), [])
+
+        command = calls[0]
+        self.assertIn("--constraint", command)
+        self.assertEqual(
+            command[command.index("--constraint") + 1],
+            str(generator.HOMEBREW_CONSTRAINTS),
+        )
+
+    def test_homebrew_constraints_file_must_exist_and_have_entries(self):
+        generator = load_generator()
+        original_constraints = generator.HOMEBREW_CONSTRAINTS
+        try:
+            generator.HOMEBREW_CONSTRAINTS = Path("/tmp/autopsy-missing-constraints.txt")
+            with self.assertRaisesRegex(RuntimeError, "constraints file is missing"):
+                generator.homebrew_constraints_path()
+
+            with mock.patch.object(
+                generator.Path, "exists", return_value=True
+            ), mock.patch.object(
+                generator.Path, "read_text", return_value="# empty\n"
+            ):
+                generator.HOMEBREW_CONSTRAINTS = Path("/tmp/autopsy-empty-constraints.txt")
+                with self.assertRaisesRegex(RuntimeError, "constraints file is empty"):
+                    generator.homebrew_constraints_path()
+        finally:
+            generator.HOMEBREW_CONSTRAINTS = original_constraints
 
 
 if __name__ == "__main__":

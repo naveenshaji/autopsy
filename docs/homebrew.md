@@ -79,13 +79,17 @@ After tagging and publishing a release:
 The script:
 
 - downloads the public GitHub tag archive and writes its SHA-256,
-- derives Python dependency versions from a dry-run install report,
+- derives Python dependency versions from a dry-run install report constrained by
+  `scripts/homebrew-constraints.txt`,
 - resolves PyPI source distributions and hashes,
 - rewrites `Formula/autopsy-memory.rb`.
 
 Formula generation intentionally requires Apple Silicon macOS with Python 3.12.
 The formula vendors macOS arm64 wheels and the native FalkorDB module, and the
-formula itself depends on Homebrew `python@3.12`.
+formula itself depends on Homebrew `python@3.12`. Review
+`scripts/homebrew-constraints.txt` intentionally when upgrading the packaged
+local ML/runtime dependency set; otherwise formula regeneration should stay
+stable for a given release.
 
 Validate the formula from a local tap:
 
