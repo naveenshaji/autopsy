@@ -40,6 +40,11 @@ class HomebrewFormulaGeneratorTests(unittest.TestCase):
 
         formula = generator.render_formula("0.1.22", "https://example.com/autopsy.tar.gz", "deadbeef", resources)
         self.assertIn("def autopsy_pip_install(target)", formula)
+        self.assertIn("def autopsy_python", formula)
+        self.assertIn("def validate_autopsy_python!", formula)
+        self.assertIn('system autopsy_python, "-m", "pip"', formula)
+        self.assertIn("virtualenv_create(libexec, autopsy_python", formula)
+        self.assertIn("Autopsy requires Homebrew python@3.12", formula)
         self.assertIn("autopsy_pip_install autopsy_resource_target", formula)
         self.assertIn('next if resource.name == "falkordb-macos-arm64v8"', formula)
 

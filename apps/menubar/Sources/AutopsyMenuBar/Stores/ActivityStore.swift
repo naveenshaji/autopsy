@@ -76,6 +76,38 @@ final class ActivityStore: ObservableObject {
         payload?.activity?.attention ?? []
     }
 
+    var onboarding: OnboardingPayload? {
+        payload?.onboarding
+    }
+
+    var hasEmptyMemoryState: Bool {
+        onboarding?.empty == true || (!hasPriorMemory && payload?.workflow?.coverage == "none")
+    }
+
+    var onboardingTitle: String {
+        let title = onboarding?.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return title.isEmpty ? "No memory yet" : title
+    }
+
+    var onboardingMessage: String {
+        let message = onboarding?.message?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return message.isEmpty
+            ? "Run setup once, then keep using your coding agent. Memory writes and consults will appear here when agents use Autopsy."
+            : message
+    }
+
+    var emptyWritesText: String {
+        hasEmptyMemoryState
+            ? "Memory writes appear after an agent records decisions, outcomes, or useful context."
+            : "No memory writes in the recent activity window."
+    }
+
+    var emptyConsultsText: String {
+        hasEmptyMemoryState
+            ? "Consults appear when an agent asks Autopsy for prior context."
+            : "No consults in the recent activity window."
+    }
+
     var statusSummary: String {
         if let errorMessage, !errorMessage.isEmpty {
             return errorMessage
@@ -156,7 +188,7 @@ final class ActivityStore: ObservableObject {
     }
 
     var shouldShowOnboardingPrompt: Bool {
-        instructionStatus != nil && !hasPriorMemory && !hasInstalledInstructions
+        (hasEmptyMemoryState || instructionStatus != nil) && !hasPriorMemory && !hasInstalledInstructions
     }
 
     var setupHealthIssues: [SetupHealthIssue] {

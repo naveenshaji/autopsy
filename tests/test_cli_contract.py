@@ -222,6 +222,28 @@ class AutopsyCLIContractTests(unittest.TestCase):
             self.assertEqual(on_disk["snapshot"]["schema_version"], 1)
             self.assertEqual(list(snapshot_path.parent.glob(".activity.json.*.tmp")), [])
 
+    def test_activity_onboarding_payload_explains_empty_memory_state(self):
+        payload = cli.build_activity_onboarding_payload(
+            [],
+            [],
+            {"status": {"recent_threads": [{"title": "Operational thread only"}]}},
+        )
+
+        self.assertTrue(payload["empty"])
+        self.assertEqual(payload["state"], "empty")
+        self.assertIn("No memory yet", payload["title"])
+        self.assertTrue(any("autopsy install" in step for step in payload["next_steps"]))
+
+    def test_activity_onboarding_payload_is_active_when_status_has_memory(self):
+        payload = cli.build_activity_onboarding_payload(
+            [],
+            [],
+            {"status": {"recent_activity": [{"stable_key": "graph-note:test"}]}},
+        )
+
+        self.assertFalse(payload["empty"])
+        self.assertEqual(payload["state"], "active")
+
     def test_stage_menubar_app_bundle_writes_launchservices_plist(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             app_dir = Path(temp_dir)
@@ -445,6 +467,28 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertTrue(payload["repair_available"])
         self.assertEqual(payload["would_run"][-1], ["/opt/homebrew/bin/brew", "link", "--overwrite", cli.PACKAGE_NAME])
+        run_mock.assert_not_called()
+
+    def test_install_path_repair_payload_can_relink_when_autopsy_command_is_missing(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["install", "--dry-run"])
+        check = {
+            "name": "installed_autopsy_command",
+            "ok": False,
+            "path": None,
+            "error": "No autopsy command was found on PATH.",
+        }
+        with (
+            mock.patch.object(cli, "installed_autopsy_command_check", return_value=check),
+            mock.patch.object(cli.shutil, "which", return_value="/opt/homebrew/bin/brew"),
+            mock.patch.object(cli, "homebrew_package_prefix", return_value=("/opt/homebrew/opt/autopsy-memory", {"args": ["brew", "--prefix"], "returncode": 0})),
+            mock.patch.object(cli, "run_install_subprocess") as run_mock,
+        ):
+            payload = cli.install_path_repair_payload(args)
+
+        self.assertTrue(payload["repair_available"])
+        self.assertEqual(payload["would_run"][0], ["/opt/homebrew/bin/brew", "unlink", cli.PACKAGE_NAME])
+        self.assertEqual(payload["would_run"][1], ["/opt/homebrew/bin/brew", "link", "--overwrite", cli.PACKAGE_NAME])
         run_mock.assert_not_called()
 
     def test_cmd_install_combines_instructions_and_menubar(self):
@@ -2488,6 +2532,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             wrapper = Path(tmp_dir) / "autopsy"
             wrapper.write_text("#!/bin/sh\nAUTOPSY_BUNDLED_MEMORY_TOOL=/tmp/legacy\n", encoding="utf-8")
+            wrapper.chmod(0o755)
             original_which = doctor.shutil.which
             doctor.shutil.which = lambda _name: str(wrapper)
             try:
@@ -2497,6 +2542,35 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertTrue(payload["legacy_wrapper"])
         self.assertIn("legacy app wrapper", payload["error"])
+
+    def test_doctor_reports_valid_autopsy_command_shadowed_later_on_path(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            legacy_dir = root / "legacy"
+            valid_dir = root / "homebrew"
+            target = root / "libexec" / "bin" / "autopsy"
+            legacy_dir.mkdir()
+            valid_dir.mkdir()
+            target.parent.mkdir(parents=True)
+
+            legacy = legacy_dir / "autopsy"
+            legacy.write_text("#!/bin/sh\nAUTOPSY_BUNDLED_MEMORY_TOOL=/tmp/legacy\n", encoding="utf-8")
+            legacy.chmod(0o755)
+            target.write_text("from autopsy_memory.cli import main\nmain()\n", encoding="utf-8")
+            target.chmod(0o755)
+            valid = valid_dir / "autopsy"
+            valid.write_text(f"#!/bin/sh\nAUTOPSY_UNIFIED_MEMORY=1 exec \"{target}\" \"$@\"\n", encoding="utf-8")
+            valid.chmod(0o755)
+
+            with (
+                mock.patch.object(doctor.shutil, "which", return_value=str(legacy)),
+                mock.patch.dict(doctor.os.environ, {"PATH": f"{legacy_dir}{doctor.os.pathsep}{valid_dir}"}),
+            ):
+                payload = doctor.installed_autopsy_command_check()
+
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["shadowed_valid_command"], str(valid))
+        self.assertIn("valid Autopsy command exists later on PATH", payload["error"])
 
     def test_doctor_accepts_homebrew_env_wrapper(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -2516,6 +2590,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
                 f"#!/bin/bash\nAUTOPSY_UNIFIED_MEMORY=\"1\" exec \"{target}\" \"$@\"\n",
                 encoding="utf-8",
             )
+            wrapper.chmod(0o755)
             original_which = doctor.shutil.which
             doctor.shutil.which = lambda _name: str(wrapper)
             try:

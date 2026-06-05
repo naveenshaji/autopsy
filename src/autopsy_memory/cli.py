@@ -3477,8 +3477,10 @@ def build_activity_payload(
                 "summary": str(status_workflow.get("message") or "Autopsy has no current memory state to show."),
             }
         )
+    onboarding = build_activity_onboarding_payload(writes, consults, status_payload)
     return {
         "workspace": tool.workspace_payload(workspace),
+        "onboarding": onboarding,
         "activity": {
             "summary": f"{len(writes)} recent writes, {len(consults)} recent consults",
             "recent_writes": writes,
@@ -3488,11 +3490,50 @@ def build_activity_payload(
         "status": status_payload.get("status", {}),
         "workflow": {
             "status": "ok",
-            "coverage": "strong" if writes or consults else "none",
+            "coverage": "strong" if not onboarding.get("empty") else "none",
             "complete": True,
             "next_step": "done",
             "message": f"{len(writes)} recent writes, {len(consults)} recent consults",
         },
+    }
+
+
+def build_activity_onboarding_payload(
+    writes: list[dict[str, Any]],
+    consults: list[dict[str, Any]],
+    status_payload: dict[str, Any],
+) -> dict[str, Any]:
+    status = status_payload.get("status") if isinstance(status_payload.get("status"), dict) else {}
+    status_sections = (
+        "pinned_memory",
+        "procedures",
+        "observations",
+        "active_now",
+        "open_loops",
+        "open_questions",
+        "recent_decisions",
+        "recent_activity",
+    )
+    has_status_items = any(bool(status.get(section)) for section in status_sections)
+    if writes or consults or has_status_items:
+        return {
+            "state": "active",
+            "empty": False,
+            "title": "Autopsy is active",
+            "message": "Recent writes and consults will appear here as agents use memory.",
+            "next_steps": [],
+        }
+
+    return {
+        "state": "empty",
+        "empty": True,
+        "title": "No memory yet",
+        "message": "Run setup once, then keep using your coding agent. Memory writes and consults will appear here when agents use Autopsy.",
+        "next_steps": [
+            "Run autopsy install",
+            "Use Codex, Claude Code, or another configured agent normally",
+            "Ask the agent to remember a decision or consult prior context",
+        ],
     }
 
 
@@ -15892,8 +15933,10 @@ def homebrew_install_prefix_from_formula_prefix(formula_prefix: str | None) -> P
 
 
 def repairable_homebrew_command_path(path: str | None, *, brew_prefix: Path | None) -> bool:
-    if not path or brew_prefix is None:
+    if brew_prefix is None:
         return False
+    if not path:
+        return True
     command_path = Path(path).expanduser()
     candidates = {
         brew_prefix / "bin" / "autopsy",
@@ -15963,9 +16006,10 @@ def install_path_repair_payload(args: argparse.Namespace) -> dict[str, Any]:
             payload["would_backup"] = command_path
         return payload
 
-    backup_path = backup_existing_command(Path(command_path))
-    if backup_path:
-        payload["backups"].append(backup_path)
+    if command_path:
+        backup_path = backup_existing_command(Path(command_path))
+        if backup_path:
+            payload["backups"].append(backup_path)
 
     unlink_result = run_install_subprocess([brew_path, "unlink", PACKAGE_NAME])
     payload["commands"].append(unlink_result)

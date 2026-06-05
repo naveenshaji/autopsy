@@ -250,8 +250,24 @@ class AutopsyMemory < Formula
     sha256 "53aa98e66dc52cf4d95628d1144ab4f3233cadf951faf81e76d5a7c44483541a"
   end
 
+  def autopsy_python
+    Formula["python@3.12"].opt_bin/"python3.12"
+  end
+
+  def validate_autopsy_python!
+    odie "python@3.12 executable was not found at #{autopsy_python}" unless autopsy_python.exist?
+
+    version = Utils.safe_popen_read(
+      autopsy_python,
+      "-c",
+      "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')",
+    ).strip
+    message = "Autopsy requires Homebrew python@3.12, but #{autopsy_python} reports Python #{version}"
+    odie message if version != "3.12"
+  end
+
   def autopsy_pip_install(target)
-    system Formula["python@3.12"].opt_bin/"python3.12", "-m", "pip",
+    system autopsy_python, "-m", "pip",
            "--python=#{libexec}/bin/python", "install",
            "--verbose", "--no-deps", "--ignore-installed", "--no-compile",
            target
@@ -265,7 +281,8 @@ class AutopsyMemory < Formula
   end
 
   def install
-    venv = virtualenv_create(libexec, "python3.12", system_site_packages: true, without_pip: true)
+    validate_autopsy_python!
+    venv = virtualenv_create(libexec, autopsy_python, system_site_packages: true, without_pip: true)
     resources.each do |resource|
       next if resource.name == "falkordb-macos-arm64v8"
 

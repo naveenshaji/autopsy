@@ -47,6 +47,17 @@ PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" init --check >/dev/nu
 PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" instructions >/dev/null
 PATH="$TMP_DIR/venv/bin:$PATH" AUTOPSY_UNIFIED_MEMORY=0 AUTOPSY_APP_SUPPORT_DIR="$TMP_DIR/app-support" AUTOPSY_FALKORDB_LITE_PATH="$TMP_DIR/app-support/FalkorDB/autopsy-memory.db" "$TMP_DIR/venv/bin/autopsy" health --workspace "$TMP_DIR/workspace" >/dev/null
 PATH="$TMP_DIR/venv/bin:$PATH" AUTOPSY_UNIFIED_MEMORY=0 AUTOPSY_APP_SUPPORT_DIR="$TMP_DIR/app-support" AUTOPSY_FALKORDB_LITE_PATH="$TMP_DIR/app-support/FalkorDB/autopsy-memory.db" "$TMP_DIR/venv/bin/autopsy" activity --workspace "$TMP_DIR/workspace" >/dev/null
+PATH="$TMP_DIR/venv/bin:$PATH" AUTOPSY_UNIFIED_MEMORY=0 AUTOPSY_APP_SUPPORT_DIR="$TMP_DIR/fresh-empty-app-support" AUTOPSY_FALKORDB_LITE_PATH="$TMP_DIR/fresh-empty-app-support/FalkorDB/autopsy-memory.db" "$TMP_DIR/venv/bin/autopsy" activity --workspace "$TMP_DIR/fresh-empty-workspace" > "$TMP_DIR/fresh-empty-activity.json"
+"$PYTHON" - "$TMP_DIR/fresh-empty-activity.json" <<'PY'
+import json
+import sys
+
+payload = json.loads(open(sys.argv[1], encoding="utf-8").read())
+onboarding = payload.get("onboarding") or {}
+assert onboarding.get("empty") is True, onboarding
+assert onboarding.get("state") == "empty", onboarding
+assert payload.get("snapshot", {}).get("schema_version") == 1, payload.get("snapshot")
+PY
 PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" menubar --print-path >/dev/null
 PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" menubar --launch-agent-status >/dev/null
 cat > "$TMP_DIR/restore.json" <<'JSON'

@@ -78,6 +78,8 @@ struct ActivityPopover: View {
         VStack(spacing: 6) {
             if store.shouldShowOnboardingPrompt {
                 OnboardingPrompt(
+                    title: store.onboardingTitle,
+                    message: store.onboardingMessage,
                     isLoading: store.isRepairingSetup || store.isManagingInstructions,
                     install: store.repairSetup
                 )
@@ -152,7 +154,7 @@ struct ActivityPopover: View {
             switch selectedActivityTab {
             case .writes:
                 if store.recentWrites.isEmpty {
-                    EmptyActivityRow(text: "No memory writes yet")
+                    EmptyActivityRow(text: store.emptyWritesText)
                         .plainMenuListRow()
                 } else {
                     ForEach(store.recentWrites.prefix(20)) { write in
@@ -168,7 +170,7 @@ struct ActivityPopover: View {
                 }
             case .consults:
                 if store.recentConsults.isEmpty {
-                    EmptyActivityRow(text: "No consult telemetry yet")
+                    EmptyActivityRow(text: store.emptyConsultsText)
                         .plainMenuListRow()
                 } else {
                     ForEach(store.recentConsults.prefix(20)) { consult in
@@ -426,14 +428,21 @@ private struct ActivityTabBar: View {
 }
 
 private struct OnboardingPrompt: View {
+    let title: String
+    let message: String
     let isLoading: Bool
     let install: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Set Up Autopsy")
+        VStack(alignment: .leading, spacing: 7) {
+            Text(title)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
+
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             Button(action: install) {
                 HStack(spacing: 8) {
@@ -465,6 +474,7 @@ private struct OnboardingPrompt: View {
             .disabled(isLoading)
         }
         .padding(.horizontal, 8)
+        .padding(.vertical, 2)
     }
 }
 
@@ -475,8 +485,9 @@ private struct EmptyActivityRow: View {
         Text(text)
             .font(.footnote)
             .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 8)
-            .padding(.vertical, 4)
+            .padding(.vertical, 8)
     }
 }
 

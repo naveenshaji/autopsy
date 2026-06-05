@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 import sys
 import re
+import os
 from pathlib import Path
 from typing import Any
 
@@ -50,13 +51,47 @@ def exec_target_from_script(script: str) -> str | None:
     return next((group for group in match.groups() if group), None)
 
 
+def autopsy_command_candidates() -> list[str]:
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        if not directory:
+            continue
+        candidate = Path(directory).expanduser() / "autopsy"
+        try:
+            resolved = str(candidate.resolve())
+        except OSError:
+            resolved = str(candidate)
+        if resolved in seen or not candidate.exists() or not os.access(candidate, os.X_OK):
+            continue
+        seen.add(resolved)
+        candidates.append(str(candidate))
+    return candidates
+
+
+def script_launches_package_entrypoint(path: str | Path) -> bool:
+    script = read_script_prefix(path)
+    flags = script_entrypoint_flags(script)
+    exec_target = exec_target_from_script(script)
+    if flags["legacy_wrapper"]:
+        return False
+    if flags["standalone_wrapper"] or flags["package_entrypoint"]:
+        return True
+    if exec_target:
+        target_flags = script_entrypoint_flags(read_script_prefix(exec_target))
+        return not target_flags["legacy_wrapper"] and (target_flags["standalone_wrapper"] or target_flags["package_entrypoint"])
+    return False
+
+
 def installed_autopsy_command_check() -> dict[str, Any]:
     path = shutil.which("autopsy")
+    candidates = autopsy_command_candidates()
     payload: dict[str, Any] = {
         "name": "installed_autopsy_command",
         "required": True,
         "ok": True,
         "path": path,
+        "path_candidates": candidates,
     }
     if not path:
         payload["ok"] = False
@@ -95,4 +130,16 @@ def installed_autopsy_command_check() -> dict[str, Any]:
     elif not (standalone_wrapper or package_entrypoint):
         payload["ok"] = False
         payload["error"] = "The autopsy command on PATH does not appear to launch autopsy_memory.cli."
+    if not payload["ok"]:
+        for candidate in candidates[1:]:
+            try:
+                if script_launches_package_entrypoint(candidate):
+                    payload["shadowed_valid_command"] = candidate
+                    payload["error"] = (
+                        f"{payload['error']} A valid Autopsy command exists later on PATH at {candidate}; "
+                        "move or remove the earlier command, or put Homebrew's bin directory first."
+                    )
+                    break
+            except Exception:
+                continue
     return payload

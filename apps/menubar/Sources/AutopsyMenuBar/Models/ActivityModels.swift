@@ -2,9 +2,26 @@ import Foundation
 
 struct ActivityPayload: Decodable {
     var workspace: WorkspacePayload?
+    var onboarding: OnboardingPayload?
     var activity: ActivityFeed?
     var status: StatusPayload?
     var workflow: WorkflowPayload?
+}
+
+struct OnboardingPayload: Decodable {
+    var state: String?
+    var empty: Bool?
+    var title: String?
+    var message: String?
+    var nextSteps: [String]?
+
+    enum CodingKeys: String, CodingKey {
+        case state
+        case empty
+        case title
+        case message
+        case nextSteps = "next_steps"
+    }
 }
 
 struct WorkspacePayload: Decodable {
