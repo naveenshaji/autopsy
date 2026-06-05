@@ -92,7 +92,7 @@ final class ActivityStore: ObservableObject {
     var onboardingMessage: String {
         let message = onboarding?.message?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return message.isEmpty
-            ? "Run setup once, then keep using your coding agent. Memory writes and consults will appear here when agents use Autopsy."
+            ? "Run autopsy install once, then keep using your coding agent. Memory writes and consults will appear here when agents use Autopsy."
             : message
     }
 

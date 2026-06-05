@@ -234,6 +234,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertTrue(payload["empty"])
         self.assertEqual(payload["state"], "empty")
         self.assertIn("No memory yet", payload["title"])
+        self.assertIn("autopsy install", payload["message"])
         self.assertTrue(any("autopsy install" in step for step in payload["next_steps"]))
 
     def test_activity_onboarding_payload_is_active_when_status_has_memory(self):
@@ -245,6 +246,77 @@ class AutopsyCLIContractTests(unittest.TestCase):
 
         self.assertFalse(payload["empty"])
         self.assertEqual(payload["state"], "active")
+
+    def test_activity_payload_does_not_warn_for_healthy_empty_first_run(self):
+        class FakeTool:
+            def workspace_payload(self, workspace):
+                return {"root_path": workspace["root_path"]}
+
+        status_payload = {
+            "status": {
+                "summary": "No current operational memory state was found.",
+                "recent_threads": [{"title": "Operational thread only"}],
+            },
+            "workflow": {
+                "status": "empty",
+                "complete": False,
+                "message": "No current operational memory state was found.",
+            },
+        }
+        with (
+            mock.patch.object(cli, "build_status_payload", return_value=status_payload),
+            mock.patch.object(cli, "fetch_activity_writes", return_value=[]),
+            mock.patch.object(cli, "fetch_activity_consults", return_value=[]),
+        ):
+            payload = cli.build_activity_payload(
+                None,
+                tool=FakeTool(),
+                workspace={"root_path": "/tmp/empty"},
+                limit=3,
+                writes_limit=None,
+                consults_limit=None,
+                section_limit=3,
+                recent_days=21,
+            )
+
+        self.assertTrue(payload["onboarding"]["empty"])
+        self.assertEqual(payload["activity"]["attention"], [])
+        self.assertEqual(payload["workflow"]["coverage"], "none")
+
+    def test_activity_payload_keeps_attention_for_incomplete_nonempty_state(self):
+        class FakeTool:
+            def workspace_payload(self, workspace):
+                return {"root_path": workspace["root_path"]}
+
+        status_payload = {
+            "status": {
+                "summary": "Memory needs review.",
+                "recent_activity": [{"stable_key": "graph-note:test"}],
+            },
+            "workflow": {
+                "status": "needs_review",
+                "complete": False,
+                "message": "Memory needs review.",
+            },
+        }
+        with (
+            mock.patch.object(cli, "build_status_payload", return_value=status_payload),
+            mock.patch.object(cli, "fetch_activity_writes", return_value=[]),
+            mock.patch.object(cli, "fetch_activity_consults", return_value=[]),
+        ):
+            payload = cli.build_activity_payload(
+                None,
+                tool=FakeTool(),
+                workspace={"root_path": "/tmp/nonempty"},
+                limit=3,
+                writes_limit=None,
+                consults_limit=None,
+                section_limit=3,
+                recent_days=21,
+            )
+
+        self.assertFalse(payload["onboarding"]["empty"])
+        self.assertEqual(payload["activity"]["attention"][0]["title"], "No current memory state")
 
     def test_stage_menubar_app_bundle_writes_launchservices_plist(self):
         with tempfile.TemporaryDirectory() as temp_dir:

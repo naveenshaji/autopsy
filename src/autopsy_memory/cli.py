@@ -3467,9 +3467,10 @@ def build_activity_payload(
     )
     writes = fetch_activity_writes(graph, limit=write_count)
     consults = fetch_activity_consults(graph, limit=consult_count)
+    onboarding = build_activity_onboarding_payload(writes, consults, status_payload)
     attention: list[dict[str, Any]] = []
     status_workflow = status_payload.get("workflow") if isinstance(status_payload.get("workflow"), dict) else {}
-    if status_workflow and not bool(status_workflow.get("complete")):
+    if status_workflow and not bool(status_workflow.get("complete")) and not bool(onboarding.get("empty")):
         attention.append(
             {
                 "type": "status",
@@ -3478,7 +3479,6 @@ def build_activity_payload(
                 "summary": str(status_workflow.get("message") or "Autopsy has no current memory state to show."),
             }
         )
-    onboarding = build_activity_onboarding_payload(writes, consults, status_payload)
     return {
         "workspace": tool.workspace_payload(workspace),
         "onboarding": onboarding,
@@ -3529,7 +3529,7 @@ def build_activity_onboarding_payload(
         "state": "empty",
         "empty": True,
         "title": "No memory yet",
-        "message": "Run setup once, then keep using your coding agent. Memory writes and consults will appear here when agents use Autopsy.",
+        "message": "Run autopsy install once, then keep using your coding agent. Memory writes and consults will appear here when agents use Autopsy.",
         "next_steps": [
             "Run autopsy install",
             "Use Codex, Claude Code, or another configured agent normally",
