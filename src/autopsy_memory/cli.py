@@ -3300,6 +3300,17 @@ def build_status_payload(
         max(1, min(section_limit, 3))
     )
     recent_threads = recent_threads[:section_limit]
+    memory_sections = (
+        pinned_memory,
+        procedures,
+        observations,
+        active_now,
+        open_loops,
+        open_questions,
+        recent_decisions,
+        recent_activity,
+    )
+    has_memory_state = any(memory_sections)
 
     combined: list[dict[str, Any]] = []
     seen_combined: set[str] = set()
@@ -3316,28 +3327,38 @@ def build_status_payload(
         if len(combined) >= limit:
             break
 
-    summary_bits: list[str] = []
+    memory_summary_bits: list[str] = []
     if pinned_memory:
-        summary_bits.append(f"{len(pinned_memory)} pinned memory items")
+        memory_summary_bits.append(f"{len(pinned_memory)} pinned memory items")
     if procedures:
-        summary_bits.append(f"{len(procedures)} procedures")
+        memory_summary_bits.append(f"{len(procedures)} procedures")
     if observations:
-        summary_bits.append(f"{len(observations)} observations")
+        memory_summary_bits.append(f"{len(observations)} observations")
     if active_now:
-        summary_bits.append(f"{len(active_now)} active items")
+        memory_summary_bits.append(f"{len(active_now)} active items")
     if open_questions:
-        summary_bits.append(f"{len(open_questions)} open questions")
+        memory_summary_bits.append(f"{len(open_questions)} open questions")
     if recent_activity:
-        summary_bits.append(f"{len(recent_activity)} recent activity items")
+        memory_summary_bits.append(f"{len(recent_activity)} recent activity items")
     if recent_decisions:
-        summary_bits.append(f"{len(recent_decisions)} recent decisions")
+        memory_summary_bits.append(f"{len(recent_decisions)} recent decisions")
+    summary_bits = list(memory_summary_bits)
     if recent_threads:
         summary_bits.append(f"{len(recent_threads)} recent threads")
-    summary = ", ".join(summary_bits) if summary_bits else "No current operational memory state was found."
+    if memory_summary_bits:
+        summary = ", ".join(summary_bits)
+    elif recent_threads:
+        thread_count = len(recent_threads)
+        thread_label = "thread" if thread_count == 1 else "threads"
+        thread_verb = "exists" if thread_count == 1 else "exist"
+        summary = f"No memory has been written yet; {thread_count} recent {thread_label} {thread_verb}."
+    else:
+        summary = "No memory has been written yet."
 
     suggestions = []
     first_item = next((item for item in combined if item.get("stable_key")), None)
-    if first_item:
+    onboarding = None
+    if has_memory_state and first_item:
         first_key = str(first_item["stable_key"])
         workspace_arg = cli_quote(workspace["root_path"])
         suggestions.append(tool.workflow_step(
@@ -3350,6 +3371,30 @@ def build_status_payload(
             "Inspect timeline when the current state may depend on recent supersession or invalidation.",
             f"autopsy timeline {first_key} --workspace {workspace_arg}"
         ))
+    elif not normalized_as_of:
+        onboarding = {
+            "state": "empty",
+            "empty": True,
+            "title": "No memory yet",
+            "message": "Autopsy is installed, but no durable memories have been written yet. Run autopsy install if this is a new setup, then use your agent normally; writes will appear here after material work.",
+            "next_steps": [
+                "Run autopsy install to finish first-run setup.",
+                "After material work, write the outcome with autopsy capture-outcome.",
+                "Use autopsy consult --current-only --query \"<topic>\" once memories exist.",
+            ],
+        }
+        suggestions.extend([
+            workflow_step(
+                "run-install",
+                "Finish or repair first-run setup, including global agent instructions and the menu bar app.",
+                "autopsy install",
+            ),
+            workflow_step(
+                "write-first-memory",
+                "After the first meaningful decision, attempt, or observation, write it so future agents have something to recall.",
+                "autopsy capture-outcome --outcome observation --title \"<title>\" --content \"<what should be remembered>\" --no-relations-ok",
+            ),
+        ])
 
     payload = {
         "workspace": tool.workspace_payload(workspace),
@@ -3377,14 +3422,17 @@ def build_status_payload(
         },
         "items": combined,
         "workflow": {
-            "status": "ok" if combined else "empty",
-            "coverage": "strong" if combined else "none",
-            "complete": bool(combined),
-            "next_step": "done" if combined else "conclude",
+            "status": "ok" if has_memory_state else "empty",
+            "coverage": "strong" if has_memory_state else "none",
+            "complete": bool(has_memory_state),
+            "next_step": "done" if has_memory_state else "write_memory",
             "message": summary,
             "suggested_next_steps": suggestions,
         },
     }
+    if onboarding:
+        payload["onboarding"] = onboarding
+        payload["status"]["onboarding"] = onboarding
     payload = filter_status_payload_as_of(payload, normalized_as_of)
     return filter_status_payload_for_read_lifecycle(payload, normalized_as_of)
 

@@ -49,7 +49,22 @@ assert warmup.get("state") == "not_started", warmup
 assert payload.get("paths", {}).get("model_warmup_status"), payload.get("paths")
 assert payload.get("paths", {}).get("model_warmup_log"), payload.get("paths")
 PY
-PATH="$TMP_DIR/venv/bin:$PATH" AUTOPSY_APP_SUPPORT_DIR="$TMP_DIR/fresh-app-support" AUTOPSY_UNIFIED_MEMORY_ROOT="$TMP_DIR/fresh-root" "$TMP_DIR/venv/bin/autopsy" status --current-only --limit 1 --section-limit 1 >/dev/null
+PATH="$TMP_DIR/venv/bin:$PATH" AUTOPSY_APP_SUPPORT_DIR="$TMP_DIR/fresh-app-support" AUTOPSY_UNIFIED_MEMORY_ROOT="$TMP_DIR/fresh-root" "$TMP_DIR/venv/bin/autopsy" status --current-only --limit 1 --section-limit 1 > "$TMP_DIR/fresh-status.json"
+"$PYTHON" - "$TMP_DIR/fresh-status.json" <<'PY'
+import json
+import sys
+
+payload = json.loads(open(sys.argv[1], encoding="utf-8").read())
+assert payload.get("status", {}).get("summary") == "No memory has been written yet.", payload.get("status")
+workflow = payload.get("workflow") or {}
+assert workflow.get("status") == "empty", workflow
+assert workflow.get("complete") is False, workflow
+assert workflow.get("next_step") == "write_memory", workflow
+assert any((step or {}).get("command") == "autopsy install" for step in workflow.get("suggested_next_steps") or []), workflow
+onboarding = payload.get("onboarding") or {}
+assert onboarding.get("empty") is True, onboarding
+assert "autopsy install" in onboarding.get("message", ""), onboarding
+PY
 PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" install --dry-run --skip-menubar >/dev/null
 PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" install --dry-run --skip-menubar --smoke-test --skip-write-smoke > "$TMP_DIR/install-dry-run-smoke.json"
 "$PYTHON" - "$TMP_DIR/install-dry-run-smoke.json" <<'PY'

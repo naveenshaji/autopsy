@@ -260,6 +260,59 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertFalse(payload["empty"])
         self.assertEqual(payload["state"], "active")
 
+    def test_status_payload_explains_empty_memory_state(self):
+        class Result:
+            result_set = []
+
+        class Graph:
+            def query(self, *_args, **_kwargs):
+                return Result()
+
+        payload = cli.build_status_payload(
+            Graph(),
+            tool=cli,
+            workspace={"root_path": "/tmp/empty", "id": "/tmp/empty", "workspace_key": "/tmp/empty", "slug": "empty", "title": "empty"},
+            thread_id=None,
+            limit=3,
+            section_limit=3,
+            recent_days=21,
+        )
+
+        self.assertEqual(payload["status"]["summary"], "No memory has been written yet.")
+        self.assertEqual(payload["workflow"]["status"], "empty")
+        self.assertFalse(payload["workflow"]["complete"])
+        self.assertEqual(payload["workflow"]["next_step"], "write_memory")
+        self.assertTrue(payload["onboarding"]["empty"])
+        self.assertIn("autopsy install", payload["onboarding"]["message"])
+        self.assertTrue(any(step.get("command") == "autopsy install" for step in payload["workflow"]["suggested_next_steps"]))
+
+    def test_status_payload_does_not_treat_recent_threads_as_memory(self):
+        class Result:
+            def __init__(self, rows):
+                self.result_set = rows
+
+        class Graph:
+            def query(self, query, *_args, **_kwargs):
+                if "MATCH (thread:Thread)" in query:
+                    return Result([[1, "thread:one", "Recent session", "2026-06-05T00:00:00Z", ""]])
+                return Result([])
+
+        payload = cli.build_status_payload(
+            Graph(),
+            tool=cli,
+            workspace={"root_path": "/tmp/threads", "id": "/tmp/threads", "workspace_key": "/tmp/threads", "slug": "threads", "title": "threads"},
+            thread_id=None,
+            limit=3,
+            section_limit=3,
+            recent_days=21,
+        )
+
+        self.assertEqual(payload["status"]["summary"], "No memory has been written yet; 1 recent thread exists.")
+        self.assertEqual(len(payload["status"]["recent_threads"]), 1)
+        self.assertEqual(payload["workflow"]["status"], "empty")
+        self.assertFalse(payload["workflow"]["complete"])
+        self.assertTrue(payload["onboarding"]["empty"])
+
     def test_activity_payload_does_not_warn_for_healthy_empty_first_run(self):
         class FakeTool:
             def workspace_payload(self, workspace):
