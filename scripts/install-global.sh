@@ -26,6 +26,8 @@ Environment:
 EOF
 }
 
+. "$ROOT_DIR/scripts/lib/python.sh"
+
 PREFIX="${AUTOPSY_INSTALL_PREFIX:-}"
 EXTRA="${AUTOPSY_INSTALL_EXTRA:-}"
 
@@ -56,20 +58,8 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-if [ -z "${PYTHON:-}" ]; then
-  if command -v python3.12 >/dev/null 2>&1; then
-    PYTHON=python3.12
-  else
-    PYTHON=python3
-  fi
-fi
-
-"$PYTHON" - <<'PY'
-import sys
-
-if sys.version_info < (3, 12):
-    raise SystemExit("Autopsy requires Python 3.12 or newer.")
-PY
+PYTHON_BIN="$(autopsy_select_python)"
+autopsy_check_python_version "$PYTHON_BIN"
 
 if [ -z "$PREFIX" ]; then
   if [ -d /opt/homebrew ] && [ -w /opt/homebrew ]; then
@@ -79,7 +69,7 @@ if [ -z "$PREFIX" ]; then
   fi
 fi
 
-VERSION="$("$PYTHON" - "$ROOT_DIR/pyproject.toml" <<'PY'
+VERSION="$("$PYTHON_BIN" - "$ROOT_DIR/pyproject.toml" <<'PY'
 import sys
 import tomllib
 from pathlib import Path
@@ -104,7 +94,7 @@ trap cleanup EXIT INT TERM HUP
 
 mkdir -p "$BIN_DIR" "$(dirname "$OPT_DIR")" "$(dirname "$CELLAR_DIR")" "$DIST_DIR"
 
-"$PYTHON" -m venv "$VENV_DIR"
+"$PYTHON_BIN" -m venv "$VENV_DIR"
 "$VENV_DIR/bin/python" -m pip install -U pip build >/dev/null
 "$VENV_DIR/bin/python" -m build --wheel --outdir "$DIST_DIR" "$ROOT_DIR" >/dev/null
 

@@ -2,14 +2,9 @@
 set -eu
 
 ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-if [ -z "${PYTHON:-}" ]; then
-  if command -v python3.12 >/dev/null 2>&1; then
-    PYTHON=python3.12
-  else
-    PYTHON=python3
-  fi
-fi
-PYTHON_BIN="$(command -v "$PYTHON")"
+. "$ROOT_DIR/scripts/lib/python.sh"
+PYTHON_BIN="$(autopsy_select_python)"
+autopsy_check_python_version "$PYTHON_BIN"
 
 if [ "$(uname -s)" != "Darwin" ]; then
   echo "homebrew-current-check: requires macOS" >&2

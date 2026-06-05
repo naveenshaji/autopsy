@@ -2,27 +2,76 @@
 set -eu
 
 ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-if [ -z "${PYTHON:-}" ]; then
-  if command -v python3.12 >/dev/null 2>&1; then
-    PYTHON=python3.12
-  else
-    PYTHON=python3
-  fi
-fi
-PYTHON_BIN="$(command -v "$PYTHON")"
+. "$ROOT_DIR/scripts/lib/python.sh"
+PYTHON_BIN="$(autopsy_select_python)"
 
 cd "$ROOT_DIR"
 
-"$PYTHON_BIN" - <<'PY'
-import sys
-
-if sys.version_info < (3, 12):
-    raise SystemExit("Autopsy requires Python 3.12 or newer.")
-PY
+autopsy_check_python_version "$PYTHON_BIN"
 
 TMP_DIR="${TMPDIR:-/tmp}/autopsy-install-matrix-$$"
 trap 'rm -rf "$TMP_DIR"' EXIT INT TERM HUP
 mkdir -p "$TMP_DIR"
+
+selector_dir="$TMP_DIR/python-selector"
+python_helper="$ROOT_DIR/scripts/lib/python.sh"
+mkdir -p "$selector_dir"
+cat > "$selector_dir/python3" <<'SH'
+#!/bin/sh
+exit 0
+SH
+cat > "$selector_dir/python3.13" <<'SH'
+#!/bin/sh
+exit 0
+SH
+cat > "$selector_dir/python3.12" <<'SH'
+#!/bin/sh
+exit 0
+SH
+chmod 0755 "$selector_dir/python3" "$selector_dir/python3.13" "$selector_dir/python3.12"
+PATH="$selector_dir" PYTHON= AUTOPSY_PYTHON_CANDIDATES="python3.12 python3.13 python3" /bin/sh -c '
+. "$1"
+selected="$(autopsy_select_python)"
+case "$selected" in
+  */python3.12) exit 0 ;;
+  *) echo "expected python3.12, got $selected" >&2; exit 1 ;;
+esac
+' sh "$python_helper"
+
+rm -f "$selector_dir/python3.12"
+PATH="$selector_dir" PYTHON= AUTOPSY_PYTHON_CANDIDATES="python3.12 python3.13 python3" /bin/sh -c '
+. "$1"
+selected="$(autopsy_select_python)"
+case "$selected" in
+  */python3.13) exit 0 ;;
+  *) echo "expected python3.13 fallback, got $selected" >&2; exit 1 ;;
+esac
+' sh "$python_helper"
+
+PYTHON="$selector_dir/python3" PATH="$selector_dir" /bin/sh -c '
+. "$1"
+selected="$(autopsy_select_python)"
+case "$selected" in
+  */python3) exit 0 ;;
+  *) echo "expected explicit PYTHON, got $selected" >&2; exit 1 ;;
+esac
+' sh "$python_helper"
+
+empty_selector_dir="$TMP_DIR/python-selector-empty"
+missing_python_err="$TMP_DIR/missing-python.err"
+missing_explicit_python_err="$TMP_DIR/missing-explicit-python.err"
+mkdir -p "$empty_selector_dir"
+if PATH="$empty_selector_dir" PYTHON= AUTOPSY_PYTHON_CANDIDATES="python3.12 python3.13 python3" /bin/sh -c '. "$1"; autopsy_select_python >/dev/null' sh "$python_helper" 2>"$missing_python_err"; then
+  echo "expected missing Python selection to fail" >&2
+  exit 1
+fi
+grep -F "Autopsy requires Python 3.12 or newer" "$missing_python_err" >/dev/null
+
+if PATH="$empty_selector_dir" PYTHON=missing-python /bin/sh -c '. "$1"; autopsy_select_python >/dev/null' sh "$python_helper" 2>"$missing_explicit_python_err"; then
+  echo "expected missing explicit PYTHON to fail" >&2
+  exit 1
+fi
+grep -F "Autopsy could not find PYTHON=missing-python" "$missing_explicit_python_err" >/dev/null
 
 legacy_dir="$TMP_DIR/shadow/legacy"
 valid_dir="$TMP_DIR/shadow/homebrew"

@@ -2,22 +2,13 @@
 set -eu
 
 ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-if [ -z "${PYTHON:-}" ]; then
-  if command -v python3.12 >/dev/null 2>&1; then
-    PYTHON=python3.12
-  else
-    PYTHON=python3
-  fi
-fi
+. "$ROOT_DIR/scripts/lib/python.sh"
+PYTHON_BIN="$(autopsy_select_python)"
+PYTHON="$PYTHON_BIN"
 
 cd "$ROOT_DIR"
 
-"$PYTHON" - <<'PY'
-import sys
-
-if sys.version_info < (3, 12):
-    raise SystemExit("Autopsy requires Python 3.12 or newer.")
-PY
+autopsy_check_python_version "$PYTHON"
 
 "$PYTHON" -m compileall -q src tests
 "$PYTHON" -m unittest discover -s tests
@@ -26,6 +17,7 @@ sh -n scripts/install-global.sh
 sh -n scripts/menubar-check.sh
 sh -n scripts/install-matrix-check.sh
 sh -n scripts/homebrew-current-check.sh
+sh -n scripts/lib/python.sh
 test -s scripts/homebrew-constraints.txt
 
 TMP_DIR="${TMPDIR:-/tmp}/autopsy-release-check-$$"
