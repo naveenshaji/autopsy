@@ -1,5 +1,9 @@
+import json
 import importlib.util
+import os
 import sys
+import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -161,6 +165,54 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
         self.assertEqual(payload["min_fact_rating"], 0.8)
         self.assertFalse(payload["write"])
         self.assertTrue(payload["write_if_stale"])
+
+    def test_worker_should_exit_when_info_file_is_replaced(self):
+        worker = load_worker_module()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            info_file = Path(temp_dir) / "ml-worker.json"
+            token = "TOKEN"
+            source_fingerprint = "source"
+            info_file.write_text(
+                json.dumps({"pid": os.getpid(), "token": token, "source_fingerprint": source_fingerprint}),
+                encoding="utf-8",
+            )
+
+            class Server:
+                idle_timeout_seconds = 0
+                last_request_at = time.monotonic()
+
+            self.assertEqual(
+                worker.worker_should_exit(Server(), info_file=str(info_file), token=token, source_fingerprint=source_fingerprint),
+                (False, ""),
+            )
+            info_file.write_text(
+                json.dumps({"pid": os.getpid() + 1, "token": token, "source_fingerprint": source_fingerprint}),
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                worker.worker_should_exit(Server(), info_file=str(info_file), token=token, source_fingerprint=source_fingerprint),
+                (True, "info_file_replaced"),
+            )
+
+    def test_worker_should_exit_after_idle_timeout(self):
+        worker = load_worker_module()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            info_file = Path(temp_dir) / "ml-worker.json"
+            token = "TOKEN"
+            source_fingerprint = "source"
+            info_file.write_text(
+                json.dumps({"pid": os.getpid(), "token": token, "source_fingerprint": source_fingerprint}),
+                encoding="utf-8",
+            )
+
+            class Server:
+                idle_timeout_seconds = 1
+                last_request_at = time.monotonic() - 2
+
+            self.assertEqual(
+                worker.worker_should_exit(Server(), info_file=str(info_file), token=token, source_fingerprint=source_fingerprint),
+                (True, "idle_timeout"),
+            )
 
 
 if __name__ == "__main__":

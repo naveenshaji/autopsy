@@ -205,6 +205,19 @@ def terminate_pid(pid: Any) -> None:
         except ProcessLookupError:
             return
         time.sleep(0.05)
+    try:
+        os.kill(value, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    except PermissionError:
+        return
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        try:
+            os.kill(value, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.05)
 
 
 def clear_worker_info() -> None:
@@ -223,14 +236,152 @@ def clear_stale_falkor_settings() -> str | None:
     return str(backup)
 
 
+def read_falkor_settings() -> dict[str, Any] | None:
+    path = settings_file()
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def terminate_falkor_runtime_from_settings() -> dict[str, Any]:
+    settings = read_falkor_settings() or {}
+    pidfile = str(settings.get("pidfile") or "").strip()
+    payload: dict[str, Any] = {
+        "pidfile": pidfile or None,
+        "pid": None,
+        "terminated": False,
+        "settings_backup": None,
+    }
+    if pidfile:
+        try:
+            pid_text = Path(pidfile).read_text(encoding="utf-8").strip()
+            payload["pid"] = int(pid_text)
+        except Exception as exc:
+            payload["pid_error"] = str(exc)
+        if payload.get("pid"):
+            terminate_pid(payload["pid"])
+            payload["terminated"] = True
+    payload["settings_backup"] = clear_stale_falkor_settings()
+    return payload
+
+
+def process_table_rows() -> list[dict[str, Any]]:
+    try:
+        result = subprocess.run(
+            ["ps", "-axo", "pid=,command="],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except Exception:
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in result.stdout.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        pid_text, _, command = stripped.partition(" ")
+        try:
+            pid = int(pid_text)
+        except ValueError:
+            continue
+        rows.append({"pid": pid, "command": command.strip()})
+    return rows
+
+
+def worker_process_records(*, info_path: Path | None = None) -> list[dict[str, Any]]:
+    info_text = str(info_path.expanduser()) if info_path else ""
+    records: list[dict[str, Any]] = []
+    for row in process_table_rows():
+        command = str(row.get("command") or "")
+        if "autopsy_memory/worker.py" not in command and "autopsy_memory.worker" not in command:
+            continue
+        if info_text and info_text not in command:
+            continue
+        records.append({"pid": int(row["pid"]), "command": command})
+    return records
+
+
+def reap_stale_worker_processes(*, keep_pid: int | None = None, info_path: Path | None = None) -> dict[str, Any]:
+    records = worker_process_records(info_path=info_path)
+    terminated: list[int] = []
+    for record in records:
+        pid = int(record["pid"])
+        if pid == os.getpid() or (keep_pid is not None and pid == keep_pid):
+            continue
+        terminate_pid(pid)
+        terminated.append(pid)
+    return {
+        "terminated": terminated,
+        "records": records,
+        "keep_pid": keep_pid,
+        "info_file": str(info_path.expanduser()) if info_path else None,
+    }
+
+
+def worker_lifecycle_payload(*, cleanup: bool = False) -> dict[str, Any]:
+    info = read_worker_info()
+    current_pid = None
+    if isinstance(info, dict):
+        try:
+            current_pid = int(info.get("pid"))
+        except Exception:
+            current_pid = None
+    current_matches = bool(info and worker_info_matches_current_sources(info))
+    current_healthy = bool(info and current_matches and health_check(info))
+    same_info_records = worker_process_records(info_path=info_file())
+    all_records = worker_process_records()
+    stale_same_info = [
+        record for record in same_info_records
+        if current_pid is None or int(record["pid"]) != current_pid
+    ]
+    stale_all = [
+        record for record in all_records
+        if current_pid is None or int(record["pid"]) != current_pid
+    ]
+    cleanup_payload = None
+    if cleanup:
+        cleanup_payload = reap_stale_worker_processes(keep_pid=current_pid if current_healthy else None, info_path=info_file())
+    lifecycle_ok = (not info or (current_matches and current_healthy)) and not stale_same_info
+    return {
+        "name": "resident_worker",
+        "required": False,
+        "ok": lifecycle_ok,
+        "current": {
+            "present": bool(info),
+            "pid": current_pid,
+            "matches_current_sources": current_matches,
+            "healthy": current_healthy,
+            "info_file": str(info_file()),
+        },
+        "stale_same_info_count": len(stale_same_info),
+        "stale_worker_count": len(stale_all),
+        "stale_same_info": stale_same_info,
+        "stale_workers": stale_all[:20],
+        "cleanup": cleanup_payload,
+    }
+
+
 def start_worker_locked() -> dict[str, Any]:
     existing = read_worker_info()
     if existing and worker_info_matches_current_sources(existing) and health_check(existing):
+        try:
+            reap_stale_worker_processes(keep_pid=int(existing.get("pid")), info_path=info_file())
+        except Exception:
+            pass
         return existing
 
     if existing:
         terminate_pid(existing.get("pid"))
         clear_worker_info()
+        terminate_falkor_runtime_from_settings()
+    reap_stale_worker_processes(info_path=info_file())
 
     paths = script_paths()
     if not paths["worker"].exists():
@@ -357,9 +508,10 @@ def is_stale_worker_route_error(message: str) -> bool:
 
 
 def recover_stale_falkor_socket(info: dict[str, Any]) -> None:
-    backup = clear_stale_falkor_settings()
+    runtime_cleanup = terminate_falkor_runtime_from_settings()
     terminate_pid(info.get("pid"))
     clear_worker_info()
+    backup = runtime_cleanup.get("settings_backup")
     if backup:
         log_diagnostic(f"Backed up stale Falkor settings to {backup}")
 

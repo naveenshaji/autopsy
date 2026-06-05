@@ -159,6 +159,7 @@ def build_parser(
     install_parser.set_defaults(func=handlers.install)
 
     doctor_parser = subparsers.add_parser("doctor", parents=[common], help="Check local runtime dependencies and Autopsy memory paths.")
+    doctor_parser.add_argument("--cleanup-workers", action="store_true", help="Terminate stale resident memory workers that share the current worker info file.")
     doctor_parser.set_defaults(func=handlers.doctor)
 
     sync_parser = subparsers.add_parser("sync", parents=[common], help="Ensure the Falkor memory graph is initialized for the workspace.")

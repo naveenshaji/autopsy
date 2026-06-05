@@ -16228,6 +16228,7 @@ def build_doctor_payload(args: argparse.Namespace) -> dict[str, Any]:
         falkordb_runtime_check(args),
         import_check("sentence_transformers", required=True),
         model_warmup_check(),
+        worker_lifecycle_check(cleanup=bool(getattr(args, "cleanup_workers", False))),
     ]
     required_ok = all(check["ok"] for check in checks if check["required"])
     return {
@@ -16250,6 +16251,19 @@ def build_doctor_payload(args: argparse.Namespace) -> dict[str, Any]:
             "AUTOPSY_UNIFIED_MEMORY_ROOT": os.environ.get("AUTOPSY_UNIFIED_MEMORY_ROOT"),
         },
     }
+
+
+def worker_lifecycle_check(*, cleanup: bool = False) -> dict[str, Any]:
+    try:
+        from autopsy_memory import mcp_bridge
+        return mcp_bridge.worker_lifecycle_payload(cleanup=cleanup)
+    except Exception as exc:
+        return {
+            "name": "resident_worker",
+            "required": False,
+            "ok": False,
+            "error": str(exc),
+        }
 
 
 def cmd_install(args: argparse.Namespace) -> None:

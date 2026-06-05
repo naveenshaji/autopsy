@@ -26,6 +26,8 @@ _FALKOR_FAILURE_CACHE = {}
 _FALKOR_CONTEXT_LOCK = threading.Lock()
 _FALKOR_VALIDATION_TTL_SECONDS = 10.0
 _FALKOR_FAILURE_TTL_SECONDS = 30.0
+_WORKER_DEFAULT_IDLE_TIMEOUT_SECONDS = 3600.0
+_WORKER_DEFAULT_OWNERSHIP_CHECK_SECONDS = 5.0
 DIRECT_RETRIEVAL_REASONS = {'lexical', 'exact', 'token_overlap', 'entity_overlap', 'graph_relation'}
 
 APP_SUPPORT_DIR_DEFAULT = Path.home() / 'Library' / 'Application Support' / 'Autopsy'
@@ -469,6 +471,116 @@ def load_cross_encoder(model_name: str, device: str):
         model = CrossEncoder(model_name, device=device)
         _RERANKER_MODEL_CACHE[key] = model
     return model
+
+
+def env_float(name: str, default: float) -> float:
+    raw_value = str(os.environ.get(name) or '').strip()
+    if not raw_value:
+        return default
+    try:
+        return float(raw_value)
+    except ValueError:
+        return default
+
+
+def worker_idle_timeout_seconds() -> float:
+    return max(0.0, env_float('AUTOPSY_WORKER_IDLE_TIMEOUT_SECONDS', _WORKER_DEFAULT_IDLE_TIMEOUT_SECONDS))
+
+
+def worker_ownership_check_seconds() -> float:
+    return max(0.25, env_float('AUTOPSY_WORKER_OWNERSHIP_CHECK_SECONDS', _WORKER_DEFAULT_OWNERSHIP_CHECK_SECONDS))
+
+
+def worker_info_owns_process(info: dict | None, *, token: str, source_fingerprint: str) -> bool:
+    if not isinstance(info, dict):
+        return False
+    try:
+        pid = int(info.get('pid'))
+    except Exception:
+        return False
+    return (
+        pid == os.getpid()
+        and str(info.get('token') or '') == token
+        and str(info.get('source_fingerprint') or '') == source_fingerprint
+    )
+
+
+def read_worker_info_file(path: str) -> dict | None:
+    try:
+        with open(path, 'r', encoding='utf-8') as handle:
+            payload = json.load(handle)
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def info_file_still_owned(path: str, *, token: str, source_fingerprint: str) -> bool:
+    return worker_info_owns_process(read_worker_info_file(path), token=token, source_fingerprint=source_fingerprint)
+
+
+def shutdown_falkor_contexts() -> None:
+    with _FALKOR_CONTEXT_LOCK:
+        contexts = list(_FALKOR_CONTEXT_CACHE.values())
+        _FALKOR_CONTEXT_CACHE.clear()
+    for falkor in contexts:
+        reset_lite_client = getattr(falkor.get('module'), 'reset_falkordb_lite_client', None)
+        if callable(reset_lite_client):
+            try:
+                reset_lite_client(falkor.get('lite_path'))
+            except Exception:
+                pass
+
+
+def remove_owned_info_file(path: str, *, token: str, source_fingerprint: str) -> None:
+    if not info_file_still_owned(path, token=token, source_fingerprint=source_fingerprint):
+        return
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+
+
+def worker_should_exit(server, *, info_file: str, token: str, source_fingerprint: str) -> tuple[bool, str]:
+    if not info_file_still_owned(info_file, token=token, source_fingerprint=source_fingerprint):
+        return True, 'info_file_replaced'
+    idle_timeout = float(getattr(server, 'idle_timeout_seconds', 0.0) or 0.0)
+    if idle_timeout > 0:
+        idle_for = time.monotonic() - float(getattr(server, 'last_request_at', 0.0) or 0.0)
+        if idle_for >= idle_timeout:
+            return True, 'idle_timeout'
+    return False, ''
+
+
+def worker_lifecycle_monitor(server, *, info_file: str, token: str, source_fingerprint: str) -> None:
+    interval = float(getattr(server, 'ownership_check_seconds', _WORKER_DEFAULT_OWNERSHIP_CHECK_SECONDS) or _WORKER_DEFAULT_OWNERSHIP_CHECK_SECONDS)
+    while not bool(getattr(server, 'shutdown_requested', False)):
+        time.sleep(interval)
+        should_exit, reason = worker_should_exit(server, info_file=info_file, token=token, source_fingerprint=source_fingerprint)
+        if not should_exit:
+            continue
+        server.shutdown_reason = reason
+        server.shutdown_requested = True
+        print(f'autopsy worker exiting: {reason}', file=sys.stderr, flush=True)
+        threading.Thread(target=force_exit_if_still_running, args=(server,), daemon=True).start()
+        threading.Thread(target=server.shutdown, daemon=True).start()
+        return
+
+
+def force_exit_if_still_running(server, delay_seconds: float = 5.0) -> None:
+    time.sleep(delay_seconds)
+    if bool(getattr(server, 'shutdown_requested', False)):
+        os._exit(0)
+
+
+def start_worker_lifecycle_monitor(server, *, info_file: str, token: str, source_fingerprint: str) -> threading.Thread:
+    thread = threading.Thread(
+        target=worker_lifecycle_monitor,
+        kwargs={'server': server, 'info_file': info_file, 'token': token, 'source_fingerprint': source_fingerprint},
+        daemon=True,
+    )
+    thread.start()
+    return thread
+
 
 def falkor_backend_settings() -> dict | None:
     backend = str(os.environ.get('AUTOPSY_MEMORY_BACKEND') or '').strip().lower()
@@ -1262,21 +1374,31 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return True
 
+    def _touch_request(self) -> None:
+        self.server.last_request_at = time.monotonic()
+
     def log_message(self, format, *args):
         return
 
     def do_GET(self):
         if not self._require_token():
             return
+        self._touch_request()
         parsed = urlparse(self.path)
         if parsed.path == '/health':
-            self._write_json(200, {'ok': True, 'pid': os.getpid()})
+            self._write_json(200, {
+                'ok': True,
+                'pid': os.getpid(),
+                'idle_timeout_seconds': getattr(self.server, 'idle_timeout_seconds', 0.0),
+                'shutdown_reason': getattr(self.server, 'shutdown_reason', ''),
+            })
             return
         self._write_json(404, {'error': 'not found'})
 
     def do_POST(self):
         if not self._require_token():
             return
+        self._touch_request()
         length = int(self.headers.get('content-length', '0') or '0')
         raw = self.rfile.read(length) if length > 0 else b'{}'
         try:
@@ -1399,6 +1521,11 @@ def main():
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     server.auth_token = args.token
     server.daemon_threads = True
+    server.last_request_at = time.monotonic()
+    server.idle_timeout_seconds = worker_idle_timeout_seconds()
+    server.ownership_check_seconds = worker_ownership_check_seconds()
+    server.shutdown_requested = False
+    server.shutdown_reason = ''
 
     info = {
         'base_url': f'http://{args.host}:{server.server_port}',
@@ -1409,14 +1536,23 @@ def main():
     os.makedirs(os.path.dirname(args.info_file), exist_ok=True)
     with open(args.info_file, 'w', encoding='utf-8') as handle:
         json.dump(info, handle)
+    start_worker_lifecycle_monitor(
+        server,
+        info_file=args.info_file,
+        token=args.token,
+        source_fingerprint=args.source_fingerprint,
+    )
 
     try:
         server.serve_forever()
     finally:
-        try:
-            os.remove(args.info_file)
-        except FileNotFoundError:
-            pass
+        server.shutdown_requested = True
+        shutdown_falkor_contexts()
+        remove_owned_info_file(
+            args.info_file,
+            token=args.token,
+            source_fingerprint=args.source_fingerprint,
+        )
 
 
 if __name__ == '__main__':
