@@ -9,10 +9,12 @@ Use this checklist before tagging or publishing Autopsy Memory.
 - `python -m pip install -e ".[dev]"` works in a fresh virtual environment.
 - `python -m build --wheel` works in a fresh virtual environment.
 - The release interpreter is Python 3.12 or newer.
-- `./scripts/install-global.sh` installs the standalone CLI in the target environment.
+- `brew install autopsy-memory` installs and links the standalone CLI in the target environment.
 - `which autopsy` points at the standalone memory CLI wrapper or package entrypoint.
 - `autopsy version --json` prints package metadata.
 - `autopsy doctor` passes in the target release environment.
+- `autopsy install --dry-run --smoke-test --skip-write-smoke` reports a skipped dry-run smoke payload without writing.
+- `autopsy install --smoke-test` passes in at least one clean target release environment.
 - `autopsy health` passes in an isolated release-check graph.
 - `autopsy init --check` reports target instruction state without writing.
 - `autopsy instructions` prints copy-pasteable agent instructions.

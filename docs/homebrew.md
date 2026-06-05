@@ -21,6 +21,15 @@ with:
 autopsy install --repo
 ```
 
+On a new machine or after a repair, run the deeper smoke check:
+
+```bash
+autopsy install --smoke-test
+```
+
+It verifies doctor, current-state reads, consult abstention, and temporary
+write/delete behavior.
+
 That writes `~/Library/LaunchAgents/com.naveenshaji.autopsy.menubar.plist`
 pointing at the stable Homebrew `opt` path:
 

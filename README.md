@@ -56,6 +56,15 @@ autopsy doctor
 autopsy status --current-only
 ```
 
+Run a deeper confidence check when setting up a new machine:
+
+```bash
+autopsy install --smoke-test
+```
+
+That runs doctor, a current-state read, an abstention consult, and a temporary
+write/delete check.
+
 After setup, use your coding agent normally. The installed agent instructions
 tell supported agents when to consult Autopsy before substantial work and when
 to write durable outcomes after material work.
@@ -208,7 +217,7 @@ autopsy menubar --launch-agent-status
 Common fixes:
 
 - If `autopsy` is not found, run `brew update && brew upgrade autopsy-memory`,
-  then open a new terminal.
+  then open a new terminal and run `autopsy install`.
 - If the menu bar app is missing, run `autopsy install`.
 - If the menu bar app starts but shows no recent activity, run
   `autopsy activity` once and then reopen the menu.

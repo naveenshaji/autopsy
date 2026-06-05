@@ -1,15 +1,21 @@
 # CLI
 
-## Global Install
+## Install
 
 ```bash
-./scripts/install-global.sh
+brew tap naveenshaji/autopsy
+brew install autopsy-memory
 autopsy install
 autopsy version --json
 autopsy doctor
 ```
 
-The installer creates a versioned Homebrew-style layout under `/opt/homebrew` when writable, or `~/.local` otherwise. It backs up a non-standalone existing `autopsy` command before replacing it. On macOS, it also installs and starts the menu bar LaunchAgent by default; set `AUTOPSY_INSTALL_MENUBAR_AGENT=0` to skip that in CI or headless sessions.
+Homebrew is the preferred macOS distribution path. It installs the `autopsy`
+command, pinned Python runtime dependencies, the native Apple Silicon FalkorDB
+module, and the Swift menu bar app source. `autopsy install` then repairs PATH
+linkage when possible, writes global agent instructions, starts the menu bar
+LaunchAgent in a normal macOS GUI session, runs `doctor`, and starts background
+model warmup.
 
 ## First-Run Setup
 
@@ -18,9 +24,14 @@ autopsy install
 autopsy install --dry-run
 autopsy install --repo
 autopsy install --skip-menubar
+autopsy install --smoke-test
 ```
 
 `install` is the normal first-run command. It installs managed global instruction blocks for supported agents and, on macOS, stages the menu bar app and installs the LaunchAgent that keeps it visible. Repo-local instructions are opt-in with `--repo`.
+
+Use `autopsy install --smoke-test` on a new machine or after a repair. It runs
+doctor, a current-state read, an abstention consult, and a temporary
+write/delete check, then exits nonzero if any requested smoke check fails.
 
 ## Agent Instructions
 
@@ -30,6 +41,7 @@ autopsy init --check
 autopsy init --dry-run --global --repo . --agent all
 autopsy init --print
 autopsy init --mcp
+autopsy init --smoke-test
 ```
 
 `init` is the lower-level instruction installer. It installs managed instruction blocks for global Codex, Claude Code, Gemini CLI, and OpenCode instruction files, plus repo-scoped files for Codex/AGENTS.md-aware tools, Claude Code, Gemini CLI, GitHub Copilot, and Windsurf. MCP configuration is optional and only printed when `--mcp` is passed.

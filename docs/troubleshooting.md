@@ -17,15 +17,27 @@ Required modules:
 
 ## Installed Command Is Wrong
 
-If `autopsy doctor` reports that `autopsy` is the legacy app wrapper, reinstall the standalone CLI:
+If `autopsy doctor` reports that `autopsy` is missing, shadowed, or still the
+legacy app wrapper, reinstall the Homebrew package and rerun setup:
 
 ```bash
-./scripts/install-global.sh
+brew update
+brew reinstall autopsy-memory
+autopsy install
 which autopsy
 autopsy version --json
 ```
 
-The installer backs up the replaced wrapper as `autopsy.legacy-<timestamp>`.
+`autopsy install` repairs Homebrew PATH linkage when it can do so safely. If
+`doctor` reports a valid Homebrew command shadowed later on PATH, move
+Homebrew's bin directory earlier in your shell PATH or remove the earlier
+legacy wrapper.
+
+After repair, run:
+
+```bash
+autopsy install --smoke-test
+```
 
 ## Falkor Fails To Start
 

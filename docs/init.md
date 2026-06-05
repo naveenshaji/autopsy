@@ -1,10 +1,23 @@
 # Autopsy Init
 
-`autopsy init` is the first-run setup command for coding agents.
+`autopsy install` is the normal first-run setup command for end users.
+
+`autopsy init` is the lower-level instruction installer used when you only want
+to inspect, print, or write agent instruction blocks.
 
 The default integration is persistent instructions plus the `autopsy` CLI. MCP is optional.
 
-## Default
+## Normal Setup
+
+```bash
+autopsy install
+autopsy install --smoke-test
+```
+
+`install` writes global agent instructions, starts the macOS menu bar app when
+available, runs runtime checks, and starts background model warmup.
+
+## Instruction-Only Setup
 
 ```bash
 autopsy init
@@ -45,6 +58,9 @@ autopsy init --print
 autopsy init --mcp
 autopsy init --smoke-test
 ```
+
+`autopsy init --smoke-test` runs the same instruction-era smoke checks without
+installing the menu bar LaunchAgent.
 
 ## Policy
 
