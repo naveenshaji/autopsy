@@ -50,7 +50,46 @@ class HomebrewFormulaGeneratorTests(unittest.TestCase):
         self.assertIn('with_env(PATH: "#{bin}:#{ENV.fetch("PATH", "")}")', formula)
         self.assertIn("autopsy install --smoke-test", formula)
         self.assertIn("install --dry-run --skip-menubar --smoke-test --skip-write-smoke", formula)
+        self.assertIn('if install_payload["smoke_test"]', formula)
         self.assertIn('install_payload.dig("smoke_test", "reason") == "dry_run"', formula)
+
+    def test_formula_generator_rejects_wrong_python_version(self):
+        generator = load_generator()
+        original_report = generator.python_platform_report
+        try:
+            generator.python_platform_report = lambda _python: {
+                "python_version": "3.13",
+                "system": "Darwin",
+                "machine": "arm64",
+            }
+            with self.assertRaisesRegex(RuntimeError, "requires Python 3.12"):
+                generator.validate_formula_python("python3.13")
+        finally:
+            generator.python_platform_report = original_report
+
+    def test_formula_generator_rejects_non_arm_macos(self):
+        generator = load_generator()
+        original_report = generator.python_platform_report
+        try:
+            generator.python_platform_report = lambda _python: {
+                "python_version": "3.12",
+                "system": "Linux",
+                "machine": "x86_64",
+            }
+            with self.assertRaisesRegex(RuntimeError, "Apple Silicon macOS"):
+                generator.validate_formula_python("python3.12")
+        finally:
+            generator.python_platform_report = original_report
+
+    def test_formula_generator_accepts_macos_arm_python_312(self):
+        generator = load_generator()
+        original_report = generator.python_platform_report
+        report = {"python_version": "3.12", "system": "Darwin", "machine": "arm64"}
+        try:
+            generator.python_platform_report = lambda _python: report
+            self.assertEqual(generator.validate_formula_python("python3.12"), report)
+        finally:
+            generator.python_platform_report = original_report
 
 
 if __name__ == "__main__":

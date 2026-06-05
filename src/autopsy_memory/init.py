@@ -259,17 +259,17 @@ def run_command(command: list[str], *, timeout: int = 20) -> dict[str, Any]:
     }
 
 
-def smoke_tests(*, skip_write: bool) -> list[dict[str, Any]]:
+def smoke_tests(*, skip_write: bool, autopsy_command: str = "autopsy") -> list[dict[str, Any]]:
     checks = [
-        run_command(["autopsy", "doctor"], timeout=30),
-        run_command(["autopsy", "status", "--current-only", "--limit", "1", "--section-limit", "1"], timeout=30),
-        consult_abstention_check(),
+        run_command([autopsy_command, "doctor"], timeout=30),
+        run_command([autopsy_command, "status", "--current-only", "--limit", "1", "--section-limit", "1"], timeout=30),
+        consult_abstention_check(autopsy_command=autopsy_command),
     ]
     if not skip_write:
         title = "Autopsy init smoke test"
         content = "Temporary smoke-test memory created by autopsy init."
         write_result = run_command([
-            "autopsy",
+            autopsy_command,
             "capture-outcome",
             "--outcome",
             "attempt",
@@ -282,13 +282,13 @@ def smoke_tests(*, skip_write: bool) -> list[dict[str, Any]]:
         if write_result.get("ok"):
             stable_key = extract_stable_key(write_result.get("stdout", ""))
             if stable_key:
-                checks.append(run_command(["autopsy", "delete", stable_key], timeout=30))
+                checks.append(run_command([autopsy_command, "delete", stable_key], timeout=30))
     return checks
 
 
-def consult_abstention_check() -> dict[str, Any]:
+def consult_abstention_check(*, autopsy_command: str = "autopsy") -> dict[str, Any]:
     result = run_command([
-        "autopsy",
+        autopsy_command,
         "consult",
         "--current-only",
         "--query",
@@ -348,9 +348,11 @@ def build_init_payload(args: argparse.Namespace) -> dict[str, Any]:
     if getattr(args, "dry_run", False):
         apply_changes = False
 
+    autopsy_command = str(getattr(args, "autopsy_command_path", "") or shutil.which("autopsy") or "")
+
     payload: dict[str, Any] = {
         "mode": "init",
-        "autopsy_command": shutil.which("autopsy"),
+        "autopsy_command": autopsy_command or None,
         "agent": getattr(args, "agent", "all"),
         "global": install_global,
         "repo": str(repo_path) if repo_path else None,
@@ -383,7 +385,10 @@ def build_init_payload(args: argparse.Namespace) -> dict[str, Any]:
             payload["targets"].append(target_status(target))
 
     if getattr(args, "smoke_test", False):
-        payload["smoke_tests"] = smoke_tests(skip_write=bool(getattr(args, "skip_write_smoke", False)))
+        payload["smoke_tests"] = smoke_tests(
+            skip_write=bool(getattr(args, "skip_write_smoke", False)),
+            autopsy_command=autopsy_command or "autopsy",
+        )
 
     incomplete = []
     if not payload["autopsy_command"]:

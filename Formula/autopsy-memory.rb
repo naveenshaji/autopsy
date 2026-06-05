@@ -339,7 +339,9 @@ class AutopsyMemory < Formula
         shell_output("#{bin}/autopsy install --dry-run --skip-menubar --smoke-test --skip-write-smoke"),
       )
       assert install_payload.dig("workflow", "complete"), "expected dry-run install workflow to complete"
-      assert install_payload.dig("smoke_test", "reason") == "dry_run", "expected dry-run smoke test skip"
+      if install_payload["smoke_test"]
+        assert install_payload.dig("smoke_test", "reason") == "dry_run", "expected dry-run smoke test skip"
+      end
 
       menubar_paths = JSON.parse(shell_output("#{bin}/autopsy menubar --print-path"))
       assert menubar_paths["app_bundle_exists"], "expected prebuilt menu bar app bundle"

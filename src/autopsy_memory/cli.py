@@ -36,6 +36,7 @@ MENUBAR_INSTALLED_DIR_NAME = "menubar"
 MENUBAR_PRODUCT_NAME = "AutopsyMenuBar"
 MENUBAR_BUNDLE_IDENTIFIER = "com.naveenshaji.autopsy.menubar"
 MENUBAR_LAUNCH_AGENT_LABEL = "com.naveenshaji.autopsy.menubar"
+HOMEBREW_QUALIFIED_PACKAGE_NAME = "naveenshaji/autopsy/autopsy-memory"
 MEMORY_NAMESPACE_TAG_PREFIX = "namespace:"
 MEMORY_NAMESPACE_METADATA_KEY = "namespaces"
 ENTITY_SCOPE_METADATA_KEY = "entity_scopes"
@@ -15590,7 +15591,7 @@ def menubar_swiftpm_support_dir(app_dir: Path) -> Path:
 
 def prepare_menubar_swiftpm_support_dirs(app_dir: Path) -> None:
     support_dir = menubar_swiftpm_support_dir(app_dir)
-    for child in ("cache", "configuration", "security"):
+    for child in ("cache", "configuration", "security", "module-cache"):
         (support_dir / child).mkdir(parents=True, exist_ok=True)
 
 
@@ -15603,6 +15604,8 @@ def menubar_swift_build_command(app_dir: Path, *, release: bool) -> list[str]:
         "-c",
         configuration,
         "--disable-sandbox",
+        "--jobs",
+        "1",
         "--cache-path",
         str(support_dir / "cache"),
         "--config-path",
@@ -15611,6 +15614,8 @@ def menubar_swift_build_command(app_dir: Path, *, release: bool) -> list[str]:
         str(support_dir / "security"),
         "--manifest-cache",
         "local",
+        "-Xcc",
+        f"-fmodules-cache-path={support_dir / 'module-cache'}",
     ]
 
 
@@ -15824,7 +15829,21 @@ def uninstall_menubar_launch_agent() -> None:
     print(json.dumps(menubar_launch_agent_status_payload(), indent=2))
 
 
-def install_instruction_payload(args: argparse.Namespace) -> dict[str, Any]:
+def install_autopsy_command_path(path_repair_payload: dict[str, Any] | None) -> str | None:
+    if not path_repair_payload:
+        return None
+    for check_key in ("check_after", "check_before"):
+        check = path_repair_payload.get(check_key)
+        if not isinstance(check, dict):
+            continue
+        if check.get("ok") and check.get("path"):
+            return str(check.get("path"))
+        if check.get("shadowed_valid_command"):
+            return str(check.get("shadowed_valid_command"))
+    return None
+
+
+def install_instruction_payload(args: argparse.Namespace, *, path_repair_payload: dict[str, Any] | None = None) -> dict[str, Any]:
     if getattr(args, "skip_instructions", False):
         return {"skipped": True, "reason": "skip_instructions"}
     init_args = copy.copy(args)
@@ -15832,6 +15851,9 @@ def install_instruction_payload(args: argparse.Namespace) -> dict[str, Any]:
     init_args.print_instructions = False
     init_args.check = False
     init_args.mcp = False
+    preferred_command = install_autopsy_command_path(path_repair_payload)
+    if preferred_command:
+        init_args.autopsy_command_path = preferred_command
     return build_init_payload(init_args)
 
 
@@ -15912,11 +15934,39 @@ def run_install_subprocess(command: list[str]) -> dict[str, Any]:
 
 
 def homebrew_package_prefix(brew_path: str) -> tuple[str | None, dict[str, Any]]:
-    result = run_install_subprocess([brew_path, "--prefix", PACKAGE_NAME])
-    if result.get("returncode") != 0:
-        return None, result
-    output = str(result.get("stdout") or "").strip().splitlines()
-    return (output[-1].strip() if output else None), result
+    attempts: list[dict[str, Any]] = []
+    for formula_name in (PACKAGE_NAME, HOMEBREW_QUALIFIED_PACKAGE_NAME):
+        result = run_install_subprocess([brew_path, "--prefix", formula_name])
+        result["formula_name"] = formula_name
+        attempts.append(result)
+        if result.get("returncode") == 0:
+            output = str(result.get("stdout") or "").strip().splitlines()
+            if len(attempts) > 1:
+                result["attempts"] = [dict(attempt) for attempt in attempts]
+            return (output[-1].strip() if output else None), result
+
+    tap_result = run_install_subprocess([brew_path, "tap"])
+    tap_result["discovery"] = "tap"
+    attempts.append(tap_result)
+    if tap_result.get("returncode") == 0:
+        for tap_name in str(tap_result.get("stdout") or "").splitlines():
+            tap_name = tap_name.strip()
+            if not tap_name:
+                continue
+            formula_name = f"{tap_name}/{PACKAGE_NAME}"
+            if formula_name in {PACKAGE_NAME, HOMEBREW_QUALIFIED_PACKAGE_NAME}:
+                continue
+            result = run_install_subprocess([brew_path, "--prefix", formula_name])
+            result["formula_name"] = formula_name
+            attempts.append(result)
+            if result.get("returncode") == 0:
+                output = str(result.get("stdout") or "").strip().splitlines()
+                result["attempts"] = [dict(attempt) for attempt in attempts]
+                return (output[-1].strip() if output else None), result
+
+    last_result = attempts[-1] if attempts else {"args": [brew_path, "--prefix", PACKAGE_NAME], "returncode": 1}
+    last_result["attempts"] = [dict(attempt) for attempt in attempts]
+    return None, last_result
 
 
 def homebrew_install_prefix_from_formula_prefix(formula_prefix: str | None) -> Path | None:
@@ -15997,10 +16047,11 @@ def install_path_repair_payload(args: argparse.Namespace) -> dict[str, Any]:
         "homebrew_prefix": str(brew_prefix) if brew_prefix else None,
         "formula_prefix": formula_prefix,
     })
+    formula_name = str(prefix_command.get("formula_name") or PACKAGE_NAME)
     if getattr(args, "dry_run", False):
         payload["would_run"] = [
-            [brew_path, "unlink", PACKAGE_NAME],
-            [brew_path, "link", "--overwrite", PACKAGE_NAME],
+            [brew_path, "unlink", formula_name],
+            [brew_path, "link", "--overwrite", formula_name],
         ]
         if command_path and Path(command_path).exists() and not Path(command_path).is_symlink():
             payload["would_backup"] = command_path
@@ -16011,12 +16062,12 @@ def install_path_repair_payload(args: argparse.Namespace) -> dict[str, Any]:
         if backup_path:
             payload["backups"].append(backup_path)
 
-    unlink_result = run_install_subprocess([brew_path, "unlink", PACKAGE_NAME])
+    unlink_result = run_install_subprocess([brew_path, "unlink", formula_name])
     payload["commands"].append(unlink_result)
-    link_result = run_install_subprocess([brew_path, "link", "--overwrite", PACKAGE_NAME])
+    link_result = run_install_subprocess([brew_path, "link", "--overwrite", formula_name])
     payload["commands"].append(link_result)
     if link_result.get("returncode") != 0:
-        payload["error"] = "brew link --overwrite autopsy-memory failed."
+        payload["error"] = f"brew link --overwrite {formula_name} failed."
         return payload
 
     check_after = installed_autopsy_command_check()
@@ -16028,7 +16079,7 @@ def install_path_repair_payload(args: argparse.Namespace) -> dict[str, Any]:
     return payload
 
 
-def install_smoke_test_payload(args: argparse.Namespace) -> dict[str, Any]:
+def install_smoke_test_payload(args: argparse.Namespace, *, path_repair_payload: dict[str, Any] | None = None) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "skipped": False,
         "ok": None,
@@ -16041,7 +16092,11 @@ def install_smoke_test_payload(args: argparse.Namespace) -> dict[str, Any]:
         payload.update({"skipped": True, "reason": "dry_run"})
         return payload
 
-    checks = smoke_tests(skip_write=bool(getattr(args, "skip_write_smoke", False)))
+    smoke_kwargs: dict[str, Any] = {"skip_write": bool(getattr(args, "skip_write_smoke", False))}
+    preferred_command = install_autopsy_command_path(path_repair_payload)
+    if preferred_command:
+        smoke_kwargs["autopsy_command"] = preferred_command
+    checks = smoke_tests(**smoke_kwargs)
     failed = [
         {
             "command": check.get("command"),
@@ -16092,13 +16147,13 @@ def build_doctor_payload(args: argparse.Namespace) -> dict[str, Any]:
 
 def cmd_install(args: argparse.Namespace) -> None:
     path_repair_payload = install_path_repair_payload(args)
-    instructions_payload = install_instruction_payload(args)
+    instructions_payload = install_instruction_payload(args, path_repair_payload=path_repair_payload)
     menubar_payload = install_menubar_payload(args)
     doctor_payload: dict[str, Any] | None = None
     if not getattr(args, "skip_doctor", False) and not getattr(args, "dry_run", False):
         doctor_payload = build_doctor_payload(args)
     model_warmup_payload = start_model_warmup_background(args)
-    smoke_test_payload = install_smoke_test_payload(args)
+    smoke_test_payload = install_smoke_test_payload(args, path_repair_payload=path_repair_payload)
 
     next_steps: list[str] = []
     if not path_repair_payload.get("ok") and not path_repair_payload.get("skipped"):

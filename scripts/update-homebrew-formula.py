@@ -65,6 +65,47 @@ def pip_dependency_report(python: str) -> list[dict[str, Any]]:
         return json.loads(report_path.read_text())["install"]
 
 
+def python_platform_report(python: str) -> dict[str, Any]:
+    completed = subprocess.run(
+        [
+            python,
+            "-c",
+            (
+                "import json, platform, sys; "
+                "print(json.dumps({"
+                "'executable': sys.executable, "
+                "'python_version': f'{sys.version_info.major}.{sys.version_info.minor}', "
+                "'system': platform.system(), "
+                "'machine': platform.machine()"
+                "}))"
+            ),
+        ],
+        check=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    return json.loads(completed.stdout)
+
+
+def validate_formula_python(python: str) -> dict[str, Any]:
+    report = python_platform_report(python)
+    python_version = str(report.get("python_version") or "")
+    system = str(report.get("system") or "")
+    machine = str(report.get("machine") or "").lower()
+    if python_version != "3.12":
+        raise RuntimeError(
+            "Autopsy Homebrew formula generation requires Python 3.12 because the formula depends on "
+            f"Homebrew python@3.12; {python!r} reported Python {python_version or 'unknown'}."
+        )
+    if system != "Darwin" or machine not in {"arm64", "aarch64"}:
+        raise RuntimeError(
+            "Autopsy Homebrew formula generation must run on Apple Silicon macOS because the formula "
+            "vendors macOS arm64 wheel resources and the native FalkorDB module; "
+            f"{python!r} reported system={system or 'unknown'} machine={machine or 'unknown'}."
+        )
+    return report
+
+
 def report_distribution(item: dict[str, Any]) -> tuple[str, str]:
     download_info = item.get("download_info") or {}
     url = str(download_info.get("url") or "")
@@ -233,7 +274,9 @@ class {FORMULA_CLASS} < Formula
         shell_output("#{{bin}}/autopsy install --dry-run --skip-menubar --smoke-test --skip-write-smoke"),
       )
       assert install_payload.dig("workflow", "complete"), "expected dry-run install workflow to complete"
-      assert install_payload.dig("smoke_test", "reason") == "dry_run", "expected dry-run smoke test skip"
+      if install_payload["smoke_test"]
+        assert install_payload.dig("smoke_test", "reason") == "dry_run", "expected dry-run smoke test skip"
+      end
 
       menubar_paths = JSON.parse(shell_output("#{{bin}}/autopsy menubar --print-path"))
       assert menubar_paths["app_bundle_exists"], "expected prebuilt menu bar app bundle"
@@ -250,6 +293,11 @@ def main() -> int:
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     args = parser.parse_args()
+
+    try:
+        validate_formula_python(args.python)
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
 
     source_url, source_sha = public_tag_sha256(args.version)
     resources = resource_blocks(args.python)

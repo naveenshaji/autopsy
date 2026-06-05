@@ -91,3 +91,20 @@ jobs:
 
       - name: Test formula
         run: brew test --force local/autopsy/autopsy-memory
+
+  homebrew-current-source:
+    name: Homebrew current source
+    runs-on: macos-15
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install formula from current checkout archive
+        env:
+          AUTOPSY_HOMEBREW_CURRENT_INSTALL: "1"
+        run: ./scripts/homebrew-current-check.sh

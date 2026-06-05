@@ -83,6 +83,10 @@ The script:
 - resolves PyPI source distributions and hashes,
 - rewrites `Formula/autopsy-memory.rb`.
 
+Formula generation intentionally requires Apple Silicon macOS with Python 3.12.
+The formula vendors macOS arm64 wheels and the native FalkorDB module, and the
+formula itself depends on Homebrew `python@3.12`.
+
 Validate the formula from a local tap:
 
 ```bash
@@ -96,3 +100,21 @@ brew fetch --formula --deps naveenshaji/autopsy/autopsy-memory
 Use a clean Homebrew prefix or disposable machine for full install testing so it
 does not collide with a manually installed `/opt/homebrew/Cellar/autopsy-memory`
 tree.
+
+To validate the formula against the current checkout before tagging:
+
+```bash
+./scripts/homebrew-current-check.sh
+```
+
+That styles a generated formula whose source archive is built from the current
+checkout. Full install testing is intentionally guarded because it temporarily
+uses a local Homebrew tap:
+
+```bash
+AUTOPSY_HOMEBREW_CURRENT_INSTALL=1 ./scripts/homebrew-current-check.sh
+```
+
+Outside CI, add `AUTOPSY_HOMEBREW_CURRENT_ALLOW_LOCAL=1` only on a disposable
+Homebrew prefix. If `autopsy-memory` is already installed, the script refuses to
+replace it unless `AUTOPSY_HOMEBREW_CURRENT_REPLACE_LOCAL=1` is also set.

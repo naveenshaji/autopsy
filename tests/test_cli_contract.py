@@ -281,11 +281,13 @@ class AutopsyCLIContractTests(unittest.TestCase):
         command = cli.menubar_swift_build_command(app_dir, release=True)
 
         self.assertEqual(command[:5], ["swift", "build", "-c", "release", "--disable-sandbox"])
+        self.assertEqual(command[command.index("--jobs") + 1], "1")
         self.assertIn("--manifest-cache", command)
         self.assertIn("local", command)
         self.assertEqual(command[command.index("--cache-path") + 1], "/tmp/autopsy-menubar/.build/swiftpm/cache")
         self.assertEqual(command[command.index("--config-path") + 1], "/tmp/autopsy-menubar/.build/swiftpm/configuration")
         self.assertEqual(command[command.index("--security-path") + 1], "/tmp/autopsy-menubar/.build/swiftpm/security")
+        self.assertIn("-fmodules-cache-path=/tmp/autopsy-menubar/.build/swiftpm/module-cache", command)
 
     def test_prepare_menubar_swiftpm_support_dirs_uses_package_local_paths(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -295,6 +297,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
             self.assertTrue((app_dir / ".build" / "swiftpm" / "cache").is_dir())
             self.assertTrue((app_dir / ".build" / "swiftpm" / "configuration").is_dir())
             self.assertTrue((app_dir / ".build" / "swiftpm" / "security").is_dir())
+            self.assertTrue((app_dir / ".build" / "swiftpm" / "module-cache").is_dir())
 
     def test_menubar_launch_agent_plist_runs_app_executable(self):
         parser = cli.build_parser()
@@ -449,6 +452,71 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertFalse(payload["repaired"])
         which_mock.assert_not_called()
 
+    def test_homebrew_package_prefix_falls_back_to_qualified_formula(self):
+        calls = []
+
+        def fake_run(command):
+            calls.append(command)
+            if command[-1] == cli.PACKAGE_NAME:
+                return {
+                    "args": command,
+                    "returncode": 1,
+                    "stderr": "Formulae found in multiple taps",
+                }
+            return {
+                "args": command,
+                "returncode": 0,
+                "stdout": "/opt/homebrew/opt/autopsy-memory\n",
+            }
+
+        with mock.patch.object(cli, "run_install_subprocess", side_effect=fake_run):
+            prefix, payload = cli.homebrew_package_prefix("/opt/homebrew/bin/brew")
+
+        self.assertEqual(prefix, "/opt/homebrew/opt/autopsy-memory")
+        self.assertEqual(payload["formula_name"], cli.HOMEBREW_QUALIFIED_PACKAGE_NAME)
+        self.assertEqual(calls, [
+            ["/opt/homebrew/bin/brew", "--prefix", cli.PACKAGE_NAME],
+            ["/opt/homebrew/bin/brew", "--prefix", cli.HOMEBREW_QUALIFIED_PACKAGE_NAME],
+        ])
+        self.assertEqual(len(payload["attempts"]), 2)
+        json.dumps(payload)
+
+    def test_homebrew_package_prefix_discovers_installed_formula_from_other_tap(self):
+        calls = []
+
+        def fake_run(command):
+            calls.append(command)
+            if command[:2] == ["/opt/homebrew/bin/brew", "--prefix"] and command[-1] in {
+                cli.PACKAGE_NAME,
+                cli.HOMEBREW_QUALIFIED_PACKAGE_NAME,
+                "homebrew/core/autopsy-memory",
+            }:
+                return {
+                    "args": command,
+                    "returncode": 1,
+                    "stderr": "Formulae found in multiple taps",
+                }
+            if command == ["/opt/homebrew/bin/brew", "tap"]:
+                return {
+                    "args": command,
+                    "returncode": 0,
+                    "stdout": "homebrew/core\nlocal/autopsy-current-12345\n",
+                }
+            return {
+                "args": command,
+                "returncode": 0,
+                "stdout": "/opt/homebrew/opt/autopsy-memory\n",
+            }
+
+        with mock.patch.object(cli, "run_install_subprocess", side_effect=fake_run):
+            prefix, payload = cli.homebrew_package_prefix("/opt/homebrew/bin/brew")
+
+        self.assertEqual(prefix, "/opt/homebrew/opt/autopsy-memory")
+        self.assertEqual(payload["formula_name"], "local/autopsy-current-12345/autopsy-memory")
+        self.assertIn(["/opt/homebrew/bin/brew", "tap"], calls)
+        self.assertEqual(calls[-1], ["/opt/homebrew/bin/brew", "--prefix", "local/autopsy-current-12345/autopsy-memory"])
+        json.dumps(payload)
+
     def test_install_path_repair_payload_dry_run_reports_homebrew_repair(self):
         parser = cli.build_parser()
         args = parser.parse_args(["install", "--dry-run"])
@@ -469,6 +537,30 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertTrue(payload["repair_available"])
         self.assertEqual(payload["would_run"][-1], ["/opt/homebrew/bin/brew", "link", "--overwrite", cli.PACKAGE_NAME])
+        run_mock.assert_not_called()
+
+    def test_install_path_repair_payload_uses_qualified_formula_after_fallback(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["install", "--dry-run"])
+        check = {
+            "name": "installed_autopsy_command",
+            "ok": False,
+            "path": "/opt/homebrew/bin/autopsy",
+            "error": "legacy wrapper",
+        }
+        with (
+            mock.patch.object(cli, "installed_autopsy_command_check", return_value=check),
+            mock.patch.object(cli.shutil, "which", return_value="/opt/homebrew/bin/brew"),
+            mock.patch.object(cli, "homebrew_package_prefix", return_value=(
+                "/opt/homebrew/opt/autopsy-memory",
+                {"args": ["brew", "--prefix"], "returncode": 0, "formula_name": cli.HOMEBREW_QUALIFIED_PACKAGE_NAME},
+            )),
+            mock.patch.object(cli, "run_install_subprocess") as run_mock,
+        ):
+            payload = cli.install_path_repair_payload(args)
+
+        self.assertEqual(payload["would_run"][0], ["/opt/homebrew/bin/brew", "unlink", cli.HOMEBREW_QUALIFIED_PACKAGE_NAME])
+        self.assertEqual(payload["would_run"][1], ["/opt/homebrew/bin/brew", "link", "--overwrite", cli.HOMEBREW_QUALIFIED_PACKAGE_NAME])
         run_mock.assert_not_called()
 
     def test_install_path_repair_payload_can_relink_when_autopsy_command_is_missing(self):
@@ -524,6 +616,43 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertTrue(payload["skipped"])
         self.assertEqual(payload["reason"], "dry_run")
         smoke_mock.assert_not_called()
+
+    def test_install_smoke_test_payload_uses_shadowed_valid_command(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["install", "--smoke-test", "--skip-write-smoke"])
+        checks = [{"command": ["/opt/homebrew/bin/autopsy", "doctor"], "ok": True, "returncode": 0}]
+        path_repair = {
+            "check_before": {
+                "ok": False,
+                "path": "/Users/me/.codex/tmp/autopsy",
+                "shadowed_valid_command": "/opt/homebrew/bin/autopsy",
+            }
+        }
+        with mock.patch.object(cli, "smoke_tests", return_value=checks) as smoke_mock:
+            payload = cli.install_smoke_test_payload(args, path_repair_payload=path_repair)
+
+        self.assertTrue(payload["ok"])
+        smoke_mock.assert_called_once_with(skip_write=True, autopsy_command="/opt/homebrew/bin/autopsy")
+
+    def test_install_instruction_payload_uses_shadowed_valid_command(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["install", "--dry-run"])
+        path_repair = {
+            "check_before": {
+                "ok": False,
+                "path": "/Users/me/.codex/tmp/autopsy",
+                "shadowed_valid_command": "/opt/homebrew/bin/autopsy",
+            }
+        }
+
+        def fake_build_init_payload(init_args):
+            return {"autopsy_command_path": getattr(init_args, "autopsy_command_path", None)}
+
+        with mock.patch.object(cli, "build_init_payload", side_effect=fake_build_init_payload) as build_mock:
+            payload = cli.install_instruction_payload(args, path_repair_payload=path_repair)
+
+        self.assertEqual(payload["autopsy_command_path"], "/opt/homebrew/bin/autopsy")
+        build_mock.assert_called_once()
 
     def test_cmd_install_runs_requested_smoke_test(self):
         parser = cli.build_parser()
