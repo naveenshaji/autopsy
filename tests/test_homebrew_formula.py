@@ -50,7 +50,7 @@ class HomebrewFormulaGeneratorTests(unittest.TestCase):
         self.assertIn('with_env(PATH: "#{bin}:#{ENV.fetch("PATH", "")}")', formula)
         self.assertIn("autopsy install --smoke-test", formula)
         self.assertIn("install --dry-run --skip-menubar --smoke-test --skip-write-smoke", formula)
-        self.assertIn('assert_equal "dry_run", install_payload.dig("smoke_test", "reason")', formula)
+        self.assertIn('install_payload.dig("smoke_test", "reason") == "dry_run"', formula)
 
 
 if __name__ == "__main__":
