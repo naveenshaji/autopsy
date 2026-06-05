@@ -194,13 +194,15 @@ class AutopsyCLIContractTests(unittest.TestCase):
         warmup_args = parser.parse_args(["model-warmup", "--root", "/tmp/autopsy-memory"])
         self.assertEqual(warmup_args.command, "model-warmup")
         self.assertEqual(warmup_args.root, "/tmp/autopsy-memory")
-        install_args = parser.parse_args(["install", "--repo", "/tmp/project", "--agent", "codex", "--skip-menubar", "--skip-path-repair", "--skip-doctor"])
+        install_args = parser.parse_args(["install", "--repo", "/tmp/project", "--agent", "codex", "--skip-menubar", "--skip-path-repair", "--skip-doctor", "--smoke-test", "--skip-write-smoke"])
         self.assertEqual(install_args.command, "install")
         self.assertEqual(install_args.repo_path, "/tmp/project")
         self.assertEqual(install_args.agent, "codex")
         self.assertTrue(install_args.skip_menubar)
         self.assertTrue(install_args.skip_path_repair)
         self.assertTrue(install_args.skip_doctor)
+        self.assertTrue(install_args.smoke_test)
+        self.assertTrue(install_args.skip_write_smoke)
 
     def test_activity_snapshot_writer_writes_atomic_payload_with_metadata(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -509,7 +511,61 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertTrue(payload["instructions"]["skipped"])
         self.assertEqual(payload["menubar"]["reason"], "unsupported_platform")
         self.assertIsNone(payload["doctor"])
+        self.assertTrue(payload["smoke_test"]["skipped"])
+        self.assertEqual(payload["smoke_test"]["reason"], "not_requested")
         self.assertTrue(payload["workflow"]["complete"])
+
+    def test_install_smoke_test_payload_skips_dry_run(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["install", "--dry-run", "--smoke-test"])
+        with mock.patch.object(cli, "smoke_tests") as smoke_mock:
+            payload = cli.install_smoke_test_payload(args)
+
+        self.assertTrue(payload["skipped"])
+        self.assertEqual(payload["reason"], "dry_run")
+        smoke_mock.assert_not_called()
+
+    def test_cmd_install_runs_requested_smoke_test(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["install", "--skip-instructions", "--skip-doctor", "--skip-menubar", "--smoke-test", "--skip-write-smoke"])
+        checks = [{"command": ["autopsy", "doctor"], "ok": True, "returncode": 0}]
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "install_path_repair_payload", return_value={"ok": True, "skipped": False}),
+            mock.patch.object(cli, "install_menubar_payload", return_value={"skipped": True, "reason": "skip_menubar"}),
+            mock.patch.object(cli, "start_model_warmup_background", return_value={"skipped": False, "started": True, "error": None}),
+            mock.patch.object(cli, "smoke_tests", return_value=checks) as smoke_mock,
+            contextlib.redirect_stdout(stream),
+        ):
+            cli.cmd_install(args)
+
+        payload = json.loads(stream.getvalue())
+        self.assertFalse(payload["smoke_test"]["skipped"])
+        self.assertTrue(payload["smoke_test"]["ok"])
+        self.assertEqual(payload["smoke_test"]["checks"], checks)
+        self.assertTrue(payload["workflow"]["complete"])
+        smoke_mock.assert_called_once_with(skip_write=True)
+
+    def test_cmd_install_fails_when_requested_smoke_test_fails(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["install", "--skip-instructions", "--skip-doctor", "--skip-menubar", "--smoke-test"])
+        checks = [{"command": ["autopsy", "doctor"], "ok": False, "returncode": 1, "error": "doctor failed"}]
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "install_path_repair_payload", return_value={"ok": True, "skipped": False}),
+            mock.patch.object(cli, "install_menubar_payload", return_value={"skipped": True, "reason": "skip_menubar"}),
+            mock.patch.object(cli, "start_model_warmup_background", return_value={"skipped": False, "started": True, "error": None}),
+            mock.patch.object(cli, "smoke_tests", return_value=checks),
+            contextlib.redirect_stdout(stream),
+            self.assertRaises(SystemExit),
+        ):
+            cli.cmd_install(args)
+
+        payload = json.loads(stream.getvalue())
+        self.assertFalse(payload["smoke_test"]["ok"])
+        self.assertEqual(payload["smoke_test"]["failed_checks"][0]["error"], "doctor failed")
+        self.assertFalse(payload["workflow"]["complete"])
+        self.assertIn("Install smoke test failed", payload["workflow"]["next_steps"][0])
 
     def test_installed_menubar_defaults_to_release_build(self):
         parser = cli.build_parser()
@@ -609,6 +665,29 @@ class AutopsyCLIContractTests(unittest.TestCase):
         payload = json.loads(stream.getvalue())
         self.assertEqual(payload["model_warmup"], warmup_payload)
         warmup_mock.assert_called_once_with(args)
+
+    def test_install_runs_smoke_tests_when_requested(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["install", "--skip-doctor", "--skip-menubar", "--smoke-test"])
+        stream = io.StringIO()
+        smoke_payload = [
+            {"name": "doctor", "ok": True, "command": ["autopsy", "doctor"]},
+            {"name": "read", "ok": True, "command": ["autopsy", "status"]},
+        ]
+        with (
+            mock.patch.object(cli, "install_path_repair_payload", return_value={"ok": True, "skipped": False}),
+            mock.patch.object(cli, "install_instruction_payload", return_value={"workflow": {"complete": True, "next_steps": []}}),
+            mock.patch.object(cli, "install_menubar_payload", return_value={"skipped": True, "reason": "skip_menubar"}),
+            mock.patch.object(cli, "start_model_warmup_background", return_value={"skipped": True, "reason": "test"}),
+            mock.patch.object(cli, "smoke_tests", return_value=smoke_payload) as smoke_mock,
+            contextlib.redirect_stdout(stream),
+        ):
+            cli.cmd_install(args)
+
+        payload = json.loads(stream.getvalue())
+        self.assertTrue(payload["smoke_test"]["ok"])
+        self.assertEqual(payload["smoke_test"]["checks"], smoke_payload)
+        smoke_mock.assert_called_once_with(skip_write=False)
 
     def test_model_warmup_background_skips_dry_run(self):
         parser = cli.build_parser()

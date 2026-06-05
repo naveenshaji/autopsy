@@ -221,13 +221,15 @@ class {FORMULA_CLASS} < Formula
   end
 
   test do
-    assert_match version.to_s, shell_output("#{{bin}}/autopsy version")
-    system bin/"autopsy", "version", "--json"
-    system bin/"autopsy", "doctor"
+    with_env(PATH: "#{{bin}}:#{{ENV.fetch("PATH", "")}}") do
+      assert_match version.to_s, shell_output("#{{bin}}/autopsy version")
+      system bin/"autopsy", "version", "--json"
+      system bin/"autopsy", "doctor"
 
-    menubar_paths = JSON.parse(shell_output("#{{bin}}/autopsy menubar --print-path"))
-    assert menubar_paths["app_bundle_exists"], "expected prebuilt menu bar app bundle"
-    assert menubar_paths["app_bundle_current"], "expected current menu bar app bundle"
+      menubar_paths = JSON.parse(shell_output("#{{bin}}/autopsy menubar --print-path"))
+      assert menubar_paths["app_bundle_exists"], "expected prebuilt menu bar app bundle"
+      assert menubar_paths["app_bundle_current"], "expected current menu bar app bundle"
+    end
   end
 end
 '''

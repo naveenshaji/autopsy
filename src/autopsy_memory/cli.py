@@ -20,7 +20,7 @@ from typing import Any
 
 from .cli_parser import CommandHandlers, build_parser as build_cli_parser, normalized_cli_args
 from .doctor import import_check, installed_autopsy_command_check, python_version_check
-from .init import build_init_payload, cmd_init, instruction_targets, target_status
+from .init import build_init_payload, cmd_init, instruction_targets, smoke_tests, target_status
 from .metadata import PACKAGE_NAME, cmd_instructions, cmd_version, package_version
 
 
@@ -16028,6 +16028,37 @@ def install_path_repair_payload(args: argparse.Namespace) -> dict[str, Any]:
     return payload
 
 
+def install_smoke_test_payload(args: argparse.Namespace) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "skipped": False,
+        "ok": None,
+        "checks": [],
+    }
+    if not getattr(args, "smoke_test", False):
+        payload.update({"skipped": True, "reason": "not_requested"})
+        return payload
+    if getattr(args, "dry_run", False):
+        payload.update({"skipped": True, "reason": "dry_run"})
+        return payload
+
+    checks = smoke_tests(skip_write=bool(getattr(args, "skip_write_smoke", False)))
+    failed = [
+        {
+            "command": check.get("command"),
+            "error": check.get("error"),
+            "returncode": check.get("returncode"),
+        }
+        for check in checks
+        if not check.get("ok")
+    ]
+    payload.update({
+        "ok": not failed,
+        "checks": checks,
+        "failed_checks": failed,
+    })
+    return payload
+
+
 def build_doctor_payload(args: argparse.Namespace) -> dict[str, Any]:
     checks = [
         python_version_check(),
@@ -16067,6 +16098,7 @@ def cmd_install(args: argparse.Namespace) -> None:
     if not getattr(args, "skip_doctor", False) and not getattr(args, "dry_run", False):
         doctor_payload = build_doctor_payload(args)
     model_warmup_payload = start_model_warmup_background(args)
+    smoke_test_payload = install_smoke_test_payload(args)
 
     next_steps: list[str] = []
     if not path_repair_payload.get("ok") and not path_repair_payload.get("skipped"):
@@ -16086,6 +16118,8 @@ def cmd_install(args: argparse.Namespace) -> None:
         next_steps.append(f"Run autopsy doctor for details. Failed checks: {', '.join(failed) or 'required runtime'}")
     if model_warmup_payload.get("error"):
         next_steps.append("Run autopsy model-warmup to download local ML model weights.")
+    if not smoke_test_payload.get("skipped") and not smoke_test_payload.get("ok"):
+        next_steps.append("Install smoke test failed. Inspect smoke_test.failed_checks or run autopsy init --smoke-test.")
 
     payload = {
         "mode": "install",
@@ -16094,6 +16128,7 @@ def cmd_install(args: argparse.Namespace) -> None:
         "menubar": menubar_payload,
         "doctor": doctor_payload,
         "model_warmup": model_warmup_payload,
+        "smoke_test": smoke_test_payload,
         "workflow": {
             "complete": not next_steps,
             "next_steps": next_steps,
