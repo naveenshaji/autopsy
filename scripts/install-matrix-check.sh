@@ -115,6 +115,18 @@ if [ "\$1" = "--prefix" ] && [ "\${2:-}" = "autopsy-memory" ]; then
   printf '%s\n' "$brew_root/opt/autopsy-memory"
   exit 0
 fi
+if [ "\$1" = "unlink" ] && [ "\${2:-}" = "autopsy-memory" ]; then
+  /bin/rm -f "$brew_root/bin/autopsy"
+  exit 0
+fi
+if [ "\$1" = "link" ] && [ "\${2:-}" = "--overwrite" ] && [ "\${3:-}" = "autopsy-memory" ]; then
+  /bin/cat > "$brew_root/bin/autopsy" <<'WRAPPER'
+#!/bin/sh
+AUTOPSY_UNIFIED_MEMORY=1 exec "$target_dir/autopsy" "\$@"
+WRAPPER
+  /bin/chmod 0755 "$brew_root/bin/autopsy"
+  exit 0
+fi
 printf 'unexpected brew invocation: %s\n' "\$*" >&2
 exit 2
 SH
@@ -145,6 +157,35 @@ assert any(command[-3:] == ["link", "--overwrite", "autopsy-memory"] for command
 workflow = payload.get("workflow") or {}
 assert workflow.get("complete") is False, workflow
 assert any("Run autopsy install" in step for step in workflow.get("next_steps") or []), workflow
+PY
+
+PATH="$brew_root/bin" PYTHONPATH="$ROOT_DIR/src" AUTOPSY_APP_SUPPORT_DIR="$TMP_DIR/repair-actual-support" "$PYTHON_BIN" -m autopsy_memory.cli install --skip-instructions --skip-menubar --skip-doctor --skip-model-warmup > "$TMP_DIR/install-repair-actual.json"
+"$PYTHON_BIN" - "$TMP_DIR/install-repair-actual.json" "$brew_root" "$TMP_DIR/repair-actual-support" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(open(sys.argv[1], encoding="utf-8").read())
+brew_root = Path(sys.argv[2]).resolve()
+support_root = Path(sys.argv[3]).resolve()
+path_repair = payload.get("path_repair") or {}
+assert path_repair.get("ok") is True, path_repair
+assert path_repair.get("repaired") is True, path_repair
+assert Path(path_repair.get("homebrew_prefix", "")).resolve() == brew_root, path_repair
+assert path_repair.get("check_before", {}).get("legacy_wrapper") is True, path_repair
+assert path_repair.get("check_after", {}).get("ok") is True, path_repair
+assert path_repair.get("check_after", {}).get("package_entrypoint") is True, path_repair
+assert path_repair.get("check_after", {}).get("path", "").endswith("/homebrew/bin/autopsy"), path_repair
+assert path_repair.get("backups"), path_repair
+assert all(str(Path(backup).resolve()).startswith(str(support_root / "Backups")) for backup in path_repair.get("backups")), path_repair
+commands = path_repair.get("commands") or []
+assert any(command.get("args", [])[-2:] == ["unlink", "autopsy-memory"] and command.get("returncode") == 0 for command in commands), commands
+assert any(command.get("args", [])[-3:] == ["link", "--overwrite", "autopsy-memory"] and command.get("returncode") == 0 for command in commands), commands
+workflow = payload.get("workflow") or {}
+assert workflow.get("complete") is True, workflow
+assert payload.get("model_warmup", {}).get("reason") == "skip_model_warmup", payload.get("model_warmup")
+assert (brew_root / "bin" / "autopsy").exists(), path_repair
+assert "AUTOPSY_UNIFIED_MEMORY" in (brew_root / "bin" / "autopsy").read_text(encoding="utf-8"), path_repair
 PY
 
 missing_path_dir="$TMP_DIR/no-autopsy"
