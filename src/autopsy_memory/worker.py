@@ -1062,6 +1062,10 @@ def handle_memory_graph_note_create(payload: dict) -> dict:
         )
         if module.write_quality_blocks_write(write_quality):
             return module.blocked_memory_write_payload(write_quality=write_quality, operation='create')
+        scope = str(request.get('scope') or 'system')
+        repository_root_path = str(request.get('repository_root_path') or request.get('repo') or '')
+        if scope == 'repo' and not repository_root_path:
+            repository_root_path = str(workspace.get('root_path') or os.getcwd())
         response = module.create_graph_note_payload(
             graph,
             tool=tool,
@@ -1069,7 +1073,7 @@ def handle_memory_graph_note_create(payload: dict) -> dict:
             kind=kind,
             title=title,
             content=content,
-            repository_root_path=str(request.get('repository_root_path') or '') or None,
+            repository_root_path=repository_root_path or None,
             thread_id=str(request.get('thread_id') or '') or None,
             tags=list_request_argument(request, 'tags'),
             namespaces=list_request_argument(request, 'namespaces'),

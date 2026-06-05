@@ -6046,7 +6046,6 @@ def create_graph_note_payload(
     workspace_key = str(workspace_record.get("root_path") or workspace_record.get("workspace_key") or "")
     workspace_node = lookup_node_by_stable_key(graph, workspace_key)
     repository_stable_key = canonical_repository_stable_key(graph, repository_root_path)
-    repository_node = lookup_node_by_stable_key(graph, repository_stable_key) if repository_stable_key else None
     thread_node = lookup_node_by_stable_key(graph, thread_id) if thread_id else None
     normalized_tags = memory_tags_with_namespaces_and_entity_scopes(tags, namespaces, entity_scopes)
     normalized_metadata = memory_metadata_with_namespaces_and_entity_scopes(metadata, namespaces, entity_scopes)
@@ -6084,6 +6083,15 @@ def create_graph_note_payload(
     if workspace_node:
         create_structural_edge(graph, from_entity_id=note_id, to_entity_id=workspace_node["entity_id"], relation="belongs_to", timestamp=created_at, origin="falkor")
         create_structural_edge(graph, from_entity_id=episode_id, to_entity_id=workspace_node["entity_id"], relation="belongs_to", timestamp=created_at, origin="falkor")
+    repository_node = lookup_node_by_stable_key(graph, repository_stable_key) if repository_stable_key else None
+    if repository_stable_key and repository_node is None:
+        repository_key = ensure_repository_node(
+            graph,
+            {"rootPath": repository_stable_key, "displayName": repository_title_for_root(repository_stable_key), "displayPath": repository_stable_key},
+            timestamp=created_at,
+            origin="falkor",
+        )
+        repository_node = lookup_node_by_stable_key(graph, repository_key)
     if repository_node:
         create_structural_edge(graph, from_entity_id=note_id, to_entity_id=repository_node["entity_id"], relation="about", timestamp=created_at, origin="falkor")
         create_structural_edge(graph, from_entity_id=episode_id, to_entity_id=repository_node["entity_id"], relation="about", timestamp=created_at, origin="falkor")
@@ -14820,7 +14828,7 @@ def cmd_create_note(args: argparse.Namespace) -> None:
         kind=kind,
         title=title,
         content=content,
-        repository_root_path=repository_path_from_args(args),
+        repository_root_path=repository_scope_path_from_args(args),
         thread_id=str(getattr(args, "thread_id", "") or "").strip() or None,
         tags=list(getattr(args, "tag", None) or []),
         namespaces=list(getattr(args, "namespace", None) or []),

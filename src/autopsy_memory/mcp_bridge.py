@@ -632,6 +632,10 @@ def tool_create_note(arguments: dict[str, Any]) -> dict[str, Any]:
         "title": title,
         "content": content,
     }
+    if arguments.get("scope"):
+        request["scope"] = str(arguments["scope"])
+    if arguments.get("repo"):
+        request["repo"] = str(arguments["repo"])
     if arguments.get("repository_root_path"):
         request["repository_root_path"] = str(arguments["repository_root_path"])
     if arguments.get("thread_id"):
@@ -973,6 +977,8 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "kind": {"type": "string", "enum": KIND_ENUM, "default": "memory_note"},
                 "title": {"type": "string"},
                 "content": {"type": "string"},
+                "scope": {"type": "string", "enum": ["system", "repo"], "default": "system"},
+                "repo": {"type": "string"},
                 "repository_root_path": {"type": "string"},
                 "thread_id": {"type": "string"},
                 "tag": {"type": "array", "items": {"type": "string"}},
