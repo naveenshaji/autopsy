@@ -48,6 +48,7 @@ class HomebrewFormulaGeneratorTests(unittest.TestCase):
         self.assertIn("autopsy_pip_install autopsy_resource_target", formula)
         self.assertIn('next if resource.name == "falkordb-macos-arm64v8"', formula)
         self.assertIn('with_env(PATH: "#{bin}:#{ENV.fetch("PATH", "")}")', formula)
+        self.assertIn("autopsy install --smoke-test", formula)
 
 
 if __name__ == "__main__":

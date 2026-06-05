@@ -215,6 +215,9 @@ class {FORMULA_CLASS} < Formula
       To install agent instructions and start the macOS menu bar utility:
         autopsy install
 
+      To verify the local runtime after setup:
+        autopsy install --smoke-test
+
       To stop only the menu bar utility:
         autopsy menubar --uninstall-launch-agent
     EOS
