@@ -41,5 +41,53 @@ jobs:
           autopsy init --check >/dev/null
           autopsy instructions >/dev/null
 
+      - name: Install matrix
+        env:
+          AUTOPSY_INSTALL_MATRIX_REQUIRE_RUNTIME: "1"
+        run: ./scripts/install-matrix-check.sh
+
       - name: Build wheel
         run: python -m build --wheel
+
+  release-check:
+    name: Release check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Release check
+        run: ./scripts/release-check.sh
+
+  homebrew-formula:
+    name: Homebrew formula
+    runs-on: macos-15
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare local tap
+        run: |
+          brew tap-new local/autopsy
+          cp Formula/autopsy-memory.rb "$(brew --repository)/Library/Taps/local/homebrew-autopsy/Formula/autopsy-memory.rb"
+
+      - name: Audit formula
+        run: |
+          brew style local/autopsy/autopsy-memory
+          brew audit --formula --strict local/autopsy/autopsy-memory
+
+      - name: Install formula from source
+        run: brew install --build-from-source local/autopsy/autopsy-memory
+
+      - name: Test formula
+        run: brew test --force local/autopsy/autopsy-memory

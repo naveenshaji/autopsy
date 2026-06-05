@@ -30,6 +30,7 @@ Use this checklist before tagging or publishing Autopsy Memory.
 - `brew style naveenshaji/autopsy/autopsy-memory` passes against a local tap copy.
 - `brew audit --formula --strict naveenshaji/autopsy/autopsy-memory` passes against a local tap copy.
 - `brew fetch --formula --deps naveenshaji/autopsy/autopsy-memory` verifies the public tag and resource checksums.
+- GitHub Actions `homebrew-formula` passes on `macos-15`.
 
 ## Packaging
 
