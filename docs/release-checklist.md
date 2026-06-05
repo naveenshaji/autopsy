@@ -22,6 +22,7 @@ Use this checklist before tagging or publishing Autopsy Memory.
 - `autopsy restore <export.json> --dry-run` validates without writing.
 - `autopsy benchmark --sample-size 5 --include-sync` passes before any health claim.
 - `autopsy activity --limit 3` returns valid JSON for lightweight UI clients.
+- `./scripts/install-matrix-check.sh` passes inside the release-check virtual environment.
 - `autopsy menubar --print-path` resolves the installed menu bar app source.
 - `autopsy menubar --launch-agent-status` reports LaunchAgent state without writing.
 - `./scripts/menubar-check.sh` passes when shipping the macOS menu bar app.

@@ -24,6 +24,7 @@ PY
 sh -n scripts/install.sh
 sh -n scripts/install-global.sh
 sh -n scripts/menubar-check.sh
+sh -n scripts/install-matrix-check.sh
 
 TMP_DIR="${TMPDIR:-/tmp}/autopsy-release-check-$$"
 trap 'rm -rf "$TMP_DIR"' EXIT INT TERM HUP
@@ -69,6 +70,7 @@ assert onboarding.get("empty") is True, onboarding
 assert onboarding.get("state") == "empty", onboarding
 assert payload.get("snapshot", {}).get("schema_version") == 1, payload.get("snapshot")
 PY
+PYTHON="$TMP_DIR/venv/bin/python" AUTOPSY_INSTALL_MATRIX_REQUIRE_RUNTIME=1 ./scripts/install-matrix-check.sh >/dev/null
 PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" menubar --print-path >/dev/null
 PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" menubar --launch-agent-status >/dev/null
 cat > "$TMP_DIR/restore.json" <<'JSON'
