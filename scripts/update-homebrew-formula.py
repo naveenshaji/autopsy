@@ -26,6 +26,8 @@ FALKORDB_MACOS_ARM64_URL = (
     f"https://github.com/FalkorDB/FalkorDB/releases/download/{FALKORDB_NATIVE_VERSION}/falkordb-macos-arm64v8.so"
 )
 FALKORDB_MACOS_ARM64_SHA256 = "53aa98e66dc52cf4d95628d1144ab4f3233cadf951faf81e76d5a7c44483541a"
+HOMEBREW_MIN_MACOS_SYMBOL = "sonoma"
+HOMEBREW_MIN_MACOS_MAJOR = 14
 
 
 def read_project_version() -> str:
@@ -96,6 +98,7 @@ def python_platform_report(python: str) -> dict[str, Any]:
                 "print(json.dumps({"
                 "'executable': sys.executable, "
                 "'python_version': f'{sys.version_info.major}.{sys.version_info.minor}', "
+                "'macos_version': platform.mac_ver()[0], "
                 "'system': platform.system(), "
                 "'machine': platform.machine()"
                 "}))"
@@ -113,6 +116,7 @@ def validate_formula_python(python: str) -> dict[str, Any]:
     python_version = str(report.get("python_version") or "")
     system = str(report.get("system") or "")
     machine = str(report.get("machine") or "").lower()
+    macos_version = str(report.get("macos_version") or "")
     if python_version != "3.12":
         raise RuntimeError(
             "Autopsy Homebrew formula generation requires Python 3.12 because the formula depends on "
@@ -123,6 +127,16 @@ def validate_formula_python(python: str) -> dict[str, Any]:
             "Autopsy Homebrew formula generation must run on Apple Silicon macOS because the formula "
             "vendors macOS arm64 wheel resources and the native FalkorDB module; "
             f"{python!r} reported system={system or 'unknown'} machine={machine or 'unknown'}."
+        )
+    try:
+        macos_major = int(macos_version.split(".", 1)[0])
+    except (TypeError, ValueError):
+        macos_major = 0
+    if macos_major < HOMEBREW_MIN_MACOS_MAJOR:
+        raise RuntimeError(
+            "Autopsy Homebrew formula generation requires macOS 14 Sonoma or newer because the formula "
+            "vendors macOS 14+ arm64 wheel resources for the local ML runtime; "
+            f"{python!r} reported macOS {macos_version or 'unknown'}."
         )
     return report
 
@@ -195,7 +209,7 @@ class {FORMULA_CLASS} < Formula
 
   depends_on arch: :arm64
   depends_on "libyaml"
-  depends_on :macos
+  depends_on macos: :{HOMEBREW_MIN_MACOS_SYMBOL}
   depends_on "openssl@3"
   depends_on "python@3.12"
 

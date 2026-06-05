@@ -13,6 +13,8 @@ autopsy install
 autopsy doctor
 ```
 
+Requirements: macOS 14 Sonoma or newer on Apple Silicon with Homebrew.
+
 `autopsy install` writes global agent instructions and, on macOS, installs and
 starts the menu bar LaunchAgent. Add repo-local instructions from a repository
 with:
@@ -84,9 +86,9 @@ The script:
 - resolves PyPI source distributions and hashes,
 - rewrites `Formula/autopsy-memory.rb`.
 
-Formula generation intentionally requires Apple Silicon macOS with Python 3.12.
-The formula vendors macOS arm64 wheels and the native FalkorDB module, and the
-formula itself depends on Homebrew `python@3.12`. Review
+Formula generation intentionally requires macOS 14 Sonoma or newer on Apple
+Silicon with Python 3.12. The formula vendors macOS arm64 wheels and the native
+FalkorDB module, and the formula itself depends on Homebrew `python@3.12`. Review
 `scripts/homebrew-constraints.txt` intentionally when upgrading the packaged
 local ML/runtime dependency set; otherwise formula regeneration should stay
 stable for a given release.

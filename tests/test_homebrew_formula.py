@@ -47,6 +47,7 @@ class HomebrewFormulaGeneratorTests(unittest.TestCase):
         self.assertIn('system autopsy_python, "-m", "pip"', formula)
         self.assertIn("virtualenv_create(libexec, autopsy_python", formula)
         self.assertIn("Autopsy requires Homebrew python@3.12", formula)
+        self.assertIn("depends_on macos: :sonoma", formula)
         self.assertIn("autopsy_pip_install autopsy_resource_target", formula)
         self.assertIn('next if resource.name == "falkordb-macos-arm64v8"', formula)
         self.assertIn('with_env(PATH: "#{bin}:#{ENV.fetch("PATH", "")}")', formula)
@@ -65,6 +66,7 @@ class HomebrewFormulaGeneratorTests(unittest.TestCase):
         try:
             generator.python_platform_report = lambda _python: {
                 "python_version": "3.13",
+                "macos_version": "14.7",
                 "system": "Darwin",
                 "machine": "arm64",
             }
@@ -79,6 +81,7 @@ class HomebrewFormulaGeneratorTests(unittest.TestCase):
         try:
             generator.python_platform_report = lambda _python: {
                 "python_version": "3.12",
+                "macos_version": "",
                 "system": "Linux",
                 "machine": "x86_64",
             }
@@ -90,10 +93,30 @@ class HomebrewFormulaGeneratorTests(unittest.TestCase):
     def test_formula_generator_accepts_macos_arm_python_312(self):
         generator = load_generator()
         original_report = generator.python_platform_report
-        report = {"python_version": "3.12", "system": "Darwin", "machine": "arm64"}
+        report = {
+            "python_version": "3.12",
+            "macos_version": "14.7",
+            "system": "Darwin",
+            "machine": "arm64",
+        }
         try:
             generator.python_platform_report = lambda _python: report
             self.assertEqual(generator.validate_formula_python("python3.12"), report)
+        finally:
+            generator.python_platform_report = original_report
+
+    def test_formula_generator_rejects_macos_before_sonoma(self):
+        generator = load_generator()
+        original_report = generator.python_platform_report
+        try:
+            generator.python_platform_report = lambda _python: {
+                "python_version": "3.12",
+                "macos_version": "13.6",
+                "system": "Darwin",
+                "machine": "arm64",
+            }
+            with self.assertRaisesRegex(RuntimeError, "macOS 14 Sonoma"):
+                generator.validate_formula_python("python3.12")
         finally:
             generator.python_platform_report = original_report
 

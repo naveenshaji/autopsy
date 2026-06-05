@@ -11,7 +11,7 @@ class AutopsyMemory < Formula
 
   depends_on arch: :arm64
   depends_on "libyaml"
-  depends_on :macos
+  depends_on macos: :sonoma
   depends_on "openssl@3"
   depends_on "python@3.12"
 

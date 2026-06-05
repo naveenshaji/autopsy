@@ -21,7 +21,49 @@ sh -n scripts/lib/python.sh
 test -s scripts/homebrew-constraints.txt
 
 TMP_DIR="${TMPDIR:-/tmp}/autopsy-release-check-$$"
-trap 'rm -rf "$TMP_DIR"' EXIT INT TERM HUP
+export AUTOPSY_CLI_CONSULT_WORKER=0
+release_check_pids() {
+  ps -axo pid=,command= 2>/dev/null | awk -v tmp="$TMP_DIR" '
+    index($0, tmp) &&
+    ($0 ~ /worker\.py/ || $0 ~ /redislite\/bin\/redis-server/ || $0 ~ /\/venv\/bin\/python/ || $0 ~ /\/venv\/bin\/pip/) &&
+    $0 !~ /awk -v tmp=/ &&
+    $0 !~ /ps -axo/ {
+      print $1
+    }
+  ' || true
+}
+
+cleanup_release_check_processes() {
+  attempt=0
+  while [ "$attempt" -lt 8 ]; do
+    sleep 1
+    pids="$(release_check_pids)"
+    [ -n "$pids" ] || return 0
+    if [ "$attempt" -lt 2 ]; then
+      /bin/kill $pids >/dev/null 2>&1 || true
+    else
+      /bin/kill -9 $pids >/dev/null 2>&1 || true
+    fi
+    attempt=$((attempt + 1))
+  done
+  sleep 2
+  pids="$(release_check_pids)"
+  [ -z "$pids" ] && return 0
+  echo "release-check: cleanup left temp processes: $pids" >&2
+  return 1
+}
+
+cleanup() {
+  status=$?
+  trap - EXIT INT TERM HUP
+  # Release checks use temp app-support and venv paths; do not leave workers behind.
+  if ! cleanup_release_check_processes; then
+    status=1
+  fi
+  rm -rf "$TMP_DIR"
+  exit "$status"
+}
+trap cleanup EXIT INT TERM HUP
 "$PYTHON" -m venv "$TMP_DIR/venv"
 "$TMP_DIR/venv/bin/python" -m pip install -U pip >/dev/null
 "$TMP_DIR/venv/bin/python" -m pip install -e ".[dev]" >/dev/null

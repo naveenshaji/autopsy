@@ -30,7 +30,7 @@ agent instruction status, and updates.
 
 Requirements:
 
-- macOS on Apple Silicon.
+- macOS 14 Sonoma or newer on Apple Silicon.
 - Homebrew.
 
 Install:

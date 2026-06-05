@@ -15,7 +15,8 @@ command, pinned Python runtime dependencies, the native Apple Silicon FalkorDB
 module, and the Swift menu bar app source. `autopsy install` then repairs PATH
 linkage when possible, writes global agent instructions, starts the menu bar
 LaunchAgent in a normal macOS GUI session, runs `doctor`, and starts background
-model warmup.
+model warmup. The Homebrew formula requires macOS 14 Sonoma or newer on Apple
+Silicon.
 
 ## First-Run Setup
 

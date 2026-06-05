@@ -10,7 +10,7 @@ Use this checklist before tagging or publishing Autopsy Memory.
 - `python -m build --wheel` works in a fresh virtual environment.
 - The release interpreter is Python 3.12 or newer.
 - `scripts/homebrew-constraints.txt` has been reviewed for intentional packaged dependency upgrades.
-- `brew install autopsy-memory` installs and links the standalone CLI in the target environment.
+- `brew install autopsy-memory` installs and links the standalone CLI on macOS 14+ Apple Silicon.
 - `which autopsy` points at the standalone memory CLI wrapper or package entrypoint.
 - `autopsy version --json` prints package metadata.
 - `autopsy doctor` passes in the target release environment.
