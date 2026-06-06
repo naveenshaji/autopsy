@@ -314,6 +314,7 @@ SH
 chmod 0755 "$homebrew_current_fake_bin/brew"
 
 PYTHON="$PYTHON_BIN" \
+  CI= \
   PATH="$homebrew_current_fake_bin:$PATH" \
   AUTOPSY_HOMEBREW_CURRENT_INSTALL=1 \
   AUTOPSY_HOMEBREW_CURRENT_ALLOW_LOCAL=1 \
