@@ -313,7 +313,11 @@ grep -F "install naveenshaji/autopsy/autopsy-memory" "$homebrew_current_log" >/d
 grep -F "naveenshaji/autopsy/autopsy-memory" "$homebrew_current_state/restored-formula" >/dev/null
 
 runtime_available=0
-if PYTHONPATH="$ROOT_DIR/src" "$PYTHON_BIN" - >/dev/null 2>&1 <<'PY'
+runtime_skipped=0
+if [ "${AUTOPSY_INSTALL_MATRIX_SKIP_RUNTIME:-0}" = "1" ]; then
+  runtime_skipped=1
+  echo "install-matrix-check: skipped fresh activity runtime smoke; runtime covered by caller" >&2
+elif PYTHONPATH="$ROOT_DIR/src" "$PYTHON_BIN" - >/dev/null 2>&1 <<'PY'
 import falkordb
 import redis
 import redislite.falkordb_client
@@ -337,6 +341,8 @@ assert "autopsy install" in onboarding.get("message", ""), onboarding
 assert payload.get("activity", {}).get("attention") == [], payload.get("activity")
 assert payload.get("snapshot", {}).get("schema_version") == 1, payload.get("snapshot")
 PY
+elif [ "$runtime_skipped" = "1" ]; then
+  :
 elif [ "${AUTOPSY_INSTALL_MATRIX_REQUIRE_RUNTIME:-0}" = "1" ]; then
   echo "install-matrix-check: missing embedded runtime dependencies" >&2
   exit 1

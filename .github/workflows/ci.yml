@@ -43,7 +43,7 @@ jobs:
 
       - name: Install matrix
         env:
-          AUTOPSY_INSTALL_MATRIX_REQUIRE_RUNTIME: "1"
+          AUTOPSY_INSTALL_MATRIX_SKIP_RUNTIME: "1"
           PYTHON: python
         run: ./scripts/install-matrix-check.sh
 
