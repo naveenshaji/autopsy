@@ -212,7 +212,7 @@ cat > "$TMP_DIR/restore.json" <<'JSON'
 JSON
 PATH="$TMP_DIR/venv/bin:$PATH" AUTOPSY_UNIFIED_MEMORY=0 AUTOPSY_APP_SUPPORT_DIR="$TMP_DIR/app-support" AUTOPSY_FALKORDB_LITE_PATH="$TMP_DIR/app-support/FalkorDB/autopsy-memory.db" "$TMP_DIR/venv/bin/autopsy" restore "$TMP_DIR/restore.json" --dry-run --workspace "$TMP_DIR/workspace" >/dev/null
 "$TMP_DIR/venv/bin/python" -m build --wheel --outdir "$TMP_DIR/dist" >/dev/null
-if command -v swift >/dev/null 2>&1; then
+if [ "$(uname -s)" = "Darwin" ] && command -v swift >/dev/null 2>&1; then
   ./scripts/menubar-check.sh >/dev/null
 fi
 
