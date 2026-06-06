@@ -190,8 +190,10 @@ assert payload.get("activity", {}).get("attention") == [], payload.get("activity
 assert payload.get("snapshot", {}).get("schema_version") == 1, payload.get("snapshot")
 PY
 PYTHON="$TMP_DIR/venv/bin/python" AUTOPSY_INSTALL_MATRIX_SKIP_RUNTIME=1 ./scripts/install-matrix-check.sh >/dev/null
-PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" menubar --print-path >/dev/null
-PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" menubar --launch-agent-status >/dev/null
+if [ "$(uname -s)" = "Darwin" ]; then
+  PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" menubar --print-path >/dev/null
+  PATH="$TMP_DIR/venv/bin:$PATH" "$TMP_DIR/venv/bin/autopsy" menubar --launch-agent-status >/dev/null
+fi
 cat > "$TMP_DIR/restore.json" <<'JSON'
 {
   "schema_version": 1,
