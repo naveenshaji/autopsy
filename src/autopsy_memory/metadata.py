@@ -7,6 +7,12 @@ import importlib.metadata
 import json
 import sys
 
+from .context_graph_settings import (
+    CONTEXT_GRAPH_MODE_HOOKS,
+    normalize_context_graph_settings,
+    load_context_graph_settings,
+)
+
 
 PACKAGE_NAME = "autopsy-memory"
 FALLBACK_VERSION = "0.1.12"
@@ -23,6 +29,14 @@ Before substantial work:
 - Use `autopsy context --format text --current-only --query "<task/context query>"` when you want a ready-to-insert context block instead of JSON.
 - Run `autopsy consult --current-only --query "<task/context query>"`.
 - Prefer `context` for pre-work grounding and `consult` over `search` when relying on memory.
+
+Live context graph:
+- At the start of each agent thread/session, determine a stable thread id from the harness. If the harness does not expose one, choose a stable id for this conversation.
+- Run `autopsy context-graph-url --thread-id "<thread-id>" --open` once for the current thread so the local per-thread graph opens while the user talks to the agent. If opening is unavailable, print the URL.
+- Record only allowlisted command cards with `autopsy context-event --thread-id "<thread-id>" --command "<command text>"`. This command is silent by default, skips non-allowlisted commands, and uses `--json` only for debugging. Do not pass event types, titles, content, metadata, stdout, stderr, or tool output.
+- Capture only the exact shell command text for context fetched through allowlisted commands. Never write generic graph events such as `file_read`, `web_search`, `tool_result`, `memory_consult`, `memory_write`, `turn_completed`, or status-only lifecycle events; never synthesize separate nodes for what the command read, searched, returned, or changed; never include file contents, fetched snippets, search results, metadata, secrets, or any command output in graph events.
+- Manual command capture is allowlisted only for context-fetching commands: capture commands where every executable shell segment, including pipeline segments, starts with `autopsy status`, `autopsy context`, `autopsy consult`, `autopsy search`, `autopsy item`, `autopsy timeline`, `autopsy history`, `autopsy neighbors`, `git status`, `git diff`, `git show`, `git log`, `rg`, `nl`, or `sed`; a leading `cd ...` setup segment is allowed. Ignore build, test, lint, package, write, shell redirection, command substitution, background operators, multiline commands, and other action commands, even when chained with an allowlisted read command.
+- If Codex hooks are configured and trusted, `autopsy codex-hook` follows the same boundary: it records only `PostToolUse` allowlisted Bash command text. It skips preflight, permission, lifecycle-only, prompt, non-Bash tool, compaction, and subagent hooks; it does not inspect `tool_response`, stdout, stderr, assistant responses, or tool output.
 
 For repo-specific work:
 - Use `autopsy consult --scope repo --repo <repo-root> --query "<query>"` when you only want memories from one repo.
@@ -76,6 +90,56 @@ For memory-system changes:
 """
 
 
+def context_graph_instruction_block(agent: str = "generic", settings: dict | None = None) -> str:
+    normalized = normalize_context_graph_settings(load_context_graph_settings() if settings is None else settings)
+    agent_key = str(agent or "").strip().lower()
+    if not normalized["enabled"]:
+        return """Live context graph:
+- Context graph capture is disabled in Autopsy settings. Do not open a graph or call `autopsy context-event` unless the user enables it again.
+- If stale instructions or scripts still call `autopsy context-event`, the command will return `context_graph_disabled` and will not record anything."""
+
+    if normalized["mode"] == CONTEXT_GRAPH_MODE_HOOKS:
+        if agent_key == "codex":
+            return """Live context graph:
+- Context graph capture is configured for Codex hooks. Do not call `autopsy context-event`; `autopsy codex-hook` records allowlisted `PostToolUse` Bash command text automatically after the user trusts the hook.
+- At the start of each Codex thread/session, determine a stable thread id from the harness. If the harness does not expose one, choose a stable id for this conversation.
+- Get the graph URL with `autopsy context-graph-url --thread-id "<thread-id>"` and open that URL in the Codex in-app Browser. Do not pass `--open`; it uses the macOS default browser.
+- Hook capture records only allowlisted command cards. It skips preflight, permission, lifecycle-only, prompt, non-Bash tool, compaction, subagent hooks, and non-allowlisted commands.
+- Capture only the exact shell command text for context fetched through allowlisted commands. Never write generic graph events such as `file_read`, `web_search`, `tool_result`, `memory_consult`, `memory_write`, `turn_completed`, or status-only lifecycle events; never synthesize separate nodes for what the command read, searched, returned, or changed; never include file contents, fetched snippets, search results, metadata, secrets, or any command output in graph events.
+- The context graph viewer may deterministically render semantic labels, chips, and memory relation nodes from captured command text and Autopsy's own memory graph; agents still write only the exact allowlisted command string.
+- Capture is allowlisted only for context-fetching commands: capture commands where every executable shell segment, including pipeline segments, starts with `autopsy status`, `autopsy context`, `autopsy consult`, `autopsy search`, `autopsy item`, `autopsy timeline`, `autopsy history`, `autopsy neighbors`, `git status`, `git diff`, `git show`, `git log`, `rg`, `nl`, or `sed`; a leading `cd ...` setup segment is allowed. Ignore build, test, lint, package, write, shell redirection, command substitution, background operators, multiline commands, and other action commands, even when chained with an allowlisted read command."""
+        return """Live context graph:
+- Context graph capture is configured for Codex hooks. Non-Codex agents should not call `autopsy context-event` unless the user switches Autopsy back to CLI mode.
+- If stale instructions or scripts still call `autopsy context-event`, the command will return `context_graph_hook_mode` and will not record anything."""
+
+    if agent_key == "codex":
+        return """Live context graph:
+- At the start of each Codex thread/session, determine a stable thread id from the harness. If the harness does not expose one, choose a stable id for this conversation.
+- Get the graph URL with `autopsy context-graph-url --thread-id "<thread-id>"` and open that URL in the Codex in-app Browser. Do not pass `--open`; it uses the macOS default browser.
+- Record only allowlisted command cards with `autopsy context-event --thread-id "<thread-id>" --command "<command text>"`. This command is silent by default, skips non-allowlisted commands, and uses `--json` only for debugging. Do not pass event types, titles, content, metadata, stdout, stderr, or tool output.
+- Capture only the exact shell command text for context fetched through allowlisted commands. Never write generic graph events such as `file_read`, `web_search`, `tool_result`, `memory_consult`, `memory_write`, `turn_completed`, or status-only lifecycle events; never synthesize separate nodes for what the command read, searched, returned, or changed; never include file contents, fetched snippets, search results, metadata, secrets, or any command output in graph events.
+- The context graph viewer may deterministically render semantic labels, chips, and memory relation nodes from captured command text and Autopsy's own memory graph; agents still write only the exact allowlisted command string.
+- Manual command capture is allowlisted only for context-fetching commands: capture commands where every executable shell segment, including pipeline segments, starts with `autopsy status`, `autopsy context`, `autopsy consult`, `autopsy search`, `autopsy item`, `autopsy timeline`, `autopsy history`, `autopsy neighbors`, `git status`, `git diff`, `git show`, `git log`, `rg`, `nl`, or `sed`; a leading `cd ...` setup segment is allowed. Ignore build, test, lint, package, write, shell redirection, command substitution, background operators, multiline commands, and other action commands, even when chained with an allowlisted read command."""
+
+    return """Live context graph:
+- At the start of each agent thread/session, determine a stable thread id from the harness. If the harness does not expose one, choose a stable id for this conversation.
+- Run `autopsy context-graph-url --thread-id "<thread-id>" --open` once for the current thread so the local per-thread graph opens while the user talks to the agent. If opening is unavailable, print the URL.
+- Record only allowlisted command cards with `autopsy context-event --thread-id "<thread-id>" --command "<command text>"`. This command is silent by default, skips non-allowlisted commands, and uses `--json` only for debugging. Do not pass event types, titles, content, metadata, stdout, stderr, or tool output.
+- Capture only the exact shell command text for context fetched through allowlisted commands. Never write generic graph events such as `file_read`, `web_search`, `tool_result`, `memory_consult`, `memory_write`, `turn_completed`, or status-only lifecycle events; never synthesize separate nodes for what the command read, searched, returned, or changed; never include file contents, fetched snippets, search results, metadata, secrets, or any command output in graph events.
+- The context graph viewer may deterministically render semantic labels, chips, and memory relation nodes from captured command text and Autopsy's own memory graph; agents still write only the exact allowlisted command string.
+- Manual command capture is allowlisted only for context-fetching commands: capture commands where every executable shell segment, including pipeline segments, starts with `autopsy status`, `autopsy context`, `autopsy consult`, `autopsy search`, `autopsy item`, `autopsy timeline`, `autopsy history`, `autopsy neighbors`, `git status`, `git diff`, `git show`, `git log`, `rg`, `nl`, or `sed`; a leading `cd ...` setup segment is allowed. Ignore build, test, lint, package, write, shell redirection, command substitution, background operators, multiline commands, and other action commands, even when chained with an allowlisted read command.
+- If Codex hooks are configured and trusted, `autopsy codex-hook` follows the same boundary: it records only `PostToolUse` allowlisted Bash command text. It skips preflight, permission, lifecycle-only, prompt, non-Bash tool, compaction, and subagent hooks; it does not inspect `tool_response`, stdout, stderr, assistant responses, or tool output."""
+
+
+def render_agent_instructions(agent: str = "generic", settings: dict | None = None) -> str:
+    start = AGENT_INSTRUCTIONS.find("Live context graph:")
+    end = AGENT_INSTRUCTIONS.find("\n\nFor repo-specific work:", start)
+    if start < 0 or end < 0:
+        return AGENT_INSTRUCTIONS
+    block = context_graph_instruction_block(agent=agent, settings=settings)
+    return AGENT_INSTRUCTIONS[:start] + block + AGENT_INSTRUCTIONS[end:]
+
+
 def package_version() -> str:
     try:
         return importlib.metadata.version(PACKAGE_NAME)
@@ -96,7 +160,9 @@ def cmd_version(args: argparse.Namespace) -> None:
 
 
 def cmd_instructions(args: argparse.Namespace) -> None:
+    agent = str(getattr(args, "agent", "generic") or "generic")
+    instructions = render_agent_instructions(agent=agent, settings=load_context_graph_settings())
     if getattr(args, "json", False):
-        print(json.dumps({"instructions": AGENT_INSTRUCTIONS}, indent=2))
+        print(json.dumps({"instructions": instructions}, indent=2))
     else:
-        print(AGENT_INSTRUCTIONS.rstrip())
+        print(instructions.rstrip())

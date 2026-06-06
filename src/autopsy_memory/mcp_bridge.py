@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
@@ -607,6 +608,83 @@ def request_payload(arguments: dict[str, Any], request: dict[str, Any]) -> dict[
     return payload
 
 
+def context_graph_thread_id(arguments: dict[str, Any]) -> str:
+    for name in ("thread_id", "threadId", "session_id", "sessionId"):
+        value = arguments.get(name)
+        if value:
+            return str(value).strip()
+    for name in ("AUTOPSY_CONTEXT_GRAPH_THREAD_ID", "AUTOPSY_THREAD_ID", "CODEX_THREAD_ID", "CLAUDE_THREAD_ID"):
+        value = os.environ.get(name)
+        if value:
+            return str(value).strip()
+    return ""
+
+
+def build_context_graph_event_request(
+    arguments: dict[str, Any],
+    *,
+    event_type: str,
+    title: str,
+    content: str = "",
+    status: str = "complete",
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    thread_id = context_graph_thread_id(arguments)
+    if not thread_id:
+        raise BridgeError("thread_id is required")
+    request = {
+        "thread_id": thread_id,
+        "event_type": event_type,
+        "title": title,
+        "content": content,
+        "status": status,
+        "agent": str(arguments.get("agent") or arguments.get("agent_id") or ""),
+        "app": str(arguments.get("app") or arguments.get("app_id") or ""),
+        "run_id": str(arguments.get("run_id") or ""),
+        "metadata": metadata or {},
+    }
+    if arguments.get("timestamp"):
+        request["timestamp"] = str(arguments["timestamp"])
+    return request
+
+
+def record_context_graph_event_if_thread(
+    arguments: dict[str, Any],
+    *,
+    event_type: str,
+    title: str,
+    content: str = "",
+    status: str = "complete",
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    if not context_graph_thread_id(arguments):
+        return
+    try:
+        from .context_graph_settings import context_graph_capture_state
+        from .cli import context_event_command_title, should_capture_context_command
+
+        if not context_graph_capture_state("mcp-context-event").get("record"):
+            return
+        normalized_event_type = str(event_type or "").strip().lower()
+        if normalized_event_type not in {"command", "shell_command"}:
+            return
+        raw_metadata = metadata if isinstance(metadata, dict) else {}
+        command = str(raw_metadata.get("command") or content or title or "").strip()
+        if not should_capture_context_command(command):
+            return
+        request = build_context_graph_event_request(
+            arguments,
+            event_type="command",
+            title=context_event_command_title(command),
+            content=command,
+            status=status,
+            metadata={"command": command, "capture": "command_only"},
+        )
+        worker_request("/context-graph/events", {"request": request}, retry_on_stale_socket=False)
+    except Exception as exc:
+        log_diagnostic(f"context graph event recording failed: {exc}")
+
+
 def compact_response(payload: dict[str, Any]) -> str:
     return json.dumps(payload, indent=2, sort_keys=True)
 
@@ -672,7 +750,8 @@ def tool_consult(arguments: dict[str, Any]) -> dict[str, Any]:
         request["thread_id"] = str(arguments["thread_id"])
     if arguments.get("as_of"):
         request["as_of"] = str(arguments["as_of"])
-    return worker_request("/memory/consult", request_payload(arguments, request))
+    payload = worker_request("/memory/consult", request_payload(arguments, request))
+    return payload
 
 
 def tool_item(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -818,7 +897,8 @@ def tool_create_note(arguments: dict[str, Any]) -> dict[str, Any]:
         request["no_relations_ok"] = True
     if arguments.get("allow_unsafe_memory"):
         request["allow_unsafe_memory"] = True
-    return worker_request("/memory/graph/note", request_payload(arguments, request))
+    payload = worker_request("/memory/graph/note", request_payload(arguments, request))
+    return payload
 
 
 def tool_update_item(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -861,6 +941,66 @@ def tool_delete_item(arguments: dict[str, Any]) -> dict[str, Any]:
     if not stable_key:
         raise BridgeError("stable_key is required")
     return worker_request("/memory/graph/item/delete", request_payload(arguments, {"stable_key": stable_key}))
+
+
+def tool_context_graph_event(arguments: dict[str, Any]) -> dict[str, Any]:
+    from .context_graph_settings import context_graph_capture_state, context_graph_skip_payload
+    from .cli import context_event_command_title, should_capture_context_command
+
+    command = str(arguments.get("command") or arguments.get("context_command") or "").strip()
+    if not command:
+        raise BridgeError("command is required")
+    capture_state = context_graph_capture_state("mcp-context-event")
+    if not capture_state.get("record"):
+        return context_graph_skip_payload("mcp-context-event", command=command, settings=capture_state)
+    if not should_capture_context_command(command):
+        return {"ok": True, "skipped": True, "reason": "command_not_allowlisted", "command": command}
+    metadata = {"command": command, "capture": "command_only"}
+    request = build_context_graph_event_request(
+        arguments,
+        event_type="command",
+        title=context_event_command_title(command),
+        content=command,
+        status=str(arguments.get("status") or "complete"),
+        metadata=metadata,
+    )
+    return worker_request("/context-graph/events", {"request": request})
+
+
+def tool_context_graph_url(arguments: dict[str, Any]) -> dict[str, Any]:
+    from .context_graph_settings import load_context_graph_settings
+
+    thread_id = context_graph_thread_id(arguments)
+    if not thread_id:
+        raise BridgeError("thread_id is required")
+    settings = load_context_graph_settings()
+    if not bool(settings.get("enabled")):
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "context_graph_disabled",
+            "message": "Context graph is disabled in Autopsy settings. No graph URL was opened.",
+            "context_graph": {
+                "enabled": False,
+                "mode": str(settings.get("mode") or "cli"),
+            },
+            "thread_id": thread_id,
+        }
+    info = ensure_worker()
+    base_url = str(info.get("base_url") or "").rstrip("/")
+    token = str(info.get("token") or "")
+    url = (
+        f"{base_url}/context-graph/threads/"
+        f"{urllib.parse.quote(thread_id, safe='')}?token={urllib.parse.quote(token, safe='')}"
+    )
+    return {
+        "thread_id": thread_id,
+        "url": url,
+        "worker": {
+            "base_url": base_url,
+            "pid": info.get("pid"),
+        },
+    }
 
 
 def tool_worker_info(_arguments: dict[str, Any]) -> dict[str, Any]:
@@ -1203,6 +1343,34 @@ TOOLS: dict[str, dict[str, Any]] = {
             "type": "object",
             "properties": {**optional_workspace_properties(), "stable_key": {"type": "string"}},
             "required": ["stable_key"],
+        },
+    },
+    "autopsy_context_graph_event": {
+        "description": "Record one allowlisted shell command for the live per-thread Autopsy context graph. Only command text is persisted; command output and generic graph events are ignored.",
+        "handler": tool_context_graph_event,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "thread_id": {"type": "string"},
+                "command": {"type": "string", "description": "Shell command text that fetched useful context. Non-allowlisted commands are skipped."},
+                "status": {"type": "string", "description": "Optional state flag such as in_progress, complete, blocked, or error."},
+                "timestamp": {"type": "string"},
+                "agent": {"type": "string"},
+                "app": {"type": "string"},
+                "run_id": {"type": "string"},
+            },
+            "required": ["thread_id", "command"],
+        },
+    },
+    "autopsy_context_graph_url": {
+        "description": "Return the local browser URL for a live per-thread Autopsy context graph.",
+        "handler": tool_context_graph_url,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "thread_id": {"type": "string"},
+            },
+            "required": ["thread_id"],
         },
     },
     "autopsy_memory_worker_info": {

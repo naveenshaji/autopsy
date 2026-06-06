@@ -94,6 +94,25 @@ trap cleanup EXIT INT TERM HUP
 
 mkdir -p "$BIN_DIR" "$(dirname "$OPT_DIR")" "$(dirname "$CELLAR_DIR")" "$DIST_DIR"
 
+if [ -f "$ROOT_DIR/apps/context-graph/package.json" ]; then
+  if command -v npm >/dev/null 2>&1; then
+    (
+      cd "$ROOT_DIR/apps/context-graph"
+      if [ -f package-lock.json ]; then
+        npm ci --cache "$TMP_DIR/npm-cache" >/dev/null
+      else
+        npm install --cache "$TMP_DIR/npm-cache" >/dev/null
+      fi
+      npm run build >/dev/null
+    )
+  elif [ ! -f "$ROOT_DIR/src/autopsy_memory/context_graph_viewer/static/index.html" ]; then
+    echo "install-global: npm is required to build the context graph viewer assets" >&2
+    exit 1
+  else
+    echo "install-global: npm not found; using existing context graph viewer assets" >&2
+  fi
+fi
+
 "$PYTHON_BIN" -m venv "$VENV_DIR"
 "$VENV_DIR/bin/python" -m pip install -U pip build >/dev/null
 "$VENV_DIR/bin/python" -m build --wheel --outdir "$DIST_DIR" "$ROOT_DIR" >/dev/null
@@ -149,6 +168,10 @@ write_wrapper() {
   target="$1"
   module="$2"
   backup_existing "$target"
+  if [ -L "$target" ]; then
+    rm -f "$target"
+  fi
+  mkdir -p "$(dirname "$target")"
   cat > "$target" <<EOF
 #!/usr/bin/env sh
 # AUTOPSY_STANDALONE_MEMORY_WRAPPER

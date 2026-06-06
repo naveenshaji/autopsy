@@ -13,6 +13,10 @@ struct AutopsyMenuBarApp: App {
             Label("Autopsy", systemImage: store.menuBarSystemImage)
         }
         .menuBarExtraStyle(.window)
+
+        Settings {
+            SettingsView(store: store)
+        }
     }
 }
 

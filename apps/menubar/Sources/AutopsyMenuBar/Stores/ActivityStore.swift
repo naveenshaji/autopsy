@@ -19,6 +19,9 @@ final class ActivityStore: ObservableObject {
     @Published var setupStatus: SetupStatusPayload?
     @Published var setupStatusError: String?
     @Published var isRepairingSetup = false
+    @Published var contextGraphSettings: ContextGraphSettingsPayload?
+    @Published var contextGraphSettingsError: String?
+    @Published var isUpdatingContextGraphSettings = false
     @Published var softwareUpdateStatus: SoftwareUpdateStatus?
     @Published var softwareUpdateError: String?
     @Published var isCheckingForSoftwareUpdates = false
@@ -36,6 +39,7 @@ final class ActivityStore: ObservableObject {
         static let cachedLaunchAgentStatus = "AutopsyMenuBar.cachedLaunchAgentStatus"
         static let cachedInstructionStatus = "AutopsyMenuBar.cachedInstructionStatus"
         static let cachedSetupStatus = "AutopsyMenuBar.cachedSetupStatus"
+        static let cachedContextGraphSettings = "AutopsyMenuBar.cachedContextGraphSettings"
     }
 
     private let activitySnapshotURL = ActivityStore.defaultActivitySnapshotURL
@@ -179,6 +183,29 @@ final class ActivityStore: ObservableObject {
 
     var hasPriorMemory: Bool {
         !recentWrites.isEmpty || !recentConsults.isEmpty
+    }
+
+    var contextGraphEnabled: Bool {
+        contextGraphSettings?.enabled ?? true
+    }
+
+    var contextGraphMode: String {
+        let mode = contextGraphSettings?.mode?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "cli"
+        return mode == "hooks" ? "hooks" : "cli"
+    }
+
+    var contextGraphMultiTurn: Bool {
+        contextGraphSettings?.multiTurn ?? false
+    }
+
+    var contextGraphStatusText: String {
+        if isUpdatingContextGraphSettings {
+            return "Updating"
+        }
+        if let contextGraphSettingsError, !contextGraphSettingsError.isEmpty {
+            return contextGraphSettingsError.clippedForMenuBar(limit: 72)
+        }
+        return contextGraphSettings?.message ?? "Context graph capture is using CLI context-event commands."
     }
 
     var hasInstalledInstructions: Bool {
@@ -408,6 +435,9 @@ final class ActivityStore: ObservableObject {
                 await loadSetupStatus()
             }
             Task {
+                await loadContextGraphSettings()
+            }
+            Task {
                 await loadSoftwareUpdateStatus()
             }
         }
@@ -466,6 +496,24 @@ final class ActivityStore: ObservableObject {
     func updateAutopsy() {
         Task {
             await updateAutopsyFromHomebrew()
+        }
+    }
+
+    func setContextGraphEnabled(_ enabled: Bool) {
+        Task {
+            await updateContextGraphSettings(enabled: enabled, mode: nil, multiTurn: nil)
+        }
+    }
+
+    func setContextGraphMode(_ mode: String) {
+        Task {
+            await updateContextGraphSettings(enabled: nil, mode: mode, multiTurn: nil)
+        }
+    }
+
+    func setContextGraphMultiTurn(_ enabled: Bool) {
+        Task {
+            await updateContextGraphSettings(enabled: nil, mode: nil, multiTurn: enabled)
         }
     }
 
@@ -572,6 +620,60 @@ final class ActivityStore: ObservableObject {
             UserDefaults.standard.set(output, forKey: Defaults.cachedSetupStatus)
         } catch {
             setupStatusError = error.localizedDescription
+        }
+    }
+
+    private func loadContextGraphSettings() async {
+        contextGraphSettingsError = nil
+        do {
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 15).run([
+                "context-graph-settings",
+                "--json",
+            ])
+            contextGraphSettings = try JSONDecoder().decode(ContextGraphSettingsPayload.self, from: Data(output.utf8))
+            UserDefaults.standard.set(output, forKey: Defaults.cachedContextGraphSettings)
+        } catch {
+            contextGraphSettingsError = error.localizedDescription
+        }
+    }
+
+    private func updateContextGraphSettings(enabled: Bool?, mode: String?, multiTurn: Bool?) async {
+        guard !isUpdatingContextGraphSettings else { return }
+        isUpdatingContextGraphSettings = true
+        contextGraphSettingsError = nil
+        lastActionMessage = nil
+        defer {
+            isUpdatingContextGraphSettings = false
+        }
+
+        var arguments = [
+            "context-graph-settings",
+            "--update-codex-instructions",
+            "--json",
+        ]
+        if let enabled {
+            arguments.append(enabled ? "--enabled" : "--disabled")
+        }
+        if let mode {
+            arguments.append(contentsOf: ["--mode", mode == "hooks" ? "hooks" : "cli"])
+        }
+        if let multiTurn {
+            arguments.append(multiTurn ? "--multi-turn" : "--current-turn")
+        }
+
+        do {
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 90).run(arguments)
+            let decoded = try JSONDecoder().decode(ContextGraphSettingsPayload.self, from: Data(output.utf8))
+            contextGraphSettings = decoded
+            UserDefaults.standard.set(output, forKey: Defaults.cachedContextGraphSettings)
+            if let codexInstructions = decoded.codexInstructions {
+                instructionStatus = codexInstructions
+            }
+            lastActionMessage = decoded.message
+            await loadInstructionStatus()
+            await loadSetupStatus()
+        } catch {
+            contextGraphSettingsError = error.localizedDescription
         }
     }
 
@@ -745,6 +847,12 @@ final class ActivityStore: ObservableObject {
            let data = cachedSetupStatus.data(using: .utf8),
            let decoded = try? JSONDecoder().decode(SetupStatusPayload.self, from: data) {
             setupStatus = decoded
+        }
+
+        if let cachedContextGraphSettings = defaults.string(forKey: Defaults.cachedContextGraphSettings),
+           let data = cachedContextGraphSettings.data(using: .utf8),
+           let decoded = try? JSONDecoder().decode(ContextGraphSettingsPayload.self, from: data) {
+            contextGraphSettings = decoded
         }
     }
 

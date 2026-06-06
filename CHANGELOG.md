@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.1.24 - 2026-06-06
+
+Adds the live context graph viewer and capture controls.
+
+- Ships the local web context graph viewer with draggable cards, rounded edges, neutral light/dark themes, dotted canvas, animated node arrivals, multi-turn layouts, and detailed scrollable inspectors.
+- Adds signed per-thread context graph URLs served by the Autopsy worker, with bundled static assets built during release and global installs.
+- Adds allowlisted command-only context capture through silent `context-event` and Codex hook ingestion, while skipping generic lifecycle/tool-result events and command output.
+- Adds context graph settings for enabling/disabling capture, choosing hooks versus CLI mode, and toggling multi-turn graph behavior.
+- Adds a standard macOS Settings window to the menu bar app with About, Context Graph, and Memory tabs.
+- Updates agent instructions so Codex opens graph URLs in the in-app browser and avoids unnecessary `context-event` calls when hook mode is active.
+
 ## 0.1.19 - 2026-06-02
 
 Fixes the Homebrew menu bar activity reader and small-screen detail behavior.

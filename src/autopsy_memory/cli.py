@@ -19,6 +19,13 @@ from pathlib import Path
 from typing import Any
 
 from .cli_parser import CommandHandlers, build_parser as build_cli_parser, normalized_cli_args
+from .context_graph_settings import (
+    context_graph_capture_state,
+    context_graph_settings_payload,
+    context_graph_skip_payload,
+    load_context_graph_settings,
+    save_context_graph_settings,
+)
 from .doctor import import_check, installed_autopsy_command_check, python_version_check
 from .init import build_init_payload, cmd_init, instruction_targets, smoke_tests, target_status
 from .metadata import PACKAGE_NAME, cmd_instructions, cmd_version, package_version
@@ -14000,6 +14007,564 @@ def cmd_feedback(args: argparse.Namespace) -> None:
     print(json.dumps(payload, indent=2))
 
 
+def normalize_context_event_metadata(values: Any) -> dict[str, Any]:
+    if not values:
+        return {}
+    if isinstance(values, dict):
+        return normalize_memory_metadata(values)
+    raw_values = [values] if isinstance(values, str) else list(values)
+    metadata: dict[str, Any] = {}
+    for raw_value in raw_values:
+        text = str(raw_value or "").strip()
+        if not text:
+            continue
+        if text.startswith("{"):
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"metadata JSON object is invalid: {text}") from exc
+            if not isinstance(parsed, dict):
+                raise ValueError(f"metadata JSON must be an object: {text}")
+            metadata.update(normalize_memory_metadata(parsed))
+            continue
+        metadata.update(normalize_memory_metadata([text]))
+    return metadata
+
+
+def context_event_command_title(command: str, *, max_length: int = 180) -> str:
+    text = re.sub(r"\s+", " ", str(command or "")).strip()
+    if len(text) <= max_length:
+        return text
+    return text[: max(0, max_length - 3)].rstrip() + "..."
+
+
+CONTEXT_EVENT_COMMAND_DENY_CONTAINS = (
+    "autopsy codex-hook",
+    "autopsy context-event",
+    "autopsy context-graph-url",
+)
+
+CONTEXT_EVENT_COMMAND_ALLOW_PREFIXES = (
+    "autopsy status",
+    "autopsy context",
+    "autopsy consult",
+    "autopsy search",
+    "autopsy item",
+    "autopsy timeline",
+    "autopsy history",
+    "autopsy neighbors",
+    "git status",
+    "git diff",
+    "git show",
+    "git log",
+    "rg",
+    "nl",
+    "sed",
+)
+
+CONTEXT_EVENT_COMMAND_ALLOW_CONTAINS: tuple[str, ...] = ()
+CONTEXT_EVENT_COMMAND_SETUP_PREFIXES = (
+    "cd",
+)
+
+
+def context_event_command_has_unsafe_shell_syntax(command: str) -> bool:
+    quote = ""
+    escaped = False
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if escaped:
+            escaped = False
+            index += 1
+            continue
+        if char == "\\":
+            escaped = True
+            index += 1
+            continue
+        if quote == "'":
+            if char == "'":
+                quote = ""
+            index += 1
+            continue
+        if quote == '"':
+            if char == '"':
+                quote = ""
+                index += 1
+                continue
+            if char == "`" or (char == "$" and index + 1 < len(command) and command[index + 1] == "("):
+                return True
+            index += 1
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            index += 1
+            continue
+        if char in {">", "<", "`"}:
+            return True
+        if char == "$" and index + 1 < len(command) and command[index + 1] == "(":
+            return True
+        index += 1
+    return False
+
+
+def context_event_command_matches_prefix(command: str, prefix: str) -> bool:
+    return command == prefix or command.startswith(f"{prefix} ") or command.startswith(f"{prefix}\t")
+
+
+def context_event_command_segments(command: str) -> list[str]:
+    segments: list[str] = []
+    current: list[str] = []
+    quote = ""
+    escaped = False
+    index = 0
+
+    def flush_segment() -> None:
+        segment = "".join(current).strip()
+        current.clear()
+        if segment:
+            segments.append(segment)
+
+    while index < len(command):
+        char = command[index]
+        if escaped:
+            current.append(char)
+            escaped = False
+            index += 1
+            continue
+        if char == "\\":
+            current.append(char)
+            escaped = True
+            index += 1
+            continue
+        if quote:
+            current.append(char)
+            if char == quote:
+                quote = ""
+            index += 1
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            current.append(char)
+            index += 1
+            continue
+        if char == ";":
+            flush_segment()
+            index += 1
+            continue
+        if char == "&" and index + 1 < len(command) and command[index + 1] == "&":
+            flush_segment()
+            index += 2
+            continue
+        if char == "&":
+            flush_segment()
+            segments.append("&")
+            index += 1
+            continue
+        if char == "|":
+            if index + 1 < len(command) and command[index + 1] == "|":
+                flush_segment()
+                index += 2
+                continue
+            flush_segment()
+            index += 1
+            continue
+        current.append(char)
+        index += 1
+    flush_segment()
+    return segments
+
+
+def context_event_command_is_allowed_segment(segment: str) -> bool:
+    if context_event_command_has_disallowed_write_flags(segment):
+        return False
+    return (
+        any(context_event_command_matches_prefix(segment, prefix) for prefix in CONTEXT_EVENT_COMMAND_ALLOW_PREFIXES)
+        or any(fragment in segment for fragment in CONTEXT_EVENT_COMMAND_ALLOW_CONTAINS)
+    )
+
+
+def context_event_command_has_disallowed_write_flags(segment: str) -> bool:
+    try:
+        parts = shlex.split(segment)
+    except ValueError:
+        return True
+    if not parts:
+        return False
+    executable = parts[0]
+    if executable == "sed":
+        return any(part == "-i" or part.startswith("-i") or part == "--in-place" or part.startswith("--in-place=") for part in parts[1:])
+    if executable == "git" and len(parts) > 1 and parts[1] in {"diff", "show", "log", "status"}:
+        return any(part == "--output" or part.startswith("--output=") for part in parts[2:])
+    return False
+
+
+def context_event_command_is_setup_segment(segment: str) -> bool:
+    return any(context_event_command_matches_prefix(segment, prefix) for prefix in CONTEXT_EVENT_COMMAND_SETUP_PREFIXES)
+
+
+def should_capture_context_command(command: str) -> bool:
+    raw_text = str(command or "")
+    if "\n" in raw_text or "\r" in raw_text:
+        return False
+    text = re.sub(r"\s+", " ", raw_text).strip().lower()
+    if not text:
+        return False
+    if context_event_command_has_unsafe_shell_syntax(text):
+        return False
+    if any(fragment in text for fragment in CONTEXT_EVENT_COMMAND_DENY_CONTAINS):
+        return False
+    saw_allowed_segment = False
+    for segment in context_event_command_segments(text):
+        if context_event_command_is_allowed_segment(segment):
+            saw_allowed_segment = True
+            continue
+        if context_event_command_is_setup_segment(segment):
+            continue
+        return False
+    return saw_allowed_segment
+
+
+def codex_hook_string(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def codex_hook_preview(value: Any, *, max_length: int = 1200) -> str:
+    if value is None:
+        text = ""
+    elif isinstance(value, str):
+        text = value
+    else:
+        try:
+            text = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        except Exception:
+            text = str(value)
+    text = re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(text) <= max_length:
+        return text
+    return text[:max(0, max_length - 3)].rstrip() + "..."
+
+
+def codex_hook_thread_id(hook: dict[str, Any], override: str | None = None) -> str:
+    for value in (
+        override,
+        os.environ.get("AUTOPSY_CONTEXT_GRAPH_THREAD_ID"),
+        os.environ.get("AUTOPSY_THREAD_ID"),
+        hook.get("session_id"),
+        hook.get("sessionId"),
+        hook.get("turn_id"),
+        hook.get("turnId"),
+    ):
+        thread_id = codex_hook_string(value)
+        if thread_id:
+            return thread_id
+    raise ValueError("Codex hook payload does not include session_id or turn_id")
+
+
+def codex_hook_metadata(hook: dict[str, Any]) -> dict[str, Any]:
+    return {}
+
+
+def codex_hook_tool_command(tool_input: Any) -> str:
+    if isinstance(tool_input, dict):
+        return codex_hook_string(tool_input.get("command") or tool_input.get("cmd"))
+    return ""
+
+
+def codex_hook_event_id(hook: dict[str, Any], *, thread_id: str, event_type: str) -> str:
+    tool_use_id = codex_hook_string(hook.get("tool_use_id"))
+    seed = {
+        "thread_id": thread_id,
+        "event_type": event_type,
+        "hook_event_name": "" if event_type == "command" and tool_use_id else codex_hook_string(hook.get("hook_event_name")),
+        "turn_id": codex_hook_string(hook.get("turn_id") or hook.get("turnId")),
+        "tool_use_id": tool_use_id,
+        "agent_id": codex_hook_string(hook.get("agent_id")),
+        "trigger": codex_hook_string(hook.get("trigger")),
+        "source": codex_hook_string(hook.get("source")),
+    }
+    digest = hashlib.sha256(json.dumps(seed, sort_keys=True).encode("utf-8")).hexdigest()[:24]
+    return f"codex-hook:{digest}"
+
+
+def codex_hook_event_base(hook: dict[str, Any], *, thread_id: str, event_type: str) -> dict[str, Any]:
+    return {
+        "id": codex_hook_event_id(hook, thread_id=thread_id, event_type=event_type),
+        "thread_id": thread_id,
+        "agent": "codex",
+        "app": "codex",
+        "run_id": codex_hook_string(hook.get("turn_id") or hook.get("turnId")),
+    }
+
+
+def codex_hook_tool_metadata(hook: dict[str, Any], *, max_length: int) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    tool_input = hook.get("tool_input")
+    command = codex_hook_tool_command(tool_input)
+    if command:
+        metadata["command"] = codex_hook_preview(command, max_length=220)
+        metadata["capture"] = "command_only"
+    return metadata
+
+
+def build_codex_hook_context_event(
+    hook: dict[str, Any],
+    *,
+    thread_id: str | None = None,
+    max_content_length: int = 1200,
+) -> dict[str, Any] | None:
+    if not isinstance(hook, dict):
+        raise ValueError("Codex hook payload must be a JSON object")
+    hook_event = codex_hook_string(hook.get("hook_event_name"))
+
+    if hook_event == "PostToolUse":
+        tool_name = codex_hook_string(hook.get("tool_name")) or "Tool"
+        if tool_name != "Bash":
+            return None
+        tool_input = hook.get("tool_input")
+        command = codex_hook_tool_command(tool_input)
+        if not should_capture_context_command(command):
+            return None
+        graph_thread_id = codex_hook_thread_id(hook, thread_id)
+        metadata = codex_hook_tool_metadata(hook, max_length=max_content_length)
+        event_type = "command"
+        base = codex_hook_event_base(hook, thread_id=graph_thread_id, event_type=event_type)
+        return {
+            **base,
+            "event_type": event_type,
+            "title": context_event_command_title(command),
+            "content": command,
+            "status": "complete",
+            "metadata": metadata,
+        }
+
+    return None
+
+
+def codex_hook_context_event_skip(hook: dict[str, Any]) -> dict[str, Any]:
+    hook_event = codex_hook_string(hook.get("hook_event_name"))
+    if hook_event != "PostToolUse":
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "generic_events_disabled",
+            "hook_event_name": hook_event,
+        }
+    tool_name = codex_hook_string(hook.get("tool_name")) or "Tool"
+    if tool_name != "Bash":
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "non_bash_tool",
+            "hook_event_name": hook_event,
+            "tool_name": tool_name,
+        }
+    command = codex_hook_tool_command(hook.get("tool_input"))
+    if not command:
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "command_required",
+            "hook_event_name": hook_event,
+        }
+    return {
+        "ok": True,
+        "skipped": True,
+        "reason": "command_not_allowlisted",
+        "hook_event_name": hook_event,
+        "command": command,
+    }
+
+
+def cmd_codex_hook(args: argparse.Namespace) -> None:
+    try:
+        capture_state = context_graph_capture_state("codex-hook")
+        if not capture_state.get("record"):
+            if bool(getattr(args, "json", False)) or bool(getattr(args, "dry_run", False)):
+                print(json.dumps(context_graph_skip_payload("codex-hook", settings=capture_state), indent=2))
+            return
+        raw_input = sys.stdin.read()
+        hook = json.loads(raw_input or "{}")
+        request = build_codex_hook_context_event(
+            hook,
+            thread_id=getattr(args, "thread_id", None),
+            max_content_length=max(80, int(getattr(args, "max_content_length", 1200) or 1200)),
+        )
+        if request is None:
+            if bool(getattr(args, "json", False)) or bool(getattr(args, "dry_run", False)):
+                print(json.dumps(codex_hook_context_event_skip(hook), indent=2))
+            return
+        if bool(getattr(args, "dry_run", False)):
+            print(json.dumps({"request": request}, indent=2))
+            return
+        from . import mcp_bridge
+
+        payload = mcp_bridge.worker_request("/context-graph/events", {"request": request}, retry_on_stale_socket=False)
+        if bool(getattr(args, "json", False)):
+            print(json.dumps(payload, indent=2))
+    except Exception as exc:
+        if bool(getattr(args, "strict", False)):
+            raise
+        if bool(getattr(args, "json", False)) or bool(getattr(args, "dry_run", False)):
+            print(json.dumps({"ok": False, "error": str(exc)}, indent=2))
+
+
+def _print_context_graph_stale_skip(payload: dict[str, Any], *, json_output: bool) -> None:
+    if json_output:
+        print(json.dumps(payload, indent=2))
+        return
+    message = str(payload.get("message") or "").strip()
+    if message:
+        print(message)
+
+
+def cmd_context_event(args: argparse.Namespace) -> None:
+    from . import mcp_bridge
+
+    metadata: dict[str, Any] = {}
+    command_text = str(getattr(args, "context_command", "") or "").strip()
+    event_type = str(getattr(args, "event_type", "") or "").strip()
+    if not command_text:
+        raise ValueError("--command is required")
+    capture_state = context_graph_capture_state("context-event")
+    if not capture_state.get("record"):
+        _print_context_graph_stale_skip(
+            context_graph_skip_payload("context-event", command=command_text, settings=capture_state),
+            json_output=bool(getattr(args, "json", False)),
+        )
+        return
+    if event_type and event_type != "command":
+        if bool(getattr(args, "json", False)):
+            print(json.dumps({"ok": True, "skipped": True, "reason": "generic_events_disabled", "event_type": event_type}, indent=2))
+        return
+    event_type = "command"
+    if command_text and not should_capture_context_command(command_text):
+        if bool(getattr(args, "json", False)):
+            print(json.dumps({"ok": True, "skipped": True, "reason": "command_not_allowlisted", "command": command_text}, indent=2))
+        return
+    title = context_event_command_title(command_text)
+    content = command_text
+    metadata["command"] = command_text
+    metadata["capture"] = "command_only"
+    request = {
+        "thread_id": str(getattr(args, "thread_id", "") or ""),
+        "event_type": event_type,
+        "title": title,
+        "content": content,
+        "timestamp": str(getattr(args, "timestamp", "") or ""),
+        "status": str(getattr(args, "status", "") or "complete"),
+        "agent": str(getattr(args, "agent", "") or ""),
+        "app": str(getattr(args, "app", "") or ""),
+        "run_id": str(getattr(args, "run_id", "") or ""),
+        "metadata": metadata,
+    }
+    payload = mcp_bridge.worker_request("/context-graph/events", {"request": request})
+    if bool(getattr(args, "json", False)):
+        print(json.dumps(payload, indent=2))
+
+
+def cmd_context_graph_url(args: argparse.Namespace) -> None:
+    from urllib.parse import quote
+    import webbrowser
+
+    from . import mcp_bridge
+
+    thread_id = str(getattr(args, "thread_id", "") or "").strip()
+    if not thread_id:
+        raise ValueError("thread id is required")
+    settings = load_context_graph_settings()
+    if not bool(settings.get("enabled")):
+        payload = {
+            "ok": True,
+            "skipped": True,
+            "reason": "context_graph_disabled",
+            "message": "Context graph is disabled in Autopsy settings. No graph URL was opened.",
+            "context_graph": {
+                "enabled": False,
+                "mode": str(settings.get("mode") or "cli"),
+            },
+            "thread_id": thread_id,
+        }
+        if bool(getattr(args, "json", False)):
+            print(json.dumps(payload, indent=2))
+        else:
+            print(payload["message"])
+        return
+    info = mcp_bridge.ensure_worker()
+    base_url = str(info.get("base_url") or "").rstrip("/")
+    token = str(info.get("token") or "")
+    url = f"{base_url}/context-graph/threads/{quote(thread_id, safe='')}?token={quote(token, safe='')}"
+    if bool(getattr(args, "open", False)):
+        webbrowser.open(url)
+    if bool(getattr(args, "json", False)):
+        print(
+            json.dumps(
+                {
+                    "url": url,
+                    "thread_id": thread_id,
+                    "worker": {
+                        "base_url": base_url,
+                        "pid": info.get("pid"),
+                    },
+                },
+                indent=2,
+            )
+        )
+        return
+    print(url)
+
+
+def cmd_context_graph_settings(args: argparse.Namespace) -> None:
+    current = load_context_graph_settings()
+    next_settings = dict(current)
+    changed = False
+    if getattr(args, "mode", None):
+        next_settings["mode"] = str(getattr(args, "mode"))
+        changed = True
+    if bool(getattr(args, "enabled", False)):
+        next_settings["enabled"] = True
+        changed = True
+    if bool(getattr(args, "disabled", False)):
+        next_settings["enabled"] = False
+        changed = True
+    if bool(getattr(args, "multi_turn", False)):
+        next_settings["multi_turn"] = True
+        changed = True
+    if bool(getattr(args, "current_turn", False)):
+        next_settings["multi_turn"] = False
+        changed = True
+
+    if changed:
+        next_settings = save_context_graph_settings(next_settings)
+
+    payload = {
+        **context_graph_settings_payload(next_settings),
+        "changed": changed,
+    }
+
+    if bool(getattr(args, "update_codex_instructions", False)):
+        init_args = argparse.Namespace(
+            global_scope=True,
+            repo_path=None,
+            agent="codex",
+            print_instructions=False,
+            check=False,
+            dry_run=False,
+            yes=True,
+            smoke_test=False,
+            skip_write_smoke=True,
+            mcp=False,
+            autopsy_command_path=str(shutil.which("autopsy") or ""),
+        )
+        payload["codex_instructions"] = build_init_payload(init_args)
+
+    if bool(getattr(args, "json", False)):
+        print(json.dumps(payload, indent=2))
+        return
+
+    print(payload["message"])
+
+
 def cmd_import_session(args: argparse.Namespace) -> None:
     tool, workspace, _config, graph = open_workspace_graph(args)
     payload = build_import_session_payload(
@@ -16446,6 +17011,10 @@ def build_parser() -> argparse.ArgumentParser:
             expire_item=cmd_expire_item,
             pin_item=cmd_pin_item,
             feedback=cmd_feedback,
+            codex_hook=cmd_codex_hook,
+            context_event=cmd_context_event,
+            context_graph_settings=cmd_context_graph_settings,
+            context_graph_url=cmd_context_graph_url,
             import_session=cmd_import_session,
             consolidate_session=cmd_consolidate_session,
             observe=cmd_observe,

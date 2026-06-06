@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import os
 import plistlib
 import sys
 import tempfile
@@ -14,6 +15,15 @@ from autopsy_memory import cli
 from autopsy_memory import doctor
 from autopsy_memory import mcp_bridge
 from autopsy_memory import worker
+
+
+@contextlib.contextmanager
+def temporary_context_graph_settings(settings: dict):
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        settings_path = Path(tmp_dir) / "context-graph-settings.json"
+        settings_path.write_text(json.dumps(settings), encoding="utf-8")
+        with mock.patch.dict(os.environ, {"AUTOPSY_CONTEXT_GRAPH_SETTINGS_PATH": str(settings_path)}):
+            yield settings_path
 
 
 class AutopsyCLIContractTests(unittest.TestCase):
@@ -51,14 +61,27 @@ class AutopsyCLIContractTests(unittest.TestCase):
             self.assertNotIn("github/codex", resolved)
 
     def test_instructions_include_required_commands(self):
-        parser = cli.build_parser()
-        args = parser.parse_args(["instructions"])
-        stream = io.StringIO()
-        with contextlib.redirect_stdout(stream):
-            args.func(args)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            settings_path = Path(tmp_dir) / "context-graph-settings.json"
+            settings_path.write_text(json.dumps({"enabled": True, "mode": "cli"}), encoding="utf-8")
+            parser = cli.build_parser()
+            args = parser.parse_args(["instructions"])
+            stream = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"AUTOPSY_CONTEXT_GRAPH_SETTINGS_PATH": str(settings_path)}),
+                contextlib.redirect_stdout(stream),
+            ):
+                args.func(args)
         output = stream.getvalue()
         self.assertIn("autopsy status --current-only", output)
         self.assertIn("autopsy consult --current-only", output)
+        self.assertIn("autopsy context-graph-url --thread-id", output)
+        self.assertIn("autopsy codex-hook", output)
+        self.assertIn("autopsy context-event --thread-id", output)
+        self.assertIn("--command \"<command text>\"", output)
+        self.assertIn("Never write generic graph events", output)
+        self.assertIn("never synthesize separate nodes", output)
+        self.assertIn("Ignore build, test, lint, package, write, shell redirection, command substitution, background operators, multiline commands, and other action commands", output)
         self.assertIn("autopsy benchmark --sample-size 5 --include-sync", output)
 
     def test_export_parser_accepts_release_options(self):
@@ -1333,6 +1356,104 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(request["scope"], "repo")
         self.assertEqual(request["repo"], "/tmp/fresh-repo")
 
+    def test_mcp_consult_does_not_record_generic_context_graph_event_when_thread_id_is_present(self):
+        calls: list[tuple[str, dict]] = []
+        original_worker_request = mcp_bridge.worker_request
+        try:
+            def fake_worker_request(endpoint, payload, *args, **kwargs):
+                calls.append((endpoint, payload))
+                if endpoint == "/memory/consult":
+                    return {
+                        "route": "hybrid",
+                        "hits": [{"stable_key": "graph-note:one"}],
+                        "items": [{"stable_key": "graph-note:one"}],
+                        "workflow": {"status": "ok", "complete": True},
+                    }
+                return {"event": payload["request"]}
+
+            mcp_bridge.worker_request = fake_worker_request
+            payload = mcp_bridge.tool_consult({"thread_id": "thread-1", "query": "release memory"})
+        finally:
+            mcp_bridge.worker_request = original_worker_request
+
+        self.assertEqual(payload["route"], "hybrid")
+        self.assertEqual([endpoint for endpoint, _payload in calls], ["/memory/consult"])
+
+    def test_mcp_create_note_does_not_record_generic_context_graph_event_when_thread_id_is_present(self):
+        calls: list[tuple[str, dict]] = []
+        original_worker_request = mcp_bridge.worker_request
+        try:
+            def fake_worker_request(endpoint, payload, *args, **kwargs):
+                calls.append((endpoint, payload))
+                if endpoint == "/memory/graph/note":
+                    return {"item": {"stableKey": "graph-note:new"}}
+                return {"event": payload["request"]}
+
+            mcp_bridge.worker_request = fake_worker_request
+            result = mcp_bridge.tool_create_note({
+                "thread_id": "thread-1",
+                "kind": "attempt",
+                "title": "Repo write",
+                "content": "This write should show in the graph.",
+            })
+        finally:
+            mcp_bridge.worker_request = original_worker_request
+
+        self.assertEqual(result["item"]["stableKey"], "graph-note:new")
+        self.assertEqual([endpoint for endpoint, _payload in calls], ["/memory/graph/note"])
+
+    def test_mcp_context_graph_event_records_allowlisted_command_event(self):
+        captured: dict[str, object] = {}
+        original_worker_request = mcp_bridge.worker_request
+        try:
+            def fake_worker_request(endpoint, payload, *args, **kwargs):
+                captured["endpoint"] = endpoint
+                captured["payload"] = payload
+                return {"ok": True, "event": payload["request"]}
+
+            mcp_bridge.worker_request = fake_worker_request
+            with temporary_context_graph_settings({"enabled": True, "mode": "cli"}):
+                result = mcp_bridge.tool_context_graph_event({
+                    "thread_id": "thread-1",
+                    "command": "rg context-event src/autopsy_memory",
+                    "metadata": ["tool=rg", "{\"line\": 42}"],
+                })
+        finally:
+            mcp_bridge.worker_request = original_worker_request
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(captured["endpoint"], "/context-graph/events")
+        request = captured["payload"]["request"]
+        self.assertEqual(request["thread_id"], "thread-1")
+        self.assertEqual(request["event_type"], "command")
+        self.assertEqual(request["title"], "rg context-event src/autopsy_memory")
+        self.assertEqual(request["content"], "rg context-event src/autopsy_memory")
+        self.assertEqual(request["metadata"]["command"], "rg context-event src/autopsy_memory")
+        self.assertEqual(request["metadata"]["capture"], "command_only")
+        self.assertNotIn("tool", request["metadata"])
+        self.assertNotIn("line", request["metadata"])
+
+    def test_mcp_context_graph_event_skips_non_allowlisted_command(self):
+        calls: list[tuple[str, dict]] = []
+        original_worker_request = mcp_bridge.worker_request
+        try:
+            def fake_worker_request(endpoint, payload, *args, **kwargs):
+                calls.append((endpoint, payload))
+                return {"ok": True, "event": payload["request"]}
+
+            mcp_bridge.worker_request = fake_worker_request
+            with temporary_context_graph_settings({"enabled": True, "mode": "cli"}):
+                result = mcp_bridge.tool_context_graph_event({
+                    "thread_id": "thread-1",
+                    "command": "ls -la",
+                })
+        finally:
+            mcp_bridge.worker_request = original_worker_request
+
+        self.assertEqual(calls, [])
+        self.assertTrue(result["skipped"])
+        self.assertEqual(result["reason"], "command_not_allowlisted")
+
     def test_worker_process_records_filters_by_info_file(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             info_path = Path(temp_dir) / "ml-worker.json"
@@ -1723,6 +1844,462 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(args.rating, "useful")
         self.assertEqual(args.note, "used in release fix")
         self.assertEqual(args.source, "unit-test")
+
+    def test_context_event_parser_accepts_command_and_metadata(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "context-event",
+            "--thread-id",
+            "thread-1",
+            "--command",
+            "rg context-event src/autopsy_memory",
+            "--status",
+            "complete",
+            "--metadata",
+            "tool=rg",
+            "--metadata",
+            "{\"line\": 42}",
+            "--json",
+        ])
+        self.assertEqual(args.command, "context-event")
+        self.assertEqual(args.thread_id, "thread-1")
+        self.assertEqual(args.context_command, "rg context-event src/autopsy_memory")
+        self.assertEqual(args.metadata, ["tool=rg", "{\"line\": 42}"])
+        self.assertTrue(args.json)
+
+    def test_context_event_parser_accepts_command_without_type(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "context-event",
+            "--thread-id",
+            "thread-1",
+            "--command",
+            "rg context_graph_event src/autopsy_memory/worker.py",
+        ])
+        self.assertEqual(args.command, "context-event")
+        self.assertEqual(args.event_type, "")
+        self.assertEqual(args.context_command, "rg context_graph_event src/autopsy_memory/worker.py")
+
+    def test_context_event_command_records_silently_by_default(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "context-event",
+            "--thread-id",
+            "thread-1",
+            "--command",
+            "rg context_graph_event src/autopsy_memory/worker.py",
+            "--metadata",
+            "tool=rg",
+        ])
+        stream = io.StringIO()
+        calls = []
+
+        def fake_worker_request(endpoint, payload, **_kwargs):
+            calls.append((endpoint, payload))
+            return {"ok": True, "event": payload["request"]}
+
+        with (
+            temporary_context_graph_settings({"enabled": True, "mode": "cli"}),
+            mock.patch("autopsy_memory.mcp_bridge.worker_request", side_effect=fake_worker_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        self.assertEqual(stream.getvalue(), "")
+        self.assertEqual(calls[0][0], "/context-graph/events")
+        request = calls[0][1]["request"]
+        self.assertEqual(request["thread_id"], "thread-1")
+        self.assertEqual(request["event_type"], "command")
+        self.assertEqual(request["title"], "rg context_graph_event src/autopsy_memory/worker.py")
+        self.assertEqual(request["content"], "rg context_graph_event src/autopsy_memory/worker.py")
+        self.assertEqual(request["metadata"]["command"], "rg context_graph_event src/autopsy_memory/worker.py")
+        self.assertEqual(request["metadata"]["capture"], "command_only")
+        self.assertNotIn("tool", request["metadata"])
+
+    def test_context_event_command_skips_non_allowlisted_commands(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "context-event",
+            "--thread-id",
+            "thread-1",
+            "--command",
+            "ls -la",
+            "--json",
+        ])
+        stream = io.StringIO()
+        calls = []
+
+        def fake_worker_request(endpoint, payload, **_kwargs):
+            calls.append((endpoint, payload))
+            return {"ok": True, "event": payload["request"]}
+
+        with (
+            temporary_context_graph_settings({"enabled": True, "mode": "cli"}),
+            mock.patch("autopsy_memory.mcp_bridge.worker_request", side_effect=fake_worker_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        payload = json.loads(stream.getvalue())
+        self.assertEqual(calls, [])
+        self.assertTrue(payload["skipped"])
+        self.assertEqual(payload["reason"], "command_not_allowlisted")
+
+    def test_context_event_skips_generic_event_type(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "context-event",
+            "--thread-id",
+            "thread-1",
+            "--type",
+            "file_read",
+            "--command",
+            "rg context-event",
+            "--json",
+        ])
+        stream = io.StringIO()
+        calls = []
+
+        def fake_worker_request(endpoint, payload, **_kwargs):
+            calls.append((endpoint, payload))
+            return {"ok": True, "event": payload["request"]}
+
+        with (
+            temporary_context_graph_settings({"enabled": True, "mode": "cli"}),
+            mock.patch("autopsy_memory.mcp_bridge.worker_request", side_effect=fake_worker_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        payload = json.loads(stream.getvalue())
+        self.assertEqual(calls, [])
+        self.assertTrue(payload["skipped"])
+        self.assertEqual(payload["reason"], "generic_events_disabled")
+
+    def test_context_event_json_prints_debug_payload_when_requested(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "context-event",
+            "--thread-id",
+            "thread-1",
+            "--command",
+            "rg context-event",
+            "--json",
+        ])
+        stream = io.StringIO()
+
+        def fake_worker_request(_endpoint, payload, **_kwargs):
+            return {"ok": True, "event": payload["request"]}
+
+        with (
+            temporary_context_graph_settings({"enabled": True, "mode": "cli"}),
+            mock.patch("autopsy_memory.mcp_bridge.worker_request", side_effect=fake_worker_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        payload = json.loads(stream.getvalue())
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["event"]["content"], "rg context-event")
+
+    def test_context_event_reports_hook_mode_for_stale_cli_capture(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            settings_path = Path(tmp_dir) / "context-graph-settings.json"
+            settings_path.write_text(json.dumps({"enabled": True, "mode": "hooks"}), encoding="utf-8")
+            parser = cli.build_parser()
+            args = parser.parse_args([
+                "context-event",
+                "--thread-id",
+                "thread-1",
+                "--command",
+                "rg context-event",
+            ])
+            stream = io.StringIO()
+            calls = []
+
+            def fake_worker_request(endpoint, payload, **_kwargs):
+                calls.append((endpoint, payload))
+                return {"ok": True, "event": payload["request"]}
+
+            with (
+                mock.patch.dict(os.environ, {"AUTOPSY_CONTEXT_GRAPH_SETTINGS_PATH": str(settings_path)}),
+                mock.patch("autopsy_memory.mcp_bridge.worker_request", side_effect=fake_worker_request),
+                contextlib.redirect_stdout(stream),
+            ):
+                args.func(args)
+
+        self.assertEqual(calls, [])
+        self.assertIn("hooks mode", stream.getvalue())
+
+    def test_context_event_reports_disabled_graph_for_stale_capture(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            settings_path = Path(tmp_dir) / "context-graph-settings.json"
+            settings_path.write_text(json.dumps({"enabled": False, "mode": "cli"}), encoding="utf-8")
+            parser = cli.build_parser()
+            args = parser.parse_args([
+                "context-event",
+                "--thread-id",
+                "thread-1",
+                "--command",
+                "rg context-event",
+                "--json",
+            ])
+            stream = io.StringIO()
+
+            with (
+                mock.patch.dict(os.environ, {"AUTOPSY_CONTEXT_GRAPH_SETTINGS_PATH": str(settings_path)}),
+                contextlib.redirect_stdout(stream),
+            ):
+                args.func(args)
+
+        payload = json.loads(stream.getvalue())
+        self.assertTrue(payload["skipped"])
+        self.assertEqual(payload["reason"], "context_graph_disabled")
+        self.assertEqual(payload["context_graph"]["enabled"], False)
+
+    def test_codex_hook_parser_accepts_hook_options(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["codex-hook", "--thread-id", "thread-1", "--dry-run", "--json", "--strict"])
+        self.assertEqual(args.command, "codex-hook")
+        self.assertEqual(args.thread_id, "thread-1")
+        self.assertTrue(args.dry_run)
+        self.assertTrue(args.json)
+        self.assertTrue(args.strict)
+
+    def test_context_graph_url_parser_accepts_open_and_json(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["context-graph-url", "--thread-id", "thread-1", "--open", "--json"])
+        self.assertEqual(args.command, "context-graph-url")
+        self.assertEqual(args.thread_id, "thread-1")
+        self.assertTrue(args.open)
+        self.assertTrue(args.json)
+
+    def test_context_graph_settings_parser_and_command_update_settings(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            settings_path = Path(tmp_dir) / "context-graph-settings.json"
+            parser = cli.build_parser()
+            args = parser.parse_args([
+                "context-graph-settings",
+                "--mode",
+                "hooks",
+                "--enabled",
+                "--multi-turn",
+                "--update-codex-instructions",
+                "--json",
+            ])
+            stream = io.StringIO()
+
+            with (
+                mock.patch.dict(os.environ, {"AUTOPSY_CONTEXT_GRAPH_SETTINGS_PATH": str(settings_path)}),
+                mock.patch("autopsy_memory.cli.build_init_payload", return_value={"targets": [], "workflow": {"complete": True}}),
+                contextlib.redirect_stdout(stream),
+            ):
+                args.func(args)
+            saved = json.loads(settings_path.read_text(encoding="utf-8"))
+
+        payload = json.loads(stream.getvalue())
+        self.assertTrue(payload["enabled"])
+        self.assertEqual(payload["mode"], "hooks")
+        self.assertTrue(payload["multi_turn"])
+        self.assertTrue(payload["changed"])
+        self.assertEqual(payload["codex_instructions"]["workflow"]["complete"], True)
+        self.assertEqual(saved["mode"], "hooks")
+        self.assertTrue(saved["multi_turn"])
+
+    def test_context_event_metadata_accepts_key_values_and_json_objects(self):
+        metadata = cli.normalize_context_event_metadata([
+            "path=src/autopsy_memory/worker.py",
+            "line=42",
+            "{\"stable_key\":\"graph-note:one\",\"ok\":true}",
+        ])
+        self.assertEqual(metadata["path"], "src/autopsy_memory/worker.py")
+        self.assertEqual(metadata["line"], 42)
+        self.assertEqual(metadata["stable_key"], "graph-note:one")
+        self.assertTrue(metadata["ok"])
+
+    def test_codex_hook_user_prompt_is_not_recorded_as_generic_graph_event(self):
+        request = cli.build_codex_hook_context_event({
+            "session_id": "session-1",
+            "turn_id": "turn-1",
+            "hook_event_name": "UserPromptSubmit",
+            "cwd": "/repo",
+            "model": "gpt-5",
+            "prompt": "please fix the graph",
+        })
+        self.assertIsNone(request)
+
+    def test_codex_hook_post_tool_records_only_allowlisted_bash_command_text(self):
+        class PoisonedToolResponse(dict):
+            def get(self, *_args, **_kwargs):
+                raise AssertionError("Codex context graph hooks must not inspect tool_response")
+
+        hook = {
+            "session_id": "session-1",
+            "turn_id": "turn-1",
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_use_id": "tool-1",
+            "tool_input": {"command": "rg nohit-token tests/test_worker.py"},
+            "tool_response": PoisonedToolResponse({"exit_code": 1, "stderr": "failed"}),
+        }
+        request = cli.build_codex_hook_context_event(hook)
+        duplicate_request = cli.build_codex_hook_context_event(hook)
+        self.assertEqual(request["event_type"], "command")
+        self.assertTrue(request["id"].startswith("codex-hook:"))
+        self.assertEqual(request["id"], duplicate_request["id"])
+        self.assertEqual(request["title"], "rg nohit-token tests/test_worker.py")
+        self.assertEqual(request["content"], "rg nohit-token tests/test_worker.py")
+        self.assertNotIn("failed", request["content"])
+        self.assertEqual(request["status"], "complete")
+        self.assertEqual(request["metadata"]["command"], "rg nohit-token tests/test_worker.py")
+        self.assertEqual(request["metadata"]["capture"], "command_only")
+        self.assertNotIn("tool", request["metadata"])
+        self.assertNotIn("tool_use_id", request["metadata"])
+        self.assertNotIn("tool_response", request["metadata"])
+
+    def test_codex_hook_preflight_tool_events_are_not_recorded(self):
+        base_hook = {
+            "session_id": "session-1",
+            "turn_id": "turn-1",
+            "tool_name": "Bash",
+            "tool_use_id": "tool-1",
+            "tool_input": {"command": "rg context_graph tests/test_worker.py"},
+        }
+        pre_request = cli.build_codex_hook_context_event({
+            **base_hook,
+            "hook_event_name": "PreToolUse",
+        })
+        permission_request = cli.build_codex_hook_context_event({
+            **base_hook,
+            "hook_event_name": "PermissionRequest",
+        })
+
+        self.assertIsNone(pre_request)
+        self.assertIsNone(permission_request)
+
+    def test_codex_hook_skips_non_allowlisted_bash_command(self):
+        request = cli.build_codex_hook_context_event({
+            "session_id": "session-1",
+            "turn_id": "turn-1",
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_use_id": "tool-1",
+            "tool_input": {"command": "ls -la"},
+            "tool_response": {"exit_code": 0},
+        })
+        self.assertIsNone(request)
+
+    def test_codex_hook_does_not_allow_commands_only_because_arguments_mention_context(self):
+        request = cli.build_codex_hook_context_event({
+            "session_id": "session-1",
+            "turn_id": "turn-1",
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_use_id": "tool-1",
+            "tool_input": {"command": "curl -s http://127.0.0.1/context-graph | sed -n '1,20p'"},
+            "tool_response": {"exit_code": 0},
+        })
+        self.assertIsNone(request)
+
+    def test_context_command_allowlist_supports_shell_segments_and_nested_python(self):
+        self.assertTrue(cli.should_capture_context_command("autopsy context --current-only --query graph"))
+        self.assertTrue(cli.should_capture_context_command("autopsy consult --current-only --query graph"))
+        self.assertTrue(cli.should_capture_context_command("autopsy status --current-only"))
+        self.assertTrue(cli.should_capture_context_command("nl -ba src/autopsy_memory/worker.py"))
+        self.assertTrue(cli.should_capture_context_command("cd apps/context-graph && rg graph src"))
+        self.assertTrue(cli.should_capture_context_command("cd apps/context-graph && git diff -- src/autopsy_memory/worker.py"))
+        self.assertTrue(cli.should_capture_context_command("git diff -- src/autopsy_memory/worker.py"))
+        self.assertTrue(cli.should_capture_context_command("rg 'graph|event' src | sed -n '1,20p'"))
+        self.assertFalse(cli.should_capture_context_command("cd apps/context-graph"))
+        self.assertFalse(cli.should_capture_context_command("cd apps/context-graph && npm run build"))
+        self.assertFalse(cli.should_capture_context_command("npm run build && rg graph src"))
+        self.assertFalse(cli.should_capture_context_command("git diff -- src/autopsy_memory/worker.py && npm test"))
+        self.assertFalse(cli.should_capture_context_command("./.venv/bin/python -m pytest tests/test_worker.py"))
+        self.assertFalse(cli.should_capture_context_command("autopsy capture-outcome --kind attempt --title write"))
+        self.assertFalse(cli.should_capture_context_command("autopsy context-event --thread-id t --command 'rg graph'"))
+        self.assertFalse(cli.should_capture_context_command("curl -s http://127.0.0.1/context-graph | sed -n '1,20p'"))
+        self.assertFalse(cli.should_capture_context_command("rg graph src | head -20"))
+        self.assertFalse(cli.should_capture_context_command("rg graph src | npm run build"))
+        self.assertFalse(cli.should_capture_context_command("rg graph src > /tmp/graph.txt"))
+        self.assertFalse(cli.should_capture_context_command("rg graph $(autopsy item graph-note:secret)"))
+        self.assertFalse(cli.should_capture_context_command("rg graph src & npm run build"))
+        self.assertFalse(cli.should_capture_context_command("rg graph src\nnpm run build"))
+        self.assertFalse(cli.should_capture_context_command("sed -i '' 's/a/b/' src/autopsy_memory/worker.py"))
+        self.assertFalse(cli.should_capture_context_command("git diff --output /tmp/diff.txt"))
+        self.assertTrue(cli.should_capture_context_command("rg '<GraphNode' apps/context-graph/src"))
+
+    def test_codex_hook_skips_non_bash_tool_events(self):
+        request = cli.build_codex_hook_context_event({
+            "session_id": "session-1",
+            "turn_id": "turn-1",
+            "hook_event_name": "PostToolUse",
+            "tool_name": "apply_patch",
+            "tool_use_id": "tool-1",
+            "tool_input": {"patch": "*** Begin Patch"},
+            "tool_response": {"status": "ok"},
+        })
+        self.assertIsNone(request)
+
+    def test_codex_hook_stop_is_not_recorded_as_generic_event(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            settings_path = Path(tmp_dir) / "context-graph-settings.json"
+            settings_path.write_text(json.dumps({"enabled": True, "mode": "hooks"}), encoding="utf-8")
+            parser = cli.build_parser()
+            args = parser.parse_args(["codex-hook"])
+            hook_payload = json.dumps({
+                "session_id": "session-1",
+                "hook_event_name": "Stop",
+                "turn_id": "turn-1",
+                "last_assistant_message": "Done",
+            })
+            stream = io.StringIO()
+            calls = []
+
+            def fake_worker_request(endpoint, payload, **_kwargs):
+                calls.append((endpoint, payload))
+                return {"ok": True}
+
+            with (
+                mock.patch.dict(os.environ, {"AUTOPSY_CONTEXT_GRAPH_SETTINGS_PATH": str(settings_path)}),
+                mock.patch.object(cli.sys, "stdin", io.StringIO(hook_payload)),
+                mock.patch("autopsy_memory.mcp_bridge.worker_request", side_effect=fake_worker_request),
+                contextlib.redirect_stdout(stream),
+            ):
+                args.func(args)
+
+        self.assertEqual(stream.getvalue(), "")
+        self.assertEqual(calls, [])
+
+    def test_codex_hook_dry_run_reports_lifecycle_hooks_as_generic_disabled(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            settings_path = Path(tmp_dir) / "context-graph-settings.json"
+            settings_path.write_text(json.dumps({"enabled": True, "mode": "hooks"}), encoding="utf-8")
+            parser = cli.build_parser()
+            args = parser.parse_args(["codex-hook", "--dry-run", "--json"])
+            hook_payload = json.dumps({
+                "hook_event_name": "Stop",
+                "last_assistant_message": "Done",
+            })
+            stream = io.StringIO()
+            calls = []
+
+            def fake_worker_request(endpoint, payload, **_kwargs):
+                calls.append((endpoint, payload))
+                return {"ok": True}
+
+            with (
+                mock.patch.dict(os.environ, {"AUTOPSY_CONTEXT_GRAPH_SETTINGS_PATH": str(settings_path)}),
+                mock.patch.object(cli.sys, "stdin", io.StringIO(hook_payload)),
+                mock.patch("autopsy_memory.mcp_bridge.worker_request", side_effect=fake_worker_request),
+                contextlib.redirect_stdout(stream),
+            ):
+                args.func(args)
+
+        payload = json.loads(stream.getvalue())
+        self.assertEqual(calls, [])
+        self.assertTrue(payload["skipped"])
+        self.assertEqual(payload["reason"], "generic_events_disabled")
+        self.assertEqual(payload["hook_event_name"], "Stop")
 
     def test_expire_parser_accepts_lifecycle_options(self):
         parser = cli.build_parser()
@@ -3028,6 +3605,13 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertIn("entity_scope", search_schema["properties"])
         create_schema = mcp_bridge.TOOLS["autopsy_memory_create_note"]["schema"]
         self.assertIn("group_id", create_schema["properties"])
+        self.assertIn("autopsy_context_graph_event", mcp_bridge.TOOLS)
+        self.assertIn("autopsy_context_graph_url", mcp_bridge.TOOLS)
+        graph_event_schema = mcp_bridge.TOOLS["autopsy_context_graph_event"]["schema"]
+        self.assertIn("thread_id", graph_event_schema["required"])
+        self.assertIn("command", graph_event_schema["required"])
+        self.assertNotIn("event_type", graph_event_schema["properties"])
+        self.assertNotIn("metadata", graph_event_schema["properties"])
 
     def test_nohit_identifier_queries_are_detected(self):
         self.assertTrue(cli.query_has_unlikely_identifier("nohit-autopsy-init-smoke-glass-cactus"))

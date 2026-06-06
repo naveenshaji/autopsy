@@ -12,6 +12,14 @@ Before substantial work:
 - Run `autopsy consult --current-only --query "<task/context query>"`.
 - Prefer `context` for pre-work grounding and `consult` over `search` when relying on memory.
 
+Live context graph:
+- At the start of each Codex thread/session, determine a stable thread id from the harness. If the harness does not expose one, choose a stable id for this conversation.
+- Get the graph URL with `autopsy context-graph-url --thread-id "<thread-id>"` and open that URL in the Codex in-app Browser. Do not pass `--open`; it uses the macOS default browser.
+- Record only allowlisted command cards with `autopsy context-event --thread-id "<thread-id>" --command "<command text>"`. This command is silent by default, skips non-allowlisted commands, and uses `--json` only for debugging. Do not pass event types, titles, content, metadata, stdout, stderr, or tool output.
+- Capture only the exact shell command text for context fetched through allowlisted commands. Never write generic graph events such as `file_read`, `web_search`, `tool_result`, `memory_consult`, `memory_write`, `turn_completed`, or status-only lifecycle events; never synthesize separate nodes for what the command read, searched, returned, or changed; never include file contents, fetched snippets, search results, metadata, secrets, or any command output in graph events.
+- The context graph viewer may deterministically render semantic labels, chips, and memory relation nodes from captured command text and Autopsy's own memory graph; agents still write only the exact allowlisted command string.
+- Manual command capture is allowlisted only for context-fetching commands: capture commands where every executable shell segment, including pipeline segments, starts with `autopsy status`, `autopsy context`, `autopsy consult`, `autopsy search`, `autopsy item`, `autopsy timeline`, `autopsy history`, `autopsy neighbors`, `git status`, `git diff`, `git show`, `git log`, `rg`, `nl`, or `sed`; a leading `cd ...` setup segment is allowed. Ignore build, test, lint, package, write, shell redirection, command substitution, background operators, multiline commands, and other action commands, even when chained with an allowlisted read command.
+
 For repo-specific work:
 - Use `autopsy consult --scope repo --repo <repo-root> --query "<query>"` when you only want memories from one repo.
 - Use `autopsy context --scope repo --repo <repo-root> --format text --query "<query>"` when you want a repo-filtered context block.
@@ -19,9 +27,7 @@ For repo-specific work:
 - Use `--scope system` for cross-repo conventions, user preferences, release patterns, or machine-level debugging history.
 - Use `--kind decision`, `--kind attempt`, `--kind observation`, `--kind procedure`, or comma-separated `--kind attempt,plan` when the answer should only consider specific memory kinds.
 - Use `--memory-type semantic`, `--memory-type episodic`, `--memory-type procedural`, or `--memory-type observation` when the answer should target a cognitive memory layer; combine with `--kind` when both should apply.
-- Use `--namespace <scope>` when reads or writes should target a durable scoped container such as a user, agent, repo, release, product area, or experiment.
-- Use `--entity-scope TYPE:ID`, `--user-id`, `--agent-id`, `--app-id`, `--run-id`, or `--group-id` when reads or writes should target a first-class user, agent, app, session, or group memory partition.
-- Use `--filter-json '<json>'` when reads need boolean `AND`/`OR`/`NOT` over kind, tags, namespaces, entity scopes, metadata, or item fields.
+- Use `--tag <tag>`, `--namespace <scope>`, `--entity-scope TYPE:ID`, `--user-id`, `--agent-id`, `--app-id`, `--run-id`, `--group-id`, `--metadata <key><op><value>`, and `--filter-json '<json>'` filters when you need durable topic, scoped-container, entity partition, source, owner, environment, score, tier, or boolean read constraints.
 - Use `--min-fact-rating 0.0..1.0` on `consult`, `context`, `search`, or `neighbors` when relation evidence quality matters.
 
 When reading memory:
@@ -37,7 +43,8 @@ When reading memory:
 - Use `history <stable-key>` when the answer depends on how one memory changed, especially after update, expiration, pinning, or delete operations.
 - Use `neighbors` for related decisions, attempts, dependencies, or reversions.
 - Use `observe --stable-key <stable-key>` to draft or `--write` an evidence-backed observation when one memory's graph neighborhood should become reusable context; use `--write-if-stale` to refresh only after evidence drift.
-- Use `pin <stable-key>` for core memories that should appear in `context` packs without depending on retrieval; add `--label`, `--description`, `--limit`, `--read-only`, or `--shared` when the pin should behave like an always-visible memory block.
+- Use `expire <stable-key>` for obsolete memories that should leave current reads but remain available to history and `--as-of` reconstruction.
+- Use `pin <stable-key>` for core memories that should appear in `context` packs without depending on task-specific retrieval; add `--label`, `--description`, `--limit`, `--read-only`, or `--shared` when the pin should behave like an always-visible memory block.
 - Use `feedback <stable-key> --rating useful|not-useful|neutral` after important reads; feedback informs audit activation and bounded consult ranking.
 - Treat memory as evidence, not absolute truth; verify drift-prone facts against code/config/git.
 
@@ -47,7 +54,8 @@ When writing memory:
 - Add at least one explicit semantic relation for durable writes: `--informed-by`, `--answers`, `--supersedes`, `--reverts`, `--depends-on`, `--implements`, `--constrains`, or `--refines`.
 - Relation flags are ontology-checked; use them between memory items, and target `--answers` at an open question.
 - Use `--no-relations-ok` only when the memory is intentionally standalone and no semantic relation applies.
-- Use `--namespace` and entity-scope flags on writes when future reads should target a durable scoped container or user/agent/app/run/group partition.
+- Use `--tag`, `--namespace`, entity-scope flags, and `--metadata KEY=VALUE` on writes when future reads should target a durable container, scoped namespace, user/agent/app/run/group partition, or structured field.
+- Use `--relation-valid-at`, `--relation-invalid-at`, or `--relation-expires-at` when a new semantic relation is only true during a known time window.
 - Use `--fact-rating 0.0..1.0` on writes with semantic relation flags when later reads should filter weak relation facts.
 - For repo work, either pass `--scope repo --repo <repo-root>` or `--repository-root-path <repo-root>` so writes are attributed correctly.
 - Inspect `write_quality.warnings`; `missing_semantic_relation`, short, duplicate, or low-signal memories should be expanded, updated, or related before relying on them.

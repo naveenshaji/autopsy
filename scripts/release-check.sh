@@ -10,6 +10,25 @@ cd "$ROOT_DIR"
 
 autopsy_check_python_version "$PYTHON"
 
+if [ -f "$ROOT_DIR/apps/context-graph/package.json" ]; then
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "release-check: npm is required to build the context graph viewer assets" >&2
+    exit 1
+  fi
+  NPM_CACHE_DIR="${AUTOPSY_NPM_CACHE_DIR:-$ROOT_DIR/.npm-cache}"
+  mkdir -p "$NPM_CACHE_DIR"
+  (
+    cd "$ROOT_DIR/apps/context-graph"
+    if [ -f package-lock.json ]; then
+      npm ci --cache "$NPM_CACHE_DIR" >/dev/null
+    else
+      npm install --cache "$NPM_CACHE_DIR" >/dev/null
+    fi
+    npm run build >/dev/null
+  )
+  test -s "$ROOT_DIR/src/autopsy_memory/context_graph_viewer/static/index.html"
+fi
+
 "$PYTHON" -m compileall -q src tests
 "$PYTHON" -m unittest discover -s tests
 sh -n scripts/install.sh

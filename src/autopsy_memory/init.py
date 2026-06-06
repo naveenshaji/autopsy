@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .metadata import AGENT_INSTRUCTIONS
+from .context_graph_settings import CONTEXT_GRAPH_MODE_HOOKS, load_context_graph_settings
+from .metadata import render_agent_instructions
 
 
 MANAGED_START = "<!-- AUTOPSY_MEMORY_START v1 -->"
@@ -23,9 +25,21 @@ command = "autopsy-memory-mcp"
 env = { AUTOPSY_UNIFIED_MEMORY = "1" }
 """
 
+CODEX_HOOK_EVENTS = (
+    "PostToolUse",
+)
+
 
 @dataclass(frozen=True)
 class InstructionTarget:
+    agent: str
+    scope: str
+    path: Path
+    description: str
+
+
+@dataclass(frozen=True)
+class HookTarget:
     agent: str
     scope: str
     path: Path
@@ -94,8 +108,98 @@ INSTRUCTION_TARGET_SPECS = (
 )
 
 
-def managed_instruction_block() -> str:
-    return f"{MANAGED_START}\n{AGENT_INSTRUCTIONS.rstrip()}\n{MANAGED_END}\n"
+def managed_instruction_block(agent: str = "generic") -> str:
+    return f"{MANAGED_START}\n{render_agent_instructions(agent=agent).rstrip()}\n{MANAGED_END}\n"
+
+
+def codex_hook_command(autopsy_command: str = "autopsy") -> str:
+    command = str(autopsy_command or "autopsy").strip() or "autopsy"
+    return f"{shlex.quote(command)} codex-hook"
+
+
+def codex_hook_group(autopsy_command: str = "autopsy") -> dict[str, Any]:
+    return {
+        "hooks": [
+            {
+                "type": "command",
+                "command": codex_hook_command(autopsy_command),
+                "timeout": 30,
+            }
+        ]
+    }
+
+
+def is_autopsy_codex_hook(handler: Any) -> bool:
+    if not isinstance(handler, dict):
+        return False
+    command = str(handler.get("command") or "")
+    return "autopsy" in command and "codex-hook" in command
+
+
+def patch_codex_hooks_json(
+    existing: str,
+    *,
+    autopsy_command: str = "autopsy",
+    enabled: bool = True,
+) -> tuple[str, str]:
+    if existing.strip():
+        try:
+            payload = json.loads(existing)
+        except json.JSONDecodeError as exc:
+            raise ValueError("existing Codex hooks.json is invalid JSON") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("existing Codex hooks.json must be a JSON object")
+    else:
+        payload = {}
+
+    hooks = payload.get("hooks")
+    if not isinstance(hooks, dict):
+        hooks = {}
+    else:
+        hooks = dict(hooks)
+
+    for event_name, groups in list(hooks.items()):
+        if not isinstance(groups, list):
+            continue
+        next_groups = []
+        for group in groups:
+            if not isinstance(group, dict):
+                next_groups.append(group)
+                continue
+            handlers = group.get("hooks")
+            if not isinstance(handlers, list):
+                next_groups.append(group)
+                continue
+            filtered_handlers = [handler for handler in handlers if not is_autopsy_codex_hook(handler)]
+            if filtered_handlers:
+                updated_group = dict(group)
+                updated_group["hooks"] = filtered_handlers
+                next_groups.append(updated_group)
+        if next_groups:
+            hooks[event_name] = next_groups
+        else:
+            hooks.pop(event_name, None)
+
+    if enabled:
+        for event_name in CODEX_HOOK_EVENTS:
+            groups = hooks.get(event_name)
+            if not isinstance(groups, list):
+                groups = []
+            groups.append(codex_hook_group(autopsy_command))
+            hooks[event_name] = groups
+
+    if hooks:
+        payload["hooks"] = hooks
+    else:
+        payload.pop("hooks", None)
+    new_text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    if not existing.strip() and not enabled:
+        return "", "unchanged"
+    if not existing.strip():
+        return new_text, "added"
+    if not enabled and new_text != existing:
+        return new_text, "removed"
+    return new_text, "unchanged" if new_text == existing else "updated"
 
 
 def strip_unmanaged_autopsy_sections(text: str) -> tuple[str, bool]:
@@ -197,6 +301,33 @@ def instruction_targets(
     return targets
 
 
+def codex_hook_targets(
+    *,
+    home: Path,
+    repo_path: Path | None,
+    install_global: bool,
+    agent: str,
+) -> list[HookTarget]:
+    if "codex" not in selected_agents(agent):
+        return []
+    targets: list[HookTarget] = []
+    if install_global:
+        targets.append(HookTarget(
+            agent="codex",
+            scope="global",
+            path=home / ".codex" / "hooks.json",
+            description="Codex global tool-use hooks",
+        ))
+    if repo_path:
+        targets.append(HookTarget(
+            agent="codex",
+            scope="repo",
+            path=repo_path / ".codex" / "hooks.json",
+            description="repo Codex tool-use hooks",
+        ))
+    return targets
+
+
 def target_status(target: InstructionTarget) -> dict[str, Any]:
     if not target.path.exists():
         state = "missing"
@@ -214,12 +345,71 @@ def target_status(target: InstructionTarget) -> dict[str, Any]:
 
 def write_target(target: InstructionTarget, *, dry_run: bool) -> dict[str, Any]:
     existing = target.path.read_text(encoding="utf-8") if target.path.exists() else ""
-    new_text, action = patch_managed_block(existing, managed_instruction_block())
+    new_text, action = patch_managed_block(existing, managed_instruction_block(target.agent))
     changed = new_text != existing
     if changed and not dry_run:
         target.path.parent.mkdir(parents=True, exist_ok=True)
         target.path.write_text(new_text, encoding="utf-8")
     payload = target_status(target) if target.path.exists() else {
+        "agent": target.agent,
+        "scope": target.scope,
+        "path": str(target.path),
+        "description": target.description,
+        "state": "missing",
+    }
+    payload.update({
+        "action": action,
+        "changed": changed,
+        "dry_run": dry_run,
+    })
+    return payload
+
+
+def hook_target_status(target: HookTarget) -> dict[str, Any]:
+    if not target.path.exists():
+        state = "missing"
+    else:
+        try:
+            payload = json.loads(target.path.read_text(encoding="utf-8"))
+            hooks = payload.get("hooks") if isinstance(payload, dict) else None
+            has_autopsy_hook = False
+            if isinstance(hooks, dict):
+                for groups in hooks.values():
+                    if not isinstance(groups, list):
+                        continue
+                    for group in groups:
+                        handlers = group.get("hooks") if isinstance(group, dict) else None
+                        if isinstance(handlers, list) and any(is_autopsy_codex_hook(handler) for handler in handlers):
+                            has_autopsy_hook = True
+                            break
+                    if has_autopsy_hook:
+                        break
+            state = "managed" if has_autopsy_hook else "unmanaged"
+        except Exception:
+            state = "invalid"
+    return {
+        "agent": target.agent,
+        "scope": target.scope,
+        "path": str(target.path),
+        "description": target.description,
+        "state": state,
+    }
+
+
+def write_hook_target(
+    target: HookTarget,
+    *,
+    dry_run: bool,
+    autopsy_command: str,
+    enabled: bool,
+) -> dict[str, Any]:
+    existing = target.path.read_text(encoding="utf-8") if target.path.exists() else ""
+    new_text, action = patch_codex_hooks_json(existing, autopsy_command=autopsy_command, enabled=enabled)
+    changed = new_text != existing
+    if changed and not dry_run:
+        target.path.parent.mkdir(parents=True, exist_ok=True)
+        target.path.write_text(new_text, encoding="utf-8")
+    payload = hook_target_status(target) if target.path.exists() else {
         "agent": target.agent,
         "scope": target.scope,
         "path": str(target.path),
@@ -341,6 +531,12 @@ def build_init_payload(args: argparse.Namespace) -> dict[str, Any]:
         install_global=install_global,
         agent=getattr(args, "agent", "all"),
     )
+    hook_targets = codex_hook_targets(
+        home=home,
+        repo_path=repo_path,
+        install_global=install_global,
+        agent=getattr(args, "agent", "all"),
+    )
     dry_run = bool(getattr(args, "dry_run", False) or getattr(args, "check", False))
     apply_changes = not dry_run
     if getattr(args, "check", False):
@@ -349,15 +545,22 @@ def build_init_payload(args: argparse.Namespace) -> dict[str, Any]:
         apply_changes = False
 
     autopsy_command = str(getattr(args, "autopsy_command_path", "") or shutil.which("autopsy") or "")
+    context_graph_settings = load_context_graph_settings()
+    codex_hooks_enabled = (
+        bool(context_graph_settings.get("enabled"))
+        and str(context_graph_settings.get("mode") or "") == CONTEXT_GRAPH_MODE_HOOKS
+    )
 
     payload: dict[str, Any] = {
         "mode": "init",
         "autopsy_command": autopsy_command or None,
         "agent": getattr(args, "agent", "all"),
+        "context_graph": context_graph_settings,
         "global": install_global,
         "repo": str(repo_path) if repo_path else None,
         "dry_run": dry_run,
         "targets": [],
+        "hooks": [],
         "mcp": None,
         "smoke_tests": [],
         "workflow": {
@@ -367,12 +570,15 @@ def build_init_payload(args: argparse.Namespace) -> dict[str, Any]:
     }
 
     if getattr(args, "print_instructions", False):
-        payload["instructions"] = managed_instruction_block().rstrip()
+        agent_for_print = str(getattr(args, "agent", "generic") or "generic")
+        if agent_for_print == "all":
+            agent_for_print = "generic"
+        payload["instructions"] = managed_instruction_block(agent_for_print).rstrip()
 
     if getattr(args, "mcp", False):
         payload["mcp"] = {
             "optional": True,
-            "note": "MCP is optional. The default Autopsy integration is persistent instructions plus CLI commands.",
+            "note": "MCP is optional. The default Autopsy integration is persistent instructions, Codex hooks where available, and CLI commands.",
             "codex_toml": MCP_SNIPPET.rstrip(),
         }
 
@@ -384,6 +590,24 @@ def build_init_payload(args: argparse.Namespace) -> dict[str, Any]:
         else:
             payload["targets"].append(target_status(target))
 
+    for target in hook_targets:
+        if apply_changes:
+            payload["hooks"].append(write_hook_target(
+                target,
+                dry_run=False,
+                autopsy_command=autopsy_command or "autopsy",
+                enabled=codex_hooks_enabled,
+            ))
+        elif dry_run:
+            payload["hooks"].append(write_hook_target(
+                target,
+                dry_run=True,
+                autopsy_command=autopsy_command or "autopsy",
+                enabled=codex_hooks_enabled,
+            ))
+        else:
+            payload["hooks"].append(hook_target_status(target))
+
     if getattr(args, "smoke_test", False):
         payload["smoke_tests"] = smoke_tests(
             skip_write=bool(getattr(args, "skip_write_smoke", False)),
@@ -393,7 +617,7 @@ def build_init_payload(args: argparse.Namespace) -> dict[str, Any]:
     incomplete = []
     if not payload["autopsy_command"]:
         incomplete.append("Install the standalone Autopsy CLI before using agent instructions.")
-    if not targets and not getattr(args, "print_instructions", False) and not getattr(args, "mcp", False):
+    if not targets and not hook_targets and not getattr(args, "print_instructions", False) and not getattr(args, "mcp", False):
         incomplete.append("Select at least one target with --global or --repo.")
     if incomplete:
         payload["workflow"] = {"complete": False, "next_steps": incomplete}

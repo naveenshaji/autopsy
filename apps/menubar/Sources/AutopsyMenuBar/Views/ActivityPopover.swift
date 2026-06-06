@@ -141,6 +141,10 @@ struct ActivityPopover: View {
                 }
             }
 
+            MenuActionRowButton(title: "Settings", systemImage: "gearshape") {
+                openSettingsWindow()
+            }
+
             MenuActionRowButton(title: "Quit", systemImage: "power") {
                 store.quit()
             }
@@ -258,6 +262,10 @@ struct ActivityPopover: View {
         }
         guard force || activeDetail?.id != detail.id else { return }
         activateDetail(detail)
+    }
+
+    private func openSettingsWindow() {
+        SettingsWindowController.shared.show(store: store)
     }
 
     private func deactivateDetail(_ detail: ActivityHoverDetail) {

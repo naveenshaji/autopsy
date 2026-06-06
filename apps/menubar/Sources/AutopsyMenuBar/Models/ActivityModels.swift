@@ -215,6 +215,28 @@ struct InstructionTarget: Decodable, Identifiable {
     }
 }
 
+struct ContextGraphSettingsPayload: Decodable {
+    var enabled: Bool?
+    var mode: String?
+    var multiTurn: Bool?
+    var status: String?
+    var message: String?
+    var path: String?
+    var changed: Bool?
+    var codexInstructions: InstructionStatusPayload?
+
+    enum CodingKeys: String, CodingKey {
+        case enabled
+        case mode
+        case multiTurn = "multi_turn"
+        case status
+        case message
+        case path
+        case changed
+        case codexInstructions = "codex_instructions"
+    }
+}
+
 struct SetupStatusPayload: Decodable {
     var pathRepair: SetupPathRepairPayload?
     var instructions: InstructionStatusPayload?
