@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.1.25 - 2026-06-06
+
+Fixes the Codex context graph launch instructions from v0.1.24.
+
+- Tells Codex to open context graph URLs through the Codex in-app Browser `iab` control path instead of `web.run`, macOS `open`, or the default Safari browser.
+- Adds a Homebrew formula updater fallback for transient GitHub archive wrapper 504s by retrying the equivalent `codeload.github.com` tarball.
+- Keeps local Homebrew current-formula validation compatible with either archive URL form.
+
 ## 0.1.24 - 2026-06-06
 
 Adds the live context graph viewer and capture controls.

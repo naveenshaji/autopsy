@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 import json
 import unittest
 from pathlib import Path
@@ -15,6 +16,49 @@ def load_generator():
 
 
 class HomebrewFormulaGeneratorTests(unittest.TestCase):
+    def test_public_tag_sha256_falls_back_to_codeload_on_gateway_timeout(self):
+        generator = load_generator()
+        calls = []
+        payload = b"release archive"
+
+        class GatewayTimeout(generator.urllib.error.HTTPError):
+            def __init__(self, url):
+                Exception.__init__(self, "Gateway Time-out")
+                self.code = 504
+                self.url = url
+                self.headers = {}
+                self.fp = None
+
+            @property
+            def reason(self):
+                return "Gateway Time-out"
+
+        def fake_fetch(url):
+            calls.append(url)
+            if "github.com/naveenshaji/autopsy/archive/" in url:
+                raise GatewayTimeout(url)
+            return payload
+
+        original_fetch = generator.fetch_bytes
+        try:
+            generator.fetch_bytes = fake_fetch
+            source_url, source_sha = generator.public_tag_sha256("0.1.24")
+        finally:
+            generator.fetch_bytes = original_fetch
+
+        self.assertEqual(
+            calls,
+            [
+                "https://github.com/naveenshaji/autopsy/archive/refs/tags/v0.1.24.tar.gz",
+                "https://codeload.github.com/naveenshaji/autopsy/tar.gz/refs/tags/v0.1.24",
+            ],
+        )
+        self.assertEqual(
+            source_url,
+            "https://codeload.github.com/naveenshaji/autopsy/tar.gz/refs/tags/v0.1.24",
+        )
+        self.assertEqual(source_sha, hashlib.sha256(payload).hexdigest())
+
     def test_wheel_resources_are_rendered_for_explicit_wheel_install(self):
         generator = load_generator()
         original_report = generator.pip_dependency_report

@@ -112,7 +112,7 @@ with tarfile.open(archive_path, "w:gz") as archive:
 sha256 = hashlib.sha256(archive_path.read_bytes()).hexdigest()
 formula = (root / "Formula" / "autopsy-memory.rb").read_text(encoding="utf-8")
 formula = re.sub(
-    r'url "https://github\.com/naveenshaji/autopsy/archive/refs/tags/v[^"]+\.tar\.gz"',
+    r'url "https://(?:github\.com/naveenshaji/autopsy/archive/refs/tags/v[^"]+\.tar\.gz|codeload\.github\.com/naveenshaji/autopsy/tar\.gz/refs/tags/v[^"]+)"',
     f'url "{archive_path.as_uri()}"',
     formula,
     count=1,

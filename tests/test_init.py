@@ -154,6 +154,9 @@ Old memory instructions.
             with mock.patch.dict(os.environ, {"AUTOPSY_CONTEXT_GRAPH_SETTINGS_PATH": str(settings_path)}):
                 block = init_module.managed_instruction_block("codex")
         self.assertIn("Codex in-app Browser", block)
+        self.assertIn("not `web.run` and not macOS `open`", block)
+        self.assertIn("connect to the `iab` browser", block)
+        self.assertIn("tab.goto(URL)", block)
         self.assertIn("Do not pass `--open`", block)
         self.assertNotIn('context-graph-url --thread-id "<thread-id>" --open', block)
 

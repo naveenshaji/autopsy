@@ -11,6 +11,7 @@ import sys
 import tempfile
 import textwrap
 import tomllib
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -43,7 +44,13 @@ def fetch_bytes(url: str) -> bytes:
 
 def public_tag_sha256(version: str) -> tuple[str, str]:
     url = f"https://github.com/naveenshaji/autopsy/archive/refs/tags/v{version}.tar.gz"
-    payload = fetch_bytes(url)
+    try:
+        payload = fetch_bytes(url)
+    except urllib.error.HTTPError as exc:
+        if exc.code != 504:
+            raise
+        url = f"https://codeload.github.com/naveenshaji/autopsy/tar.gz/refs/tags/v{version}"
+        payload = fetch_bytes(url)
     return url, hashlib.sha256(payload).hexdigest()
 
 
