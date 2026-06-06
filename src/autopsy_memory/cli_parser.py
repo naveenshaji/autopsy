@@ -456,7 +456,8 @@ def build_parser(
     context_graph_settings_parser.set_defaults(func=handlers.context_graph_settings)
 
     context_graph_url_parser = subparsers.add_parser("context-graph-url", help="Print the local browser URL for a live context graph thread.")
-    context_graph_url_parser.add_argument("--thread-id", required=True, help="Agent thread/session id.")
+    context_graph_url_parser.add_argument("--thread-id", help="Agent thread/session id. In Codex hook mode, use --codex-current instead of supplying this manually.")
+    context_graph_url_parser.add_argument("--codex-current", action="store_true", help="Resolve the current Codex session id from trusted codex-hook state.")
     context_graph_url_parser.add_argument("--json", action="store_true", help="Print structured JSON with worker and URL details.")
     context_graph_url_parser.add_argument("--open", action="store_true", help="Open the graph URL in the default browser.")
     context_graph_url_parser.set_defaults(func=handlers.context_graph_url)

@@ -26,6 +26,7 @@ env = { AUTOPSY_UNIFIED_MEMORY = "1" }
 """
 
 CODEX_HOOK_EVENTS = (
+    "PreToolUse",
     "PostToolUse",
 )
 

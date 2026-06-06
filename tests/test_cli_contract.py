@@ -2074,6 +2074,14 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertTrue(args.open)
         self.assertTrue(args.json)
 
+    def test_context_graph_url_parser_accepts_codex_current_without_thread_id(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["context-graph-url", "--codex-current", "--json"])
+        self.assertEqual(args.command, "context-graph-url")
+        self.assertIsNone(args.thread_id)
+        self.assertTrue(args.codex_current)
+        self.assertTrue(args.json)
+
     def test_context_graph_settings_parser_and_command_update_settings(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             settings_path = Path(tmp_dir) / "context-graph-settings.json"
@@ -2176,6 +2184,173 @@ class AutopsyCLIContractTests(unittest.TestCase):
 
         self.assertIsNone(pre_request)
         self.assertIsNone(permission_request)
+
+    def test_codex_hook_pretool_updates_session_state_without_graph_event(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            settings_path = Path(tmp_dir) / "context-graph-settings.json"
+            state_path = Path(tmp_dir) / "codex-hook-session.json"
+            settings_path.write_text(json.dumps({"enabled": True, "mode": "hooks"}), encoding="utf-8")
+            parser = cli.build_parser()
+            args = parser.parse_args(["codex-hook"])
+            hook_payload = json.dumps({
+                "session_id": "session-actual",
+                "turn_id": "turn-1",
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Bash",
+                "tool_input": {"command": "autopsy context-graph-url --codex-current"},
+            })
+            calls = []
+
+            def fake_worker_request(endpoint, payload, **_kwargs):
+                calls.append((endpoint, payload))
+                return {"ok": True}
+
+            with (
+                mock.patch.dict(os.environ, {
+                    "AUTOPSY_CONTEXT_GRAPH_SETTINGS_PATH": str(settings_path),
+                    "AUTOPSY_CODEX_HOOK_STATE_PATH": str(state_path),
+                }),
+                mock.patch.object(cli.sys, "stdin", io.StringIO(hook_payload)),
+                mock.patch("autopsy_memory.mcp_bridge.worker_request", side_effect=fake_worker_request),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                args.func(args)
+
+            self.assertEqual(calls, [])
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(state["thread_id"], "session-actual")
+            self.assertEqual(state["hook_event_name"], "PreToolUse")
+
+    def test_codex_hook_thread_id_uses_session_payload_over_manual_sources(self):
+        with mock.patch.dict(os.environ, {
+            "AUTOPSY_CONTEXT_GRAPH_THREAD_ID": "invented-env",
+            "AUTOPSY_THREAD_ID": "invented-thread",
+        }):
+            thread_id = cli.codex_hook_thread_id({"session_id": "session-actual"}, override="invented-override")
+
+        self.assertEqual(thread_id, "session-actual")
+
+    def test_context_graph_url_codex_current_uses_hook_state(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            settings_path = Path(tmp_dir) / "context-graph-settings.json"
+            state_path = Path(tmp_dir) / "codex-hook-session.json"
+            settings_path.write_text(json.dumps({"enabled": True, "mode": "hooks"}), encoding="utf-8")
+            state_path.write_text(
+                json.dumps({
+                    "thread_id": "session-actual",
+                    "updated_at": "2999-01-01T00:00:00+00:00",
+                    "hook_event_name": "PreToolUse",
+                    "source": "codex-hook",
+                }),
+                encoding="utf-8",
+            )
+            parser = cli.build_parser()
+            args = parser.parse_args(["context-graph-url", "--codex-current", "--json"])
+            stream = io.StringIO()
+
+            with (
+                mock.patch.dict(os.environ, {
+                    "AUTOPSY_CONTEXT_GRAPH_SETTINGS_PATH": str(settings_path),
+                    "AUTOPSY_CODEX_HOOK_STATE_PATH": str(state_path),
+                }),
+                mock.patch("autopsy_memory.mcp_bridge.ensure_worker", return_value={
+                    "base_url": "http://127.0.0.1:12345",
+                    "token": "TOKEN",
+                    "pid": 42,
+                }),
+                contextlib.redirect_stdout(stream),
+            ):
+                args.func(args)
+
+            payload = json.loads(stream.getvalue())
+            self.assertEqual(payload["thread_id"], "session-actual")
+            self.assertEqual(payload["thread_source"]["source"], "codex-hook")
+            self.assertIn("/context-graph/threads/session-actual", payload["url"])
+
+    def test_context_graph_url_codex_current_refuses_missing_hook_state(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            settings_path = Path(tmp_dir) / "context-graph-settings.json"
+            state_path = Path(tmp_dir) / "missing-codex-hook-session.json"
+            settings_path.write_text(json.dumps({"enabled": True, "mode": "hooks"}), encoding="utf-8")
+            parser = cli.build_parser()
+            args = parser.parse_args(["context-graph-url", "--codex-current", "--json"])
+            stream = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {
+                    "AUTOPSY_CONTEXT_GRAPH_SETTINGS_PATH": str(settings_path),
+                    "AUTOPSY_CODEX_HOOK_STATE_PATH": str(state_path),
+                }),
+                contextlib.redirect_stdout(stream),
+            ):
+                with self.assertRaises(SystemExit) as raised:
+                    args.func(args)
+
+            self.assertEqual(raised.exception.code, 1)
+            payload = json.loads(stream.getvalue())
+            self.assertEqual(payload["reason"], "no_current_codex_hook_session")
+            self.assertIn("Do not invent", payload["message"])
+
+    def test_context_graph_url_codex_current_ignores_env_without_hook_state(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            settings_path = Path(tmp_dir) / "context-graph-settings.json"
+            state_path = Path(tmp_dir) / "missing-codex-hook-session.json"
+            settings_path.write_text(json.dumps({"enabled": True, "mode": "hooks"}), encoding="utf-8")
+            parser = cli.build_parser()
+            args = parser.parse_args(["context-graph-url", "--codex-current", "--json"])
+            stream = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {
+                    "AUTOPSY_CONTEXT_GRAPH_SETTINGS_PATH": str(settings_path),
+                    "AUTOPSY_CODEX_HOOK_STATE_PATH": str(state_path),
+                    "AUTOPSY_CONTEXT_GRAPH_THREAD_ID": "invented-env-thread",
+                    "AUTOPSY_THREAD_ID": "invented-env-thread",
+                }),
+                contextlib.redirect_stdout(stream),
+            ):
+                with self.assertRaises(SystemExit) as raised:
+                    args.func(args)
+
+            self.assertEqual(raised.exception.code, 1)
+            payload = json.loads(stream.getvalue())
+            self.assertEqual(payload["reason"], "no_current_codex_hook_session")
+            self.assertNotIn("invented-env-thread", json.dumps(payload))
+
+    def test_context_graph_url_hook_mode_rejects_manual_thread_id(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            settings_path = Path(tmp_dir) / "context-graph-settings.json"
+            settings_path.write_text(json.dumps({"enabled": True, "mode": "hooks"}), encoding="utf-8")
+            parser = cli.build_parser()
+            args = parser.parse_args(["context-graph-url", "--thread-id", "invented-thread", "--json"])
+            stream = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"AUTOPSY_CONTEXT_GRAPH_SETTINGS_PATH": str(settings_path)}),
+                contextlib.redirect_stdout(stream),
+            ):
+                with self.assertRaises(SystemExit) as raised:
+                    args.func(args)
+
+            self.assertEqual(raised.exception.code, 1)
+            payload = json.loads(stream.getvalue())
+            self.assertEqual(payload["reason"], "manual_thread_id_forbidden_in_hook_mode")
+            self.assertIn("--codex-current", payload["message"])
+            self.assertNotIn("invented-thread", json.dumps(payload))
+
+    def test_context_graph_url_disabled_hook_mode_returns_disabled_without_thread_resolution(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            settings_path = Path(tmp_dir) / "context-graph-settings.json"
+            settings_path.write_text(json.dumps({"enabled": False, "mode": "hooks"}), encoding="utf-8")
+            parser = cli.build_parser()
+            args = parser.parse_args(["context-graph-url", "--thread-id", "invented-thread", "--json"])
+            stream = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"AUTOPSY_CONTEXT_GRAPH_SETTINGS_PATH": str(settings_path)}),
+                contextlib.redirect_stdout(stream),
+            ):
+                args.func(args)
+
+            payload = json.loads(stream.getvalue())
+            self.assertEqual(payload["reason"], "context_graph_disabled")
+            self.assertNotIn("invented-thread", json.dumps(payload))
 
     def test_codex_hook_skips_non_allowlisted_bash_command(self):
         request = cli.build_codex_hook_context_event({
@@ -3719,6 +3894,37 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertTrue(cli.is_stale_falkordb_lite_error("Error 2 connecting to /tmp/tmpabc/redis.socket. No such file or directory."))
         self.assertTrue(cli.is_stale_falkordb_lite_error("Connection refused while connecting to /tmp/tmpabc/redis.socket"))
         self.assertFalse(cli.is_stale_falkordb_lite_error("authentication failed"))
+
+    def test_cmd_health_retries_once_after_stale_falkordb_socket(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["health"])
+        stale = RuntimeError("Error 2 connecting to /tmp/tmpabc/redis.socket. No such file or directory.")
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "build_health_payload", side_effect=[stale, {"ok": True, "workflow": {"complete": True}}]),
+            mock.patch.object(cli, "reset_stale_falkordb_lite_runtime", return_value={"settings_backup": "/tmp/settings.bak"}) as reset,
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+        reset.assert_called_once_with(args)
+        self.assertTrue(json.loads(stream.getvalue())["ok"])
+
+    def test_cmd_benchmark_retries_once_after_stale_falkordb_socket(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["benchmark"])
+        stale = RuntimeError("Connection refused while connecting to /tmp/tmpabc/redis.socket")
+        fake_context = (object(), {"root_path": "/tmp/workspace"}, {}, object())
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "open_workspace_graph", side_effect=[fake_context, fake_context]) as open_graph,
+            mock.patch.object(cli, "build_benchmark_payload", side_effect=[stale, {"passed": True, "workflow": {"complete": True}}]),
+            mock.patch.object(cli, "reset_stale_falkordb_lite_runtime", return_value={"settings_backup": "/tmp/settings.bak"}) as reset,
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+        self.assertEqual(open_graph.call_count, 2)
+        reset.assert_called_once_with(args)
+        self.assertTrue(json.loads(stream.getvalue())["passed"])
 
     def test_falkordblite_runtime_uses_module_path_override(self):
         fake_package = types.ModuleType("redislite")

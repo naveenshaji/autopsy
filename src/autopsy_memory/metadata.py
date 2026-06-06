@@ -106,9 +106,10 @@ def context_graph_instruction_block(agent: str = "generic", settings: dict | Non
     if normalized["mode"] == CONTEXT_GRAPH_MODE_HOOKS:
         if agent_key == "codex":
             return """Live context graph:
-- Context graph capture is configured for Codex hooks. Do not call `autopsy context-event`; `autopsy codex-hook` records allowlisted `PostToolUse` Bash command text automatically after the user trusts the hook.
-- At the start of each Codex thread/session, determine a stable thread id from the harness. If the harness does not expose one, choose a stable id for this conversation.
-- Get the graph URL with `autopsy context-graph-url --thread-id "<thread-id>"`. Do not pass `--open`; it uses the macOS default browser. {codex_browser_instruction}
+- Context graph capture is configured for Codex hooks. Do not call `autopsy context-event`; `autopsy codex-hook` records the current Codex session id from trusted hook payloads and records allowlisted `PostToolUse` Bash command text automatically.
+- Do not choose, invent, derive, or manually pass a graph thread id in Codex hook mode.
+- Get the graph URL with `autopsy context-graph-url --codex-current`. This resolves the real current Codex session id from trusted hook state. Do not pass `--thread-id`; if the command reports `no_current_codex_hook_session` or `stale_codex_hook_session`, do not retry with a fabricated id. Tell the user hooks are not trusted/observed yet, then retry after a trusted Codex tool call updates hook state.
+- Do not pass `--open`; it uses the macOS default browser. {codex_browser_instruction}
 - Hook capture records only allowlisted command cards. It skips preflight, permission, lifecycle-only, prompt, non-Bash tool, compaction, subagent hooks, and non-allowlisted commands.
 - Capture only the exact shell command text for context fetched through allowlisted commands. Never write generic graph events such as `file_read`, `web_search`, `tool_result`, `memory_consult`, `memory_write`, `turn_completed`, or status-only lifecycle events; never synthesize separate nodes for what the command read, searched, returned, or changed; never include file contents, fetched snippets, search results, metadata, secrets, or any command output in graph events.
 - The context graph viewer may deterministically render semantic labels, chips, and memory relation nodes from captured command text and Autopsy's own memory graph; agents still write only the exact allowlisted command string.

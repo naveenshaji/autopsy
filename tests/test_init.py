@@ -110,7 +110,7 @@ Old memory instructions.
         )
         self.assertNotIn("UserPromptSubmit", payload["hooks"])
         self.assertNotIn("PreCompact", payload["hooks"])
-        self.assertNotIn("PreToolUse", payload["hooks"])
+        self.assertIn("PreToolUse", payload["hooks"])
         self.assertNotIn("PermissionRequest", payload["hooks"])
         self.assertIn("PostToolUse", payload["hooks"])
         self.assertIn("Stop", payload["hooks"])
@@ -168,6 +168,9 @@ Old memory instructions.
                 block = init_module.managed_instruction_block("codex")
         self.assertIn("Do not call `autopsy context-event`", block)
         self.assertIn("Codex hooks", block)
+        self.assertIn("context-graph-url --codex-current", block)
+        self.assertIn("Do not choose, invent, derive, or manually pass", block)
+        self.assertNotIn('context-graph-url --thread-id "<thread-id>"', block)
 
     def test_global_cursor_has_no_file_target(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -223,7 +226,7 @@ Old memory instructions.
             hook_payload = json.loads(hook_path.read_text(encoding="utf-8"))
             self.assertNotIn("UserPromptSubmit", hook_payload["hooks"])
             self.assertNotIn("PreCompact", hook_payload["hooks"])
-            self.assertEqual(set(hook_payload["hooks"]), {"PostToolUse"})
+            self.assertEqual(set(hook_payload["hooks"]), {"PreToolUse", "PostToolUse"})
 
     def test_dry_run_does_not_write_files(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

@@ -34,6 +34,8 @@ from .metadata import PACKAGE_NAME, cmd_instructions, cmd_version, package_versi
 APP_SUPPORT_DIR_DEFAULT = Path(os.environ.get("AUTOPSY_APP_SUPPORT_DIR") or Path.home() / "Library" / "Application Support" / "Autopsy")
 FALKORDB_LITE_PATH_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "FalkorDB" / "autopsy-memory.db"
 GLOBAL_MEMORY_SETTINGS_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "Config" / "memory-settings.json"
+CODEX_HOOK_STATE_PATH_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "Config" / "codex-hook-session.json"
+CODEX_HOOK_STATE_MAX_AGE_SECONDS = 300.0
 UNIFIED_MEMORY_ROOT_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "MemoryRoot"
 ACTIVITY_SNAPSHOT_PATH_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "Activity" / "activity.json"
 MODEL_WARMUP_STATUS_PATH_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "ML" / "model-warmup.json"
@@ -1781,6 +1783,15 @@ def reset_falkordb_lite_client(lite_path: str | None) -> None:
             shutdown()
         except Exception:
             pass
+
+
+def reset_stale_falkordb_lite_runtime(args: argparse.Namespace) -> dict[str, Any]:
+    lite_path = resolved_lite_path(args)
+    reset_falkordb_lite_client(str(lite_path) if lite_path else None)
+    return {
+        "lite_path": str(lite_path or ""),
+        "settings_backup": backup_stale_falkordb_lite_settings(str(lite_path) if lite_path else None),
+    }
 
 
 def result_rows(result) -> list[list[Any]]:
@@ -13683,23 +13694,34 @@ def build_benchmark_payload(
     }
 
 
-def open_workspace_graph(args: argparse.Namespace):
+def _open_workspace_graph_once(args: argparse.Namespace):
     tool, workspace, config = load_workspace_and_config(args)
+    graph, _ = ensure_workspace_graph(
+        tool=tool,
+        conn=None,
+        workspace=workspace,
+        config=config,
+        host=args.host,
+        port=args.port,
+        graph_name_base=args.graph_name,
+        lite_path=resolved_lite_path(args),
+    )
+    return tool, workspace, config, graph
+
+
+def open_workspace_graph(args: argparse.Namespace):
     try:
-        graph, _ = ensure_workspace_graph(
-            tool=tool,
-            conn=None,
-            workspace=workspace,
-            config=config,
-            host=args.host,
-            port=args.port,
-            graph_name_base=args.graph_name,
-            lite_path=resolved_lite_path(args),
-        )
+        return _open_workspace_graph_once(args)
     except Exception as exc:
+        if is_stale_falkordb_lite_error(exc):
+            reset_stale_falkordb_lite_runtime(args)
+            try:
+                return _open_workspace_graph_once(args)
+            except Exception as retry_exc:
+                print(json.dumps(falkor_start_failure_payload(args, retry_exc), indent=2))
+                raise SystemExit(1)
         print(json.dumps(falkor_start_failure_payload(args, exc), indent=2))
         raise SystemExit(1)
-    return tool, workspace, config, graph
 
 
 def consult_worker_mode(args: argparse.Namespace) -> str:
@@ -14247,18 +14269,104 @@ def codex_hook_preview(value: Any, *, max_length: int = 1200) -> str:
 
 def codex_hook_thread_id(hook: dict[str, Any], override: str | None = None) -> str:
     for value in (
-        override,
-        os.environ.get("AUTOPSY_CONTEXT_GRAPH_THREAD_ID"),
-        os.environ.get("AUTOPSY_THREAD_ID"),
         hook.get("session_id"),
         hook.get("sessionId"),
-        hook.get("turn_id"),
-        hook.get("turnId"),
     ):
         thread_id = codex_hook_string(value)
         if thread_id:
             return thread_id
-    raise ValueError("Codex hook payload does not include session_id or turn_id")
+    raise ValueError("Codex hook payload does not include session_id")
+
+
+def codex_hook_state_path() -> Path:
+    return Path(os.environ.get("AUTOPSY_CODEX_HOOK_STATE_PATH") or CODEX_HOOK_STATE_PATH_DEFAULT).expanduser()
+
+
+def codex_hook_state_max_age_seconds() -> float:
+    value = str(os.environ.get("AUTOPSY_CODEX_HOOK_STATE_MAX_AGE_SECONDS") or "").strip()
+    if not value:
+        return CODEX_HOOK_STATE_MAX_AGE_SECONDS
+    try:
+        return max(1.0, float(value))
+    except ValueError:
+        return CODEX_HOOK_STATE_MAX_AGE_SECONDS
+
+
+def parse_iso_datetime(value: str) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def write_codex_hook_state(hook: dict[str, Any], *, thread_id: str | None = None) -> dict[str, Any] | None:
+    try:
+        resolved_thread_id = codex_hook_thread_id(hook, thread_id)
+    except ValueError:
+        return None
+    now = datetime.now(timezone.utc).isoformat()
+    payload = {
+        "thread_id": resolved_thread_id,
+        "updated_at": now,
+        "hook_event_name": codex_hook_string(hook.get("hook_event_name")),
+        "source": "codex-hook",
+    }
+    path = codex_hook_state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(path.name + ".tmp")
+    temp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temp_path.replace(path)
+    return payload
+
+
+def read_codex_hook_state() -> dict[str, Any] | None:
+    path = codex_hook_state_path()
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def current_codex_hook_thread_state() -> dict[str, Any]:
+    state = read_codex_hook_state()
+    thread_id = codex_hook_string((state or {}).get("thread_id"))
+    updated_at = parse_iso_datetime(str((state or {}).get("updated_at") or ""))
+    if not state or not thread_id or updated_at is None:
+        return {
+            "ok": False,
+            "reason": "no_current_codex_hook_session",
+            "message": "No trusted Codex hook session id is available yet. Do not invent a thread id; trust hooks and run a Codex tool call first.",
+        }
+    age_seconds = max(0.0, (datetime.now(timezone.utc) - updated_at).total_seconds())
+    max_age_seconds = codex_hook_state_max_age_seconds()
+    if age_seconds > max_age_seconds:
+        return {
+            "ok": False,
+            "reason": "stale_codex_hook_session",
+            "message": "The latest Codex hook session id is stale. Do not invent a thread id; run a Codex tool call after hooks are trusted, then retry.",
+            "thread_id": thread_id,
+            "updated_at": updated_at.isoformat(),
+            "age_seconds": round(age_seconds, 3),
+            "max_age_seconds": max_age_seconds,
+        }
+    return {
+        "ok": True,
+        "thread_id": thread_id,
+        "source": str(state.get("source") or "codex-hook"),
+        "hook_event_name": str(state.get("hook_event_name") or ""),
+        "updated_at": updated_at.isoformat(),
+        "age_seconds": round(age_seconds, 3),
+        "fresh": True,
+    }
 
 
 def codex_hook_metadata(hook: dict[str, Any]) -> dict[str, Any]:
@@ -14385,6 +14493,7 @@ def cmd_codex_hook(args: argparse.Namespace) -> None:
             return
         raw_input = sys.stdin.read()
         hook = json.loads(raw_input or "{}")
+        write_codex_hook_state(hook, thread_id=getattr(args, "thread_id", None))
         request = build_codex_hook_context_event(
             hook,
             thread_id=getattr(args, "thread_id", None),
@@ -14469,10 +14578,11 @@ def cmd_context_graph_url(args: argparse.Namespace) -> None:
 
     from . import mcp_bridge
 
-    thread_id = str(getattr(args, "thread_id", "") or "").strip()
-    if not thread_id:
-        raise ValueError("thread id is required")
     settings = load_context_graph_settings()
+    hook_mode = str(settings.get("mode") or "").strip().lower() == "hooks"
+    codex_current = bool(getattr(args, "codex_current", False))
+    explicit_thread_id = str(getattr(args, "thread_id", "") or "").strip()
+    resolution: dict[str, Any] = {"source": "argument" if explicit_thread_id else ""}
     if not bool(settings.get("enabled")):
         payload = {
             "ok": True,
@@ -14483,13 +14593,56 @@ def cmd_context_graph_url(args: argparse.Namespace) -> None:
                 "enabled": False,
                 "mode": str(settings.get("mode") or "cli"),
             },
-            "thread_id": thread_id,
         }
+        if explicit_thread_id and not hook_mode:
+            payload["thread_id"] = explicit_thread_id
         if bool(getattr(args, "json", False)):
             print(json.dumps(payload, indent=2))
         else:
             print(payload["message"])
         return
+    if hook_mode and explicit_thread_id:
+        payload = {
+            "ok": False,
+            "skipped": True,
+            "reason": "manual_thread_id_forbidden_in_hook_mode",
+            "message": "Context graph is in Codex hook mode. Do not pass --thread-id or invent a graph id; use autopsy context-graph-url --codex-current after a trusted Codex hook has recorded the session.",
+            "context_graph": {
+                "enabled": bool(settings.get("enabled")),
+                "mode": str(settings.get("mode") or "cli"),
+            },
+        }
+        if bool(getattr(args, "json", False)):
+            print(json.dumps(payload, indent=2))
+        else:
+            print(payload["message"])
+        raise SystemExit(1)
+    if codex_current or (hook_mode and not explicit_thread_id):
+        if explicit_thread_id:
+            raise ValueError("Do not combine --thread-id with --codex-current")
+        resolution = current_codex_hook_thread_state()
+        if not bool(resolution.get("ok")):
+            payload = {
+                "ok": False,
+                "skipped": True,
+                "reason": str(resolution.get("reason") or "no_current_codex_hook_session"),
+                "message": str(resolution.get("message") or "No current Codex hook session id is available."),
+                "context_graph": {
+                    "enabled": bool(settings.get("enabled")),
+                    "mode": str(settings.get("mode") or "cli"),
+                },
+                "codex_current": resolution,
+            }
+            if bool(getattr(args, "json", False)):
+                print(json.dumps(payload, indent=2))
+            else:
+                print(payload["message"])
+            raise SystemExit(1)
+        thread_id = str(resolution.get("thread_id") or "").strip()
+    else:
+        thread_id = explicit_thread_id
+    if not thread_id:
+        raise ValueError("thread id is required; in Codex hook mode use --codex-current")
     info = mcp_bridge.ensure_worker()
     base_url = str(info.get("base_url") or "").rstrip("/")
     token = str(info.get("token") or "")
@@ -14502,6 +14655,7 @@ def cmd_context_graph_url(args: argparse.Namespace) -> None:
                 {
                     "url": url,
                     "thread_id": thread_id,
+                    "thread_source": resolution,
                     "worker": {
                         "base_url": base_url,
                         "pid": info.get("pid"),
@@ -14722,15 +14876,30 @@ def cmd_audit(args: argparse.Namespace) -> None:
 
 def cmd_benchmark(args: argparse.Namespace) -> None:
     tool, workspace, config, graph = open_workspace_graph(args)
-    payload = build_benchmark_payload(
-        graph,
-        tool=tool,
-        workspace=workspace,
-        config=config,
-        sample_size=args.sample_size,
-        include_sync=args.include_sync,
-        skip_write_probe=args.skip_write_probe,
-    )
+    try:
+        payload = build_benchmark_payload(
+            graph,
+            tool=tool,
+            workspace=workspace,
+            config=config,
+            sample_size=args.sample_size,
+            include_sync=args.include_sync,
+            skip_write_probe=args.skip_write_probe,
+        )
+    except Exception as exc:
+        if not is_stale_falkordb_lite_error(exc):
+            raise
+        reset_stale_falkordb_lite_runtime(args)
+        tool, workspace, config, graph = open_workspace_graph(args)
+        payload = build_benchmark_payload(
+            graph,
+            tool=tool,
+            workspace=workspace,
+            config=config,
+            sample_size=args.sample_size,
+            include_sync=args.include_sync,
+            skip_write_probe=args.skip_write_probe,
+        )
     print(json.dumps(payload, indent=2))
 
 
@@ -16122,7 +16291,13 @@ def build_health_payload(args: argparse.Namespace) -> dict[str, Any]:
 
 def cmd_health(args: argparse.Namespace) -> None:
     try:
-        payload = build_health_payload(args)
+        try:
+            payload = build_health_payload(args)
+        except Exception as exc:
+            if not is_stale_falkordb_lite_error(exc):
+                raise
+            reset_stale_falkordb_lite_runtime(args)
+            payload = build_health_payload(args)
     except Exception as exc:
         print(json.dumps({
             "ok": False,
