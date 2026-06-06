@@ -9,6 +9,22 @@ cd "$ROOT_DIR"
 
 autopsy_check_python_version "$PYTHON_BIN"
 
+require_grep() {
+  needle="${1:?missing grep needle}"
+  file="${2:?missing grep file}"
+  if grep -F "$needle" "$file" >/dev/null; then
+    return 0
+  fi
+  echo "install-matrix-check: expected to find '$needle' in $file" >&2
+  if [ -f "$file" ]; then
+    echo "install-matrix-check: $file contents:" >&2
+    sed -n '1,220p' "$file" >&2
+  else
+    echo "install-matrix-check: $file does not exist" >&2
+  fi
+  return 1
+}
+
 TMP_DIR="${TMPDIR:-/tmp}/autopsy-install-matrix-$$"
 trap 'rm -rf "$TMP_DIR"' EXIT INT TERM HUP
 mkdir -p "$TMP_DIR"
@@ -65,13 +81,13 @@ if PATH="$empty_selector_dir" PYTHON= AUTOPSY_PYTHON_CANDIDATES="python3.12 pyth
   echo "expected missing Python selection to fail" >&2
   exit 1
 fi
-grep -F "Autopsy requires Python 3.12 or newer" "$missing_python_err" >/dev/null
+require_grep "Autopsy requires Python 3.12 or newer" "$missing_python_err"
 
 if PATH="$empty_selector_dir" PYTHON=missing-python /bin/sh -c '. "$1"; autopsy_select_python >/dev/null' sh "$python_helper" 2>"$missing_explicit_python_err"; then
   echo "expected missing explicit PYTHON to fail" >&2
   exit 1
 fi
-grep -F "Autopsy could not find PYTHON=missing-python" "$missing_explicit_python_err" >/dev/null
+require_grep "Autopsy could not find PYTHON=missing-python" "$missing_explicit_python_err"
 
 legacy_dir="$TMP_DIR/shadow/legacy"
 valid_dir="$TMP_DIR/shadow/homebrew"
@@ -212,8 +228,8 @@ assert path_repair.get("repair_available") is True, path_repair
 assert path_repair.get("would_run"), path_repair
 PY
 
-grep -F 'with_env(PATH: "#{bin}:#{ENV.fetch("PATH", "")}")' Formula/autopsy-memory.rb >/dev/null
-grep -F 'with_env(PATH: "#{{bin}}:#{{ENV.fetch("PATH", "")}}")' scripts/update-homebrew-formula.py >/dev/null
+require_grep 'with_env(PATH: "#{bin}:#{ENV.fetch("PATH", "")}")' Formula/autopsy-memory.rb
+require_grep 'with_env(PATH: "#{{bin}}:#{{ENV.fetch("PATH", "")}}")' scripts/update-homebrew-formula.py
 
 homebrew_current_root="$TMP_DIR/homebrew-current"
 homebrew_current_fake_bin="$homebrew_current_root/bin"
@@ -303,14 +319,14 @@ PYTHON="$PYTHON_BIN" \
   AUTOPSY_HOMEBREW_CURRENT_ALLOW_LOCAL=1 \
   AUTOPSY_HOMEBREW_CURRENT_REPLACE_LOCAL=1 \
   ./scripts/homebrew-current-check.sh > "$homebrew_current_root/check.out"
-grep -F "homebrew-current-check: ok" "$homebrew_current_root/check.out" >/dev/null
-grep -F "homebrew-current-check: restoring previous naveenshaji/autopsy/autopsy-memory install" "$homebrew_current_root/check.out" >/dev/null
-grep -F "uninstall --force autopsy-memory" "$homebrew_current_log" >/dev/null
-grep -F "install --build-from-source" "$homebrew_current_log" >/dev/null
-grep -F "test --force" "$homebrew_current_log" >/dev/null
-grep -F "retapped naveenshaji/autopsy" "$homebrew_current_log" >/dev/null
-grep -F "install naveenshaji/autopsy/autopsy-memory" "$homebrew_current_log" >/dev/null
-grep -F "naveenshaji/autopsy/autopsy-memory" "$homebrew_current_state/restored-formula" >/dev/null
+require_grep "homebrew-current-check: ok" "$homebrew_current_root/check.out"
+require_grep "homebrew-current-check: restoring previous naveenshaji/autopsy/autopsy-memory install" "$homebrew_current_root/check.out"
+require_grep "uninstall --force autopsy-memory" "$homebrew_current_log"
+require_grep "install --build-from-source" "$homebrew_current_log"
+require_grep "test --force" "$homebrew_current_log"
+require_grep "retapped naveenshaji/autopsy" "$homebrew_current_log"
+require_grep "install naveenshaji/autopsy/autopsy-memory" "$homebrew_current_log"
+require_grep "naveenshaji/autopsy/autopsy-memory" "$homebrew_current_state/restored-formula"
 
 runtime_available=0
 runtime_skipped=0
