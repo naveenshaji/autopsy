@@ -3926,6 +3926,21 @@ class AutopsyCLIContractTests(unittest.TestCase):
         reset.assert_called_once_with(args)
         self.assertTrue(json.loads(stream.getvalue())["passed"])
 
+    def test_cmd_context_retries_once_after_stale_falkordb_socket(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["context", "--query", "release procedure"])
+        stale = RuntimeError("Error 2 connecting to /tmp/tmpabc/redis.socket. No such file or directory.")
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "build_context_command_payload", side_effect=[stale, {"ok": True, "context_block": "context ok"}]) as build_context,
+            mock.patch.object(cli, "reset_stale_falkordb_lite_runtime", return_value={"settings_backup": "/tmp/settings.bak"}) as reset,
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+        self.assertEqual(build_context.call_count, 2)
+        reset.assert_called_once_with(args)
+        self.assertTrue(json.loads(stream.getvalue())["ok"])
+
     def test_falkordblite_runtime_uses_module_path_override(self):
         fake_package = types.ModuleType("redislite")
         fake_client = types.ModuleType("redislite.client")

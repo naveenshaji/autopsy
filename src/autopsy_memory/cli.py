@@ -13900,7 +13900,7 @@ def cmd_consult(args: argparse.Namespace) -> None:
     print(json.dumps(payload, indent=2))
 
 
-def cmd_context(args: argparse.Namespace) -> None:
+def build_context_command_payload(args: argparse.Namespace) -> dict[str, Any]:
     query = str(getattr(args, "query", None) or getattr(args, "query_text", None) or "").strip()
     tool, workspace, config, graph = open_workspace_graph(args)
     status_payload = build_status_payload(
@@ -13994,6 +13994,17 @@ def cmd_context(args: argparse.Namespace) -> None:
     )
     if query:
         refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
+    return payload
+
+
+def cmd_context(args: argparse.Namespace) -> None:
+    try:
+        payload = build_context_command_payload(args)
+    except Exception as exc:
+        if not is_stale_falkordb_lite_error(exc):
+            raise
+        reset_stale_falkordb_lite_runtime(args)
+        payload = build_context_command_payload(args)
     if str(getattr(args, "format", "json") or "json") == "text":
         print(str(payload.get("context_block") or render_context_block(payload)), end="")
         return

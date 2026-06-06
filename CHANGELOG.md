@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.1.26 - 2026-06-06
+
+Hardens Codex hook-mode context graph session resolution.
+
+- Makes Codex hook mode resolve graph URLs through fresh trusted hook session state with `autopsy context-graph-url --codex-current`.
+- Rejects manual `--thread-id` graph URL requests in hook mode and ignores environment thread-id fallbacks, preventing agents from inventing graph thread ids.
+- Adds a trusted `PreToolUse` hook state update path that records the current Codex session id without writing graph events.
+- Retries context, health, and benchmark commands once after stale embedded FalkorDB socket/runtime state.
+- Updates Codex instructions to keep graph URLs in the Codex in-app Browser and never fall back to fabricated ids.
+
 ## 0.1.25 - 2026-06-06
 
 Fixes the Codex context graph launch instructions from v0.1.24.
