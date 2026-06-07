@@ -309,6 +309,33 @@ def worker_process_records(*, info_path: Path | None = None) -> list[dict[str, A
     return records
 
 
+def redislite_process_records() -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for row in process_table_rows():
+        command = str(row.get("command") or "")
+        if "redislite/bin/redis-server" not in command:
+            continue
+        if "autopsy" not in command.lower():
+            continue
+        records.append({"pid": int(row["pid"]), "command": command})
+    return records
+
+
+def redislite_lifecycle_payload(*, expected_max: int = 2) -> dict[str, Any]:
+    records = redislite_process_records()
+    expected = max(0, int(expected_max))
+    excess_count = max(0, len(records) - expected)
+    return {
+        "name": "redislite_processes",
+        "required": False,
+        "ok": excess_count == 0,
+        "count": len(records),
+        "expected_max": expected,
+        "excess_count": excess_count,
+        "records": records[:20],
+    }
+
+
 def reap_stale_worker_processes(*, keep_pid: int | None = None, info_path: Path | None = None) -> dict[str, Any]:
     records = worker_process_records(info_path=info_path)
     terminated: list[int] = []

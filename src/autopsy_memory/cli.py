@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import atexit
 import copy
 import hashlib
 import json
@@ -453,6 +454,7 @@ RELATION_TERM_STOP_TOKENS = ENTITY_STOP_TOKENS | {
 _GRAPH_VECTOR_AVAILABILITY: dict[str, bool] = {}
 _GRAPH_SEMANTIC_ITEM_COUNT: dict[str, int] = {}
 _FALKORDB_LITE_CLIENTS: dict[str, Any] = {}
+_FALKORDB_LITE_SHUTDOWN_REGISTERED = False
 _EMBEDDING_MODEL_CACHE: dict[tuple[str, str], Any] = {}
 _RERANKER_MODEL_CACHE: dict[tuple[str, str], Any] = {}
 EMBEDDINGS_CONFIG_DEFAULT = {
@@ -1652,6 +1654,7 @@ def ensure_graph(host: str, port: int, graph_name: str, lite_path: str | None = 
     if lite_path:
         FalkorDBLite = load_falkordblite()
         configure_falkordblite_runtime()
+        register_falkordb_lite_shutdown()
         resolved_path = str(Path(lite_path).expanduser())
         Path(resolved_path).parent.mkdir(parents=True, exist_ok=True)
         log_path = falkordb_lite_log_path(resolved_path)
@@ -1674,6 +1677,19 @@ def ensure_graph(host: str, port: int, graph_name: str, lite_path: str | None = 
     FalkorDB = load_falkordb()
     client = FalkorDB(host=host, port=port)
     return client.select_graph(graph_name)
+
+
+def register_falkordb_lite_shutdown() -> None:
+    global _FALKORDB_LITE_SHUTDOWN_REGISTERED
+    if _FALKORDB_LITE_SHUTDOWN_REGISTERED:
+        return
+    atexit.register(shutdown_falkordb_lite_clients)
+    _FALKORDB_LITE_SHUTDOWN_REGISTERED = True
+
+
+def shutdown_falkordb_lite_clients() -> None:
+    for resolved_path in list(_FALKORDB_LITE_CLIENTS):
+        reset_falkordb_lite_client(resolved_path)
 
 
 def is_stale_falkordb_lite_error(error: Exception | str) -> bool:
@@ -16980,6 +16996,7 @@ def build_doctor_payload(args: argparse.Namespace) -> dict[str, Any]:
         import_check("sentence_transformers", required=True),
         model_warmup_check(),
         worker_lifecycle_check(cleanup=bool(getattr(args, "cleanup_workers", False))),
+        redislite_lifecycle_check(),
     ]
     required_ok = all(check["ok"] for check in checks if check["required"])
     return {
@@ -17011,6 +17028,19 @@ def worker_lifecycle_check(*, cleanup: bool = False) -> dict[str, Any]:
     except Exception as exc:
         return {
             "name": "resident_worker",
+            "required": False,
+            "ok": False,
+            "error": str(exc),
+        }
+
+
+def redislite_lifecycle_check() -> dict[str, Any]:
+    try:
+        from autopsy_memory import mcp_bridge
+        return mcp_bridge.redislite_lifecycle_payload()
+    except Exception as exc:
+        return {
+            "name": "redislite_processes",
             "required": False,
             "ok": False,
             "error": str(exc),
