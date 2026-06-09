@@ -390,7 +390,7 @@ function descriptorForNode(node: GraphNode): Descriptor {
     case "image_generation":
       return { icon: Sparkles, category: "Image Generation", prominence: "secondary", tone: "pink" };
     case "review_context":
-      return { icon: CheckCircle2, category: "Review", prominence: "secondary", tone: "orange" };
+      return { icon: CheckCircle2, category: "Review", prominence: "secondary", metricText: leadingCount(node.label), tone: "orange" };
     case "turn_group_context":
       return { icon: Clock3, category: "Turn", prominence: "secondary", tone: "gray" };
     case "history_context":
@@ -548,6 +548,41 @@ function isGraphMemoryNode(node?: GraphNode): boolean {
 
 function isMemoryCommandNode(node?: GraphNode): boolean {
   return Boolean(node && nodeVisualKind(node).startsWith("memory_"));
+}
+
+function isDefaultCollapsedNode(node?: GraphNode): boolean {
+  if (!node) return false;
+  return ["file_reads", "file_searches", "review_context", "command_batch", "file_changes"].includes(nodeVisualKind(node));
+}
+
+function isActivityNode(node?: GraphNode): boolean {
+  if (!node) return false;
+  const kind = nodeVisualKind(node);
+  return isDefaultCollapsedNode(node)
+    || kind === "command_context"
+    || kind === "reasoning_context"
+    || kind.startsWith("memory_")
+    || kind.startsWith("file_")
+    || kind.startsWith("git_");
+}
+
+function emphasisDurationMs(node: GraphNode, reason: "change" | "ambient"): number {
+  const seed = `${normalizeId(node.id)}:${emphasisSignature(node)}:${reason}`;
+  if (nodeVisualKind(node) === "reasoning_context") {
+    return Math.round(760 + stableUnit(seed, 419) * 920);
+  }
+  if (isDefaultCollapsedNode(node)) {
+    return Math.round(1200 + stableUnit(seed, 421) * 1150);
+  }
+  if (nodeVisualKind(node).startsWith("memory_")) {
+    return Math.round(1100 + stableUnit(seed, 431) * 1050);
+  }
+  return Math.round(900 + stableUnit(seed, 439) * 850);
+}
+
+function emphasisSettleMs(node: GraphNode): number {
+  const seed = `${normalizeId(node.id)}:${emphasisSignature(node)}:settle`;
+  return Math.round(260 + stableUnit(seed, 443) * 260);
 }
 
 function usesDenseCommandLayout(snapshot: GraphSnapshot): boolean {
@@ -1061,10 +1096,14 @@ function incrementalLayout(snapshot: GraphSnapshot, cache: LayoutCache, center: 
     idealPositions[id] = seeded;
   }
 
-  addArrivalRepulsion(addedIds, currentIds, positions, idealPositions, movableIds, adjacency, nodesById, focusId, canvasSize, compact);
+  const arrivalLikeIds = new Set([
+    ...addedIds,
+    ...[...changedIds].filter((id) => !addedIds.has(id) && isDefaultCollapsedNode(nodesById[id])),
+  ]);
+  addArrivalRepulsion(arrivalLikeIds, currentIds, positions, idealPositions, movableIds, adjacency, nodesById, focusId, canvasSize, compact);
 
   const fixedIds = new Set([...currentIds].filter((id) => !movableIds.has(id) && id !== focusId));
-  const iterations = addedIds.size
+  const iterations = arrivalLikeIds.size
     ? (denseCommandLayout ? (compact ? 38 : 48) : (compact ? 24 : 32))
     : (denseCommandLayout ? (compact ? 24 : 32) : (compact ? 12 : 16));
   return relaxPositions(
@@ -1965,6 +2004,7 @@ function GraphApp({ threadId, token }: { threadId: string; token: string }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [loadedStorageKey, setLoadedStorageKey] = useState("");
+  const [snapshotLoadTick, setSnapshotLoadTick] = useState(0);
   const [emphasizedIds, setEmphasizedIds] = useState<Set<string>>(new Set());
   const [settlingEmphasisIds, setSettlingEmphasisIds] = useState<Set<string>>(new Set());
   const [appearingIds, setAppearingIds] = useState<Set<string>>(new Set());
@@ -1976,6 +2016,9 @@ function GraphApp({ threadId, token }: { threadId: string; token: string }) {
   const layoutCacheRef = useRef<LayoutCache | null>(null);
   const priorSignatureRef = useRef<Record<string, string>>({});
   const knownNodeIdsRef = useRef<Set<string>>(new Set());
+  const emphasisTokensRef = useRef<Record<string, number>>({});
+  const emphasisTokenCounterRef = useRef(0);
+  const emphasisTimeoutsRef = useRef<Set<number>>(new Set());
   const appearStartTimeoutRef = useRef<number | null>(null);
   const appearSettleTimeoutRef = useRef<number | null>(null);
   const appearSnapTimeoutRef = useRef<number | null>(null);
@@ -2041,7 +2084,58 @@ function GraphApp({ threadId, token }: { threadId: string; token: string }) {
       window.clearTimeout(appearSnapTimeoutRef.current);
       appearSnapTimeoutRef.current = null;
     }
+    for (const timeout of emphasisTimeoutsRef.current) {
+      window.clearTimeout(timeout);
+    }
+    emphasisTimeoutsRef.current.clear();
+    emphasisTokensRef.current = {};
   }, []);
+
+  const scheduleNodeEmphasis = useCallback((ids: string[], snapshotForNodes: GraphSnapshot, reason: "change" | "ambient" = "change") => {
+    if (reducedMotion) return;
+    const nodesByCurrentId = Object.fromEntries(snapshotForNodes.nodes.map((node) => [normalizeId(node.id), node]));
+    const targetIds = ids.filter((id) => isActivityNode(nodesByCurrentId[id]));
+    if (!targetIds.length) return;
+
+    setEmphasizedIds((current) => new Set([...current, ...targetIds]));
+    setSettlingEmphasisIds((current) => {
+      const next = new Set(current);
+      for (const id of targetIds) next.delete(id);
+      return next;
+    });
+
+    for (const id of targetIds) {
+      const node = nodesByCurrentId[id];
+      if (!node) continue;
+      const token = emphasisTokenCounterRef.current + 1;
+      emphasisTokenCounterRef.current = token;
+      emphasisTokensRef.current[id] = token;
+      const activeDuration = emphasisDurationMs(node, reason);
+      const settleDuration = emphasisSettleMs(node);
+      const releaseTimeout = window.setTimeout(() => {
+        emphasisTimeoutsRef.current.delete(releaseTimeout);
+        if (emphasisTokensRef.current[id] !== token) return;
+        setEmphasizedIds((current) => {
+          const next = new Set(current);
+          next.delete(id);
+          return next;
+        });
+        setSettlingEmphasisIds((current) => new Set([...current, id]));
+
+        const settleTimeout = window.setTimeout(() => {
+          emphasisTimeoutsRef.current.delete(settleTimeout);
+          if (emphasisTokensRef.current[id] !== token) return;
+          setSettlingEmphasisIds((current) => {
+            const next = new Set(current);
+            next.delete(id);
+            return next;
+          });
+        }, settleDuration);
+        emphasisTimeoutsRef.current.add(settleTimeout);
+      }, activeDuration);
+      emphasisTimeoutsRef.current.add(releaseTimeout);
+    }
+  }, [reducedMotion]);
 
   const loadSnapshot = useCallback(async () => {
     const response = await fetch(
@@ -2112,6 +2206,7 @@ function GraphApp({ threadId, token }: { threadId: string; token: string }) {
       setAppearedSnapIds(new Set());
     }
     setSnapshot(payload);
+    setSnapshotLoadTick((current) => current + 1);
     setError("");
     setLoading(false);
   }, [reducedMotion, threadId, token]);
@@ -2155,32 +2250,29 @@ function GraphApp({ threadId, token }: { threadId: string; token: string }) {
       setSettlingEmphasisIds(new Set());
       return;
     }
-    setEmphasizedIds((current) => new Set([...current, ...changed]));
-    setSettlingEmphasisIds((current) => {
-      const next = new Set(current);
-      for (const id of changed) next.delete(id);
-      return next;
-    });
-    const releaseTimeout = window.setTimeout(() => {
-      setEmphasizedIds((current) => {
-        const next = new Set(current);
-        for (const id of changed) next.delete(id);
-        return next;
-      });
-      setSettlingEmphasisIds((current) => new Set([...current, ...changed]));
-    }, 650);
-    const settleTimeout = window.setTimeout(() => {
-      setSettlingEmphasisIds((current) => {
-        const next = new Set(current);
-        for (const id of changed) next.delete(id);
-        return next;
-      });
-    }, 930);
+    scheduleNodeEmphasis(changed, snapshot, "change");
+  }, [reducedMotion, scheduleNodeEmphasis, signature, snapshot]);
+
+  useEffect(() => {
+    if (!snapshot || reducedMotion || snapshotLoadTick <= 1) return;
+    const reasoningNodes = snapshot.nodes.filter((node) => nodeVisualKind(node) === "reasoning_context");
+    if (!reasoningNodes.length) return;
+    const seed = `${snapshotLoadTick}:${snapshot.thread?.revision ?? ""}:${signature}`;
+    if (stableUnit(seed, 457) > 0.22) return;
+    const index = Math.min(reasoningNodes.length - 1, Math.floor(stableUnit(seed, 461) * reasoningNodes.length));
+    const node = reasoningNodes[index];
+    const id = normalizeId(node.id);
+    const delay = Math.round(160 + stableUnit(seed, 463) * 560);
+    const timeout = window.setTimeout(() => {
+      emphasisTimeoutsRef.current.delete(timeout);
+      scheduleNodeEmphasis([id], snapshot, "ambient");
+    }, delay);
+    emphasisTimeoutsRef.current.add(timeout);
     return () => {
-      window.clearTimeout(releaseTimeout);
-      window.clearTimeout(settleTimeout);
+      window.clearTimeout(timeout);
+      emphasisTimeoutsRef.current.delete(timeout);
     };
-  }, [reducedMotion, signature, snapshot]);
+  }, [reducedMotion, scheduleNodeEmphasis, signature, snapshot, snapshotLoadTick]);
 
   const layout = useMemo<LayoutResult | null>(() => {
     if (!snapshot) return null;

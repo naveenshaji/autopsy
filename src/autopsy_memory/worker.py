@@ -676,6 +676,61 @@ def context_graph_command_view(command: str) -> dict:
     }
 
 
+CONTEXT_GRAPH_COLLAPSED_COMMAND_GROUPS = {
+    'file_reads': {
+        'visual_kind': 'file_read_context',
+        'family': 'file',
+        'single_label': 'Read file',
+        'plural_label': 'Read files',
+        'count_noun': 'read command',
+        'summary_prefix': 'read command',
+        'source_ref': 'file_read_context',
+        'relation': 'consulted',
+    },
+    'file_searches': {
+        'visual_kind': 'file_search_context',
+        'family': 'file',
+        'single_label': 'Search files',
+        'plural_label': 'Search files',
+        'count_noun': 'search command',
+        'summary_prefix': 'search command',
+        'source_ref': 'file_search_context',
+        'relation': 'consulted',
+    },
+    'review_context': {
+        'visual_kind': 'review_context',
+        'family': 'git',
+        'single_label': 'Review git diff',
+        'plural_label': 'Review git diffs',
+        'count_noun': 'review command',
+        'summary_prefix': 'git diff review',
+        'source_ref': 'git_diff_context',
+        'relation': 'consulted',
+    },
+}
+
+
+def context_graph_collapsed_command_group(command_view: dict) -> str:
+    visual_kind = str(command_view.get('visual_kind') or '').strip()
+    if visual_kind == 'file_read_context':
+        return 'file_reads'
+    if visual_kind == 'file_search_context':
+        return 'file_searches'
+    if visual_kind == 'git_diff_context':
+        return 'review_context'
+    return ''
+
+
+def context_graph_collapsed_command_label(collapsed_group: str, command_count: int, config: dict) -> str:
+    if collapsed_group == 'file_reads':
+        return f"{command_count} {'Files' if command_count != 1 else 'File'} Read"
+    if collapsed_group == 'file_searches':
+        return f"{command_count} File Search{'es' if command_count != 1 else ''}"
+    if collapsed_group == 'review_context':
+        return 'Review git diff' if command_count == 1 else f'{command_count} Git Diff Reviews'
+    return str(config['single_label'] if command_count == 1 else config['plural_label'])
+
+
 def context_graph_command_text(event: dict) -> str:
     metadata = event.get('metadata') if isinstance(event.get('metadata'), dict) else {}
     for value in (metadata.get('command'), event.get('content'), event.get('title')):
@@ -1516,7 +1571,7 @@ def build_context_graph_snapshot_from_state(state: dict) -> dict:
         )
         add_edge('reasoned_with', reasoning_id, parent_node_by_event_key.get(context_graph_render_key(events[-1]), root_id))
 
-    collapsed_file_reads_by_parent: dict[int, list[tuple[dict, str, dict, list[str], str]]] = {}
+    collapsed_commands_by_parent: dict[tuple[int, str], list[tuple[dict, str, dict, list[str], str]]] = {}
 
     def add_command_event_node(event: dict, command: str, command_view: dict, state_flags: list[str], event_id: str, parent_node_id: int) -> int:
         command_node_id = add_node(
@@ -1545,47 +1600,60 @@ def build_context_graph_snapshot_from_state(state: dict) -> dict:
         command = context_graph_command_text(event)
         command_view = context_graph_command_view(command)
         parent_node_id = parent_node_by_event_key.get(context_graph_render_key(event), root_id)
-        if command_view.get('visual_kind') == 'file_read_context':
-            collapsed_file_reads_by_parent.setdefault(parent_node_id, []).append((event, command, command_view, state_flags, event_id))
+        collapsed_group = context_graph_collapsed_command_group(command_view)
+        if collapsed_group:
+            collapsed_commands_by_parent.setdefault((parent_node_id, collapsed_group), []).append((event, command, command_view, state_flags, event_id))
             continue
         command_node_id = add_command_event_node(event, command, command_view, state_flags, event_id, parent_node_id)
         if command_view.get('family') == 'memory':
             add_memory_enrichment(command_node_id, command, command_view)
 
-    for parent_node_id, collapsed_file_reads in collapsed_file_reads_by_parent.items():
+    for (parent_node_id, collapsed_group), collapsed_commands in collapsed_commands_by_parent.items():
+        config = CONTEXT_GRAPH_COLLAPSED_COMMAND_GROUPS[collapsed_group]
+        command_count = len(collapsed_commands)
+        count_noun = str(config['count_noun'])
+        summary_prefix = str(config['summary_prefix'])
+        count_chip = f'{command_count} {count_noun}{"s" if command_count != 1 else ""}'
         merged_flags: list[str] = []
-        merged_chips: list[str] = [f'{len(collapsed_file_reads)} read command{"s" if len(collapsed_file_reads) != 1 else ""}']
+        merged_chips: list[str] = [count_chip]
         commands: list[str] = []
-        for _event, command, command_view, state_flags, _event_id in collapsed_file_reads:
+        event_ids: list[str] = []
+        for _event, command, command_view, state_flags, event_id in collapsed_commands:
             commands.append(command)
+            event_ids.append(event_id)
             for flag in state_flags:
                 if flag not in merged_flags:
                     merged_flags.append(flag)
             for chip in list(command_view.get('chips') or []):
                 if chip and chip not in merged_chips:
                     merged_chips.append(chip)
-        summary_files = [chip for chip in merged_chips[1:] if chip.startswith('file: ')][:5]
-        summary = f"{len(collapsed_file_reads)} read command{'s' if len(collapsed_file_reads) != 1 else ''}"
-        if summary_files:
-            summary += '\n' + '\n'.join(summary_files)
-        file_read_node_id = add_node(
-            key=f'command:file_read_context:collapsed:{parent_node_id}',
-            kind='command_context',
-            label='Read files' if len(collapsed_file_reads) != 1 else 'Read file',
+        summary_chips = [
+            chip for chip in merged_chips[1:]
+            if chip.startswith(('file: ', 'pattern: ', 'paths: ', 'target: ', 'stat', 'short'))
+        ][:5]
+        summary = f"{command_count} {summary_prefix}{'s' if command_count != 1 else ''}"
+        if summary_chips:
+            summary += '\n' + '\n'.join(summary_chips)
+        label = context_graph_collapsed_command_label(collapsed_group, command_count, config)
+        collapsed_node_id = add_node(
+            key=f'command:{collapsed_group}:collapsed:{parent_node_id}',
+            kind=collapsed_group,
+            label=label,
             summary=summary,
             state_flags=merged_flags or ['consulted'],
             source_kind='context_graph_event',
-            source_ref=f'file_read_context:{parent_node_id}',
-            visual_kind='file_read_context',
+            source_ref=f"{config['source_ref']}:{parent_node_id}",
+            visual_kind=collapsed_group,
             detail_chips=merged_chips,
             provenance={
-                'family': 'file',
+                'family': config['family'],
                 'collapsed': True,
-                'command_count': len(collapsed_file_reads),
+                'command_count': command_count,
                 'commands': commands[:12],
+                'event_ids': event_ids[:12],
             },
         )
-        add_edge('consulted', file_read_node_id, parent_node_id)
+        add_edge(str(config['relation']), collapsed_node_id, parent_node_id)
 
     thread_summary = context_graph_thread_summary(state)
     thread_summary['event_count'] = len(events)

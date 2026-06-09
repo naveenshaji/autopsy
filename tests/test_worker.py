@@ -99,17 +99,19 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
             nodes_by_kind.setdefault(node["kind"], []).append(node)
         self.assertIn("turn_context", nodes_by_kind)
         self.assertIn("reasoning_context", nodes_by_kind)
-        self.assertIn("command_context", nodes_by_kind)
+        self.assertIn("file_searches", nodes_by_kind)
+        self.assertNotIn("command_context", nodes_by_kind)
         self.assertNotIn("command_batch", nodes_by_kind)
         self.assertNotIn("file_reads", nodes_by_kind)
-        self.assertNotIn("file_searches", nodes_by_kind)
         self.assertNotIn("memory_context", nodes_by_kind)
-        command_node = nodes_by_kind["command_context"][0]
-        self.assertEqual(command_node["label"], "Search files")
-        self.assertEqual(command_node["visualKind"], "file_search_context")
+        command_node = nodes_by_kind["file_searches"][0]
+        self.assertEqual(command_node["label"], "1 File Search")
+        self.assertEqual(command_node["visualKind"], "file_searches")
+        self.assertIn("1 search command", command_node["detailChips"])
         self.assertIn("pattern: context_graph_event", command_node["detailChips"])
         self.assertIn("paths: src/autopsy_memory/worker.py", command_node["detailChips"])
-        self.assertEqual(command_node["provenance"]["command"], "rg context_graph_event src/autopsy_memory/worker.py")
+        self.assertEqual(command_node["provenance"]["commands"], ["rg context_graph_event src/autopsy_memory/worker.py"])
+        self.assertEqual(command_node["provenance"]["command_count"], 1)
         self.assertEqual(command_node["sourceKind"], "context_graph_event")
         self.assertNotIn("Bash", json.dumps(command_node))
         self.assertEqual(nodes_by_kind["turn_context"][0]["stateFlags"], ["current", "in_progress"])
@@ -211,15 +213,27 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
         })
 
         command_nodes = [node for node in snapshot["nodes"] if node["kind"] == "command_context"]
-        self.assertEqual(len(command_nodes), len(commands) - 1)
+        self.assertEqual(len(command_nodes), len(commands) - 5)
         self.assertFalse(any(node.get("visualKind") == "command_context" for node in command_nodes))
         self.assertFalse(any(node.get("label") == "Run command" for node in command_nodes))
-        file_read_nodes = [node for node in command_nodes if node["visualKind"] == "file_read_context"]
+        file_read_nodes = [node for node in snapshot["nodes"] if node["kind"] == "file_reads"]
         self.assertEqual(len(file_read_nodes), 1)
-        self.assertEqual(file_read_nodes[0]["label"], "Read files")
+        self.assertEqual(file_read_nodes[0]["label"], "2 Files Read")
         self.assertTrue(file_read_nodes[0]["provenance"]["collapsed"])
         self.assertEqual(file_read_nodes[0]["provenance"]["command_count"], 2)
         self.assertIn("2 read commands", file_read_nodes[0]["detailChips"])
+        file_search_nodes = [node for node in snapshot["nodes"] if node["kind"] == "file_searches"]
+        self.assertEqual(len(file_search_nodes), 1)
+        self.assertEqual(file_search_nodes[0]["label"], "2 File Searches")
+        self.assertTrue(file_search_nodes[0]["provenance"]["collapsed"])
+        self.assertEqual(file_search_nodes[0]["provenance"]["command_count"], 2)
+        self.assertIn("2 search commands", file_search_nodes[0]["detailChips"])
+        review_nodes = [node for node in snapshot["nodes"] if node["kind"] == "review_context"]
+        self.assertEqual(len(review_nodes), 1)
+        self.assertEqual(review_nodes[0]["label"], "Review git diff")
+        self.assertTrue(review_nodes[0]["provenance"]["collapsed"])
+        self.assertEqual(review_nodes[0]["provenance"]["command_count"], 1)
+        self.assertIn("1 review command", review_nodes[0]["detailChips"])
 
     def test_context_graph_event_store_skips_turn_completion_events(self):
         worker = load_worker_module()
@@ -251,7 +265,7 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
             nodes_by_kind.setdefault(node["kind"], []).append(node)
         self.assertIn("turn_context", nodes_by_kind)
         self.assertIn("reasoning_context", nodes_by_kind)
-        self.assertIn("command_context", nodes_by_kind)
+        self.assertIn("file_searches", nodes_by_kind)
         self.assertNotIn("command_batch", nodes_by_kind)
         self.assertEqual(nodes_by_kind["turn_context"][0]["stateFlags"], ["current", "in_progress"])
 
@@ -612,14 +626,16 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
         self.assertTrue(current_turn_node["isFocus"])
         self.assertEqual(snapshot["focusNodeID"], current_turn_node["id"])
         command_nodes = [node for node in snapshot["nodes"] if node["kind"] == "command_context"]
-        self.assertEqual([node["label"] for node in command_nodes], ["Search files", "Check memory status", "Consult memory"])
+        self.assertEqual([node["label"] for node in command_nodes], ["Check memory status", "Consult memory"])
+        file_search_nodes = [node for node in snapshot["nodes"] if node["kind"] == "file_searches"]
+        self.assertEqual([node["label"] for node in file_search_nodes], ["1 File Search"])
         node_id_by_label = {node["label"]: node["id"] for node in snapshot["nodes"]}
         consulted_edges = {
             connection["fromNodeID"]: connection["toNodeID"]
             for connection in snapshot["connections"]
             if connection["relation"] == "consulted"
         }
-        self.assertEqual(consulted_edges[node_id_by_label["Search files"]], node_id_by_label["Turn 1"])
+        self.assertEqual(consulted_edges[node_id_by_label["1 File Search"]], node_id_by_label["Turn 1"])
         self.assertEqual(consulted_edges[node_id_by_label["Check memory status"]], node_id_by_label["Current Turn"])
         self.assertEqual(consulted_edges[node_id_by_label["Consult memory"]], node_id_by_label["Current Turn"])
         turn_edges = [
@@ -701,7 +717,11 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
         self.assertEqual(snapshot["events"][0]["id"], "command-6")
         self.assertEqual(snapshot["events"][-1]["id"], f"command-{len(events) - 1}")
         command_nodes = [node for node in snapshot["nodes"] if node["kind"] == "command_context"]
-        self.assertEqual(len(command_nodes), worker.CONTEXT_GRAPH_MAX_RENDERED_COMMAND_EVENTS)
+        self.assertEqual(len(command_nodes), 0)
+        file_search_nodes = [node for node in snapshot["nodes"] if node["kind"] == "file_searches"]
+        self.assertEqual(len(file_search_nodes), 1)
+        self.assertEqual(file_search_nodes[0]["provenance"]["command_count"], worker.CONTEXT_GRAPH_MAX_RENDERED_COMMAND_EVENTS)
+        self.assertIn(f"{worker.CONTEXT_GRAPH_MAX_RENDERED_COMMAND_EVENTS} search commands", file_search_nodes[0]["detailChips"])
         self.assertNotIn("token-0", json.dumps(snapshot["nodes"]))
 
     def test_context_graph_snapshot_ignores_stale_generic_and_non_allowlisted_events(self):
@@ -750,18 +770,19 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
         self.assertEqual(snapshot["events"][0]["id"], "evt-3")
         labels = {node["label"] for node in snapshot["nodes"]}
         kinds = {node["kind"] for node in snapshot["nodes"]}
-        self.assertIn("Search files", labels)
+        self.assertIn("1 File Search", labels)
         self.assertIn("turn_context", kinds)
         self.assertIn("reasoning_context", kinds)
-        self.assertIn("command_context", kinds)
+        self.assertIn("file_searches", kinds)
+        self.assertNotIn("command_context", kinds)
         self.assertNotIn("command_batch", kinds)
         self.assertNotIn("file_reads", kinds)
         self.assertNotIn("memory_context", kinds)
-        self.assertEqual(sum(1 for node in snapshot["nodes"] if node["kind"] == "command_context"), 1)
-        command_node = next(node for node in snapshot["nodes"] if node["kind"] == "command_context")
-        self.assertEqual(command_node["label"], "Search files")
-        self.assertEqual(command_node["visualKind"], "file_search_context")
-        self.assertEqual(command_node["provenance"]["command"], "rg context_graph tests/test_worker.py")
+        self.assertEqual(sum(1 for node in snapshot["nodes"] if node["kind"] == "file_searches"), 1)
+        command_node = next(node for node in snapshot["nodes"] if node["kind"] == "file_searches")
+        self.assertEqual(command_node["label"], "1 File Search")
+        self.assertEqual(command_node["visualKind"], "file_searches")
+        self.assertEqual(command_node["provenance"]["commands"], ["rg context_graph tests/test_worker.py"])
         self.assertNotIn("Bash", json.dumps(command_node))
         self.assertFalse(any("ls -la" in label for label in labels))
         self.assertFalse(any("secret prompt text" in label for label in labels))
