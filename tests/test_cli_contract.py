@@ -220,6 +220,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
         agent_args = parser.parse_args(["menubar", "--install-launch-agent", "--rebuild"])
         self.assertTrue(agent_args.install_launch_agent)
         self.assertTrue(agent_args.rebuild)
+        keepalive_args = parser.parse_args(["menubar", "--keep-worker-alive"])
+        self.assertTrue(keepalive_args.keep_worker_alive)
         warmup_args = parser.parse_args(["model-warmup", "--root", "/tmp/autopsy-memory"])
         self.assertEqual(warmup_args.command, "model-warmup")
         self.assertEqual(warmup_args.root, "/tmp/autopsy-memory")
@@ -891,6 +893,22 @@ class AutopsyCLIContractTests(unittest.TestCase):
         ):
             cli.cmd_menubar(args)
         self.assertEqual(json.loads(stream.getvalue()), {"installed": False, "loaded": False})
+
+    def test_menubar_keep_worker_alive_does_not_require_app_source(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["menubar", "--keep-worker-alive"])
+        stream = io.StringIO()
+        keepalive_payload = {"ok": True, "worker": {"pid": 42}}
+        with (
+            mock.patch.object(cli.sys, "platform", "darwin"),
+            mock.patch.object(cli, "resolve_menubar_dir", side_effect=AssertionError("should not resolve app dir")),
+            mock.patch.object(cli, "worker_keepalive_payload", return_value=keepalive_payload) as keepalive_mock,
+            contextlib.redirect_stdout(stream),
+        ):
+            cli.cmd_menubar(args)
+
+        keepalive_mock.assert_called_once_with()
+        self.assertEqual(json.loads(stream.getvalue()), keepalive_payload)
 
     def test_menubar_command_installs_launch_agent_by_default(self):
         parser = cli.build_parser()

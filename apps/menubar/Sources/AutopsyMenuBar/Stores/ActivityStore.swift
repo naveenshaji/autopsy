@@ -43,7 +43,9 @@ final class ActivityStore: ObservableObject {
     }
 
     private let activitySnapshotURL = ActivityStore.defaultActivitySnapshotURL
+    private let workerKeepaliveIntervalSeconds: UInt64 = 60
     private var activityWatcher: ActivitySnapshotWatcher?
+    private var workerKeepaliveTask: Task<Void, Never>?
     private var hasBootstrappedActivitySnapshot = false
 
     init() {
@@ -58,6 +60,7 @@ final class ActivityStore: ObservableObject {
 
     deinit {
         activityWatcher?.stop()
+        workerKeepaliveTask?.cancel()
     }
 
     var workspaceTitle: String {
@@ -418,6 +421,7 @@ final class ActivityStore: ObservableObject {
         guard activityWatcher == nil else { return }
         loadActivitySnapshotFromDisk()
         startActivitySnapshotWatcher()
+        startWorkerKeepalive()
         refresh()
         bootstrapActivitySnapshotIfNeeded()
     }
@@ -522,6 +526,27 @@ final class ActivityStore: ObservableObject {
             self?.loadActivitySnapshotFromDisk()
         }
         activityWatcher?.start()
+    }
+
+    private func startWorkerKeepalive() {
+        guard workerKeepaliveTask == nil else { return }
+        workerKeepaliveTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.keepWorkerAlive()
+                try? await Task.sleep(nanoseconds: (self?.workerKeepaliveIntervalSeconds ?? 60) * 1_000_000_000)
+            }
+        }
+    }
+
+    private func keepWorkerAlive() async {
+        do {
+            _ = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 25).run([
+                "menubar",
+                "--keep-worker-alive",
+            ])
+        } catch {
+            // Silent by design: the next visible graph or memory request will surface persistent worker issues.
+        }
     }
 
     private func loadActivitySnapshotFromDisk() {

@@ -17124,6 +17124,25 @@ def worker_lifecycle_check(*, cleanup: bool = False) -> dict[str, Any]:
         }
 
 
+def worker_keepalive_payload() -> dict[str, Any]:
+    from autopsy_memory import mcp_bridge
+
+    before = mcp_bridge.worker_lifecycle_payload(cleanup=False)
+    worker_info = mcp_bridge.ensure_worker()
+    after = mcp_bridge.worker_lifecycle_payload(cleanup=True)
+    return {
+        "ok": bool(worker_info),
+        "worker": {
+            "pid": worker_info.get("pid"),
+            "base_url": worker_info.get("base_url"),
+            "info_file": str(mcp_bridge.info_file()),
+            "log_file": str(mcp_bridge.worker_log_file()),
+        },
+        "before": before,
+        "after": after,
+    }
+
+
 def redislite_lifecycle_check() -> dict[str, Any]:
     try:
         from autopsy_memory import mcp_bridge
@@ -17196,6 +17215,14 @@ def cmd_model_warmup(args: argparse.Namespace) -> None:
 def cmd_menubar(args: argparse.Namespace) -> None:
     if sys.platform != "darwin":
         raise SystemExit("The native Autopsy menu bar app is only supported on macOS.")
+
+    if args.keep_worker_alive:
+        try:
+            print(json.dumps(worker_keepalive_payload(), indent=2))
+        except Exception as exc:
+            print(json.dumps({"ok": False, "error": str(exc)}, indent=2))
+            raise SystemExit(1)
+        return
 
     if args.launch_agent_status:
         print(json.dumps(menubar_launch_agent_status_payload(), indent=2))

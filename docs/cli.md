@@ -28,7 +28,7 @@ autopsy install --skip-menubar
 autopsy install --smoke-test
 ```
 
-`install` is the normal first-run command. It installs managed global instruction blocks for supported agents and, on macOS, stages the menu bar app and installs the LaunchAgent that keeps it visible. Repo-local instructions are opt-in with `--repo`.
+`install` is the normal first-run command. It installs managed global instruction blocks for supported agents and, on macOS, stages the menu bar app and installs the LaunchAgent that keeps it visible. The running menu bar app also keeps the resident Autopsy worker warm so context graph pages do not depend on agents rerunning `context-graph-url` to revive the local server. Repo-local instructions are opt-in with `--repo`.
 
 Use `autopsy install --smoke-test` on a new machine or after a repair. It runs
 doctor, a current-state read, an abstention consult, and a temporary
@@ -66,7 +66,7 @@ autopsy menubar
 
 `activity` is the lightweight JSON feed for UI clients. It returns recent memory writes, recent consult telemetry, attention items, and current status without exposing the graph-browser surface.
 
-`menubar` stages the native macOS menu bar app as a small `.app` bundle and, in a normal GUI session, installs and kickstarts the supervised LaunchAgent. Current bundles launch without rebuilding; use `autopsy menubar --build` to build and stage without launching, `autopsy menubar --rebuild` to force a rebuild before launch, `autopsy menubar --install-launch-agent` to explicitly install the supervised login item, and `autopsy menubar --print-path` to inspect resolved app paths. Installed LaunchAgents run the app executable directly with `KeepAlive`.
+`menubar` stages the native macOS menu bar app as a small `.app` bundle and, in a normal GUI session, installs and kickstarts the supervised LaunchAgent. Current bundles launch without rebuilding; use `autopsy menubar --build` to build and stage without launching, `autopsy menubar --rebuild` to force a rebuild before launch, `autopsy menubar --install-launch-agent` to explicitly install the supervised login item, and `autopsy menubar --print-path` to inspect resolved app paths. Installed LaunchAgents run the app executable directly with `KeepAlive`, and the app silently checks the resident worker so local graph routes stay warm.
 
 ## Retrieval
 
