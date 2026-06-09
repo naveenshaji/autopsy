@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 import argparse
 import fcntl
+import importlib.metadata
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -19,6 +21,7 @@ SERVER_NAME = "autopsy_falkor_memory"
 SERVER_VERSION = "0.1.0"
 DEFAULT_GRAPH_NAME = "autopsy_memory"
 RELATION_FIELDS = ("informed_by", "answers", "supersedes", "reverts", "depends_on", "implements", "constrains", "refines")
+AUTOPSY_CELLAR_VERSION_RE = re.compile(r"/Cellar/autopsy-memory/([^/\s]+)/")
 
 
 class BridgeError(RuntimeError):
@@ -67,7 +70,7 @@ def worker_log_file() -> Path:
 
 
 def default_worker_environment() -> dict[str, str]:
-    env = dict(os.environ)
+    env = hardened_python_environment(os.environ)
     env["AUTOPSY_UNIFIED_MEMORY"] = env.get("AUTOPSY_UNIFIED_MEMORY") or "1"
     env["AUTOPSY_UNIFIED_MEMORY_ROOT"] = env.get("AUTOPSY_UNIFIED_MEMORY_ROOT") or DEFAULT_WORKSPACE_ROOT
     env["AUTOPSY_MEMORY_BACKEND"] = "falkordb"
@@ -80,6 +83,16 @@ def default_worker_environment() -> dict[str, str]:
     return env
 
 
+def hardened_python_environment(source: dict[str, str] | None = None) -> dict[str, str]:
+    env = dict(os.environ if source is None else source)
+    env.pop("PYTHONHOME", None)
+    if str(env.get("AUTOPSY_ALLOW_PYTHONPATH") or "").strip().lower() not in {"1", "true", "yes", "on"}:
+        env.pop("PYTHONPATH", None)
+    env["PYTHONNOUSERSITE"] = "1"
+    env.setdefault("PYTHONDONTWRITEBYTECODE", "1")
+    return env
+
+
 def can_import_modules(python: Path, modules: list[str]) -> bool:
     if not python.exists() or not os.access(python, os.X_OK):
         return False
@@ -88,6 +101,7 @@ def can_import_modules(python: Path, modules: list[str]) -> bool:
         [str(python), "-c", code],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        env=hardened_python_environment(),
         timeout=20,
         check=False,
     )
@@ -96,10 +110,12 @@ def can_import_modules(python: Path, modules: list[str]) -> bool:
 
 def python_candidates() -> list[Path]:
     candidates: list[Path] = []
+    explicit_python = os.environ.get("AUTOPSY_PYTHON")
+    if explicit_python:
+        candidates.append(Path(explicit_python).expanduser())
     for value in (
-        os.environ.get("AUTOPSY_PYTHON"),
-        str(app_support_dir() / "Python" / "runtime" / "bin" / "python"),
         sys.executable,
+        str(app_support_dir() / "Python" / "runtime" / "bin" / "python"),
     ):
         if value:
             candidates.append(Path(value).expanduser())
@@ -321,8 +337,93 @@ def redislite_process_records() -> list[dict[str, Any]]:
     return records
 
 
-def redislite_lifecycle_payload(*, expected_max: int = 2) -> dict[str, Any]:
-    records = redislite_process_records()
+def autopsy_distribution_version() -> str | None:
+    try:
+        return importlib.metadata.version("autopsy-memory")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+    except Exception:
+        return None
+
+
+def redislite_package_version(command: str) -> str | None:
+    match = AUTOPSY_CELLAR_VERSION_RE.search(command)
+    return match.group(1) if match else None
+
+
+def annotate_redislite_process_records(records: list[dict[str, Any]], *, current_version: str | None) -> list[dict[str, Any]]:
+    annotated: list[dict[str, Any]] = []
+    current_prefix = str(Path(sys.prefix).resolve())
+    for record in records:
+        command = str(record.get("command") or "")
+        package_version = redislite_package_version(command)
+        enriched = dict(record)
+        enriched["package_version"] = package_version
+        enriched["current_package_version"] = current_version
+        enriched["stale_package_version"] = bool(package_version and current_version and package_version != current_version)
+        enriched["matches_current_prefix"] = bool(current_prefix and current_prefix in command)
+        annotated.append(enriched)
+    return annotated
+
+
+def redislite_keep_score(record: dict[str, Any], *, current_version: str | None) -> tuple[int, int]:
+    score = 0
+    if current_version and record.get("package_version") == current_version:
+        score += 100
+    if record.get("matches_current_prefix"):
+        score += 50
+    try:
+        pid = int(record.get("pid"))
+    except Exception:
+        pid = 0
+    return score, -pid
+
+
+def reap_stale_redislite_processes(*, expected_max: int = 2, cleanup_current_excess: bool = False) -> dict[str, Any]:
+    current_version = autopsy_distribution_version()
+    before = annotate_redislite_process_records(redislite_process_records(), current_version=current_version)
+    expected = max(0, int(expected_max))
+    terminate_records = [record for record in before if record.get("stale_package_version")]
+
+    if cleanup_current_excess:
+        remaining = [record for record in before if not record.get("stale_package_version")]
+        kept = sorted(
+            remaining,
+            key=lambda record: redislite_keep_score(record, current_version=current_version),
+            reverse=True,
+        )[:expected]
+        kept_pids = {int(record["pid"]) for record in kept}
+        terminate_records.extend(record for record in remaining if int(record["pid"]) not in kept_pids)
+
+    terminated: list[int] = []
+    seen: set[int] = set()
+    for record in terminate_records:
+        pid = int(record["pid"])
+        if pid in seen:
+            continue
+        seen.add(pid)
+        terminate_pid(pid)
+        terminated.append(pid)
+
+    after = annotate_redislite_process_records(redislite_process_records(), current_version=current_version)
+    return {
+        "terminated": terminated,
+        "before_count": len(before),
+        "after_count": len(after),
+        "expected_max": expected,
+        "cleanup_current_excess": cleanup_current_excess,
+        "current_package_version": current_version,
+        "records_before": before[:20],
+        "records_after": after[:20],
+    }
+
+
+def redislite_lifecycle_payload(*, expected_max: int = 2, cleanup: bool = False) -> dict[str, Any]:
+    cleanup_payload = None
+    if cleanup:
+        cleanup_payload = reap_stale_redislite_processes(expected_max=expected_max, cleanup_current_excess=True)
+    current_version = autopsy_distribution_version()
+    records = annotate_redislite_process_records(redislite_process_records(), current_version=current_version)
     expected = max(0, int(expected_max))
     excess_count = max(0, len(records) - expected)
     return {
@@ -332,6 +433,8 @@ def redislite_lifecycle_payload(*, expected_max: int = 2) -> dict[str, Any]:
         "count": len(records),
         "expected_max": expected,
         "excess_count": excess_count,
+        "current_package_version": current_version,
+        "cleanup": cleanup_payload,
         "records": records[:20],
     }
 
@@ -401,6 +504,7 @@ def start_worker_locked() -> dict[str, Any]:
     if existing and worker_info_matches_current_sources(existing) and health_check(existing):
         try:
             reap_stale_worker_processes(keep_pid=int(existing.get("pid")), info_path=info_file())
+            reap_stale_redislite_processes(expected_max=1, cleanup_current_excess=False)
         except Exception:
             pass
         return existing
@@ -410,6 +514,7 @@ def start_worker_locked() -> dict[str, Any]:
         clear_worker_info()
         terminate_falkor_runtime_from_settings()
     reap_stale_worker_processes(info_path=info_file())
+    reap_stale_redislite_processes(expected_max=0, cleanup_current_excess=True)
 
     paths = script_paths()
     if not paths["worker"].exists():

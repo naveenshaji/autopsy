@@ -17076,6 +17076,7 @@ def install_smoke_test_payload(args: argparse.Namespace, *, path_repair_payload:
 
 
 def build_doctor_payload(args: argparse.Namespace) -> dict[str, Any]:
+    cleanup_workers = bool(getattr(args, "cleanup_workers", False))
     checks = [
         python_version_check(),
         installed_autopsy_command_check(),
@@ -17085,8 +17086,8 @@ def build_doctor_payload(args: argparse.Namespace) -> dict[str, Any]:
         falkordb_runtime_check(args),
         import_check("sentence_transformers", required=True),
         model_warmup_check(),
-        worker_lifecycle_check(cleanup=bool(getattr(args, "cleanup_workers", False))),
-        redislite_lifecycle_check(),
+        worker_lifecycle_check(cleanup=cleanup_workers),
+        redislite_lifecycle_check(cleanup=cleanup_workers),
     ]
     required_ok = all(check["ok"] for check in checks if check["required"])
     return {
@@ -17143,10 +17144,10 @@ def worker_keepalive_payload() -> dict[str, Any]:
     }
 
 
-def redislite_lifecycle_check() -> dict[str, Any]:
+def redislite_lifecycle_check(*, cleanup: bool = False) -> dict[str, Any]:
     try:
         from autopsy_memory import mcp_bridge
-        return mcp_bridge.redislite_lifecycle_payload()
+        return mcp_bridge.redislite_lifecycle_payload(cleanup=cleanup)
     except Exception as exc:
         return {
             "name": "redislite_processes",
@@ -17157,6 +17158,7 @@ def redislite_lifecycle_check() -> dict[str, Any]:
 
 
 def cmd_install(args: argparse.Namespace) -> None:
+    args.cleanup_workers = True
     path_repair_payload = install_path_repair_payload(args)
     instructions_payload = install_instruction_payload(args, path_repair_payload=path_repair_payload)
     menubar_payload = install_menubar_payload(args)
@@ -17365,7 +17367,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args(normalized_cli_args(sys.argv[1:]))
-    args.func(args)
+    try:
+        args.func(args)
+    finally:
+        shutdown_falkordb_lite_clients()
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ import mimetypes
 import os
 import re
 import shlex
+import signal
 import sys
 import threading
 import time
@@ -2298,11 +2299,7 @@ def worker_lifecycle_monitor(server, *, info_file: str, token: str, source_finge
         should_exit, reason = worker_should_exit(server, info_file=info_file, token=token, source_fingerprint=source_fingerprint)
         if not should_exit:
             continue
-        server.shutdown_reason = reason
-        server.shutdown_requested = True
-        print(f'autopsy worker exiting: {reason}', file=sys.stderr, flush=True)
-        threading.Thread(target=force_exit_if_still_running, args=(server,), daemon=True).start()
-        threading.Thread(target=server.shutdown, daemon=True).start()
+        request_worker_shutdown(server, reason)
         return
 
 
@@ -2310,6 +2307,27 @@ def force_exit_if_still_running(server, delay_seconds: float = 5.0) -> None:
     time.sleep(delay_seconds)
     if bool(getattr(server, 'shutdown_requested', False)):
         os._exit(0)
+
+
+def request_worker_shutdown(server, reason: str) -> None:
+    if bool(getattr(server, 'shutdown_requested', False)):
+        return
+    server.shutdown_reason = reason
+    server.shutdown_requested = True
+    print(f'autopsy worker exiting: {reason}', file=sys.stderr, flush=True)
+    threading.Thread(target=force_exit_if_still_running, args=(server,), daemon=True).start()
+    threading.Thread(target=server.shutdown, daemon=True).start()
+
+
+def install_worker_signal_handlers(server) -> None:
+    def handle_signal(signum, _frame):
+        request_worker_shutdown(server, f'signal_{signum}')
+
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(signum, handle_signal)
+        except Exception:
+            pass
 
 
 def start_worker_lifecycle_monitor(server, *, info_file: str, token: str, source_fingerprint: str) -> threading.Thread:
@@ -3342,6 +3360,8 @@ def main():
         'base_url': f'http://{args.host}:{server.server_port}',
         'token': args.token,
         'pid': os.getpid(),
+        'python_executable': sys.executable,
+        'python_version': sys.version.split()[0],
         'source_fingerprint': args.source_fingerprint,
     }
     os.makedirs(os.path.dirname(args.info_file), exist_ok=True)
@@ -3353,6 +3373,7 @@ def main():
         token=args.token,
         source_fingerprint=args.source_fingerprint,
     )
+    install_worker_signal_handlers(server)
 
     try:
         server.serve_forever()
