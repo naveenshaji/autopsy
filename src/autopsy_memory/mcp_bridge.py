@@ -312,6 +312,26 @@ def process_table_rows() -> list[dict[str, Any]]:
     return rows
 
 
+def process_cwd(pid: int) -> str | None:
+    try:
+        result = subprocess.run(
+            ["lsof", "-a", "-p", str(int(pid)), "-d", "cwd", "-Fn"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    for line in result.stdout.splitlines():
+        if line.startswith("n"):
+            return line[1:]
+    return None
+
+
 def worker_process_records(*, info_path: Path | None = None) -> list[dict[str, Any]]:
     info_text = str(info_path.expanduser()) if info_path else ""
     records: list[dict[str, Any]] = []
@@ -333,7 +353,8 @@ def redislite_process_records() -> list[dict[str, Any]]:
             continue
         if "autopsy" not in command.lower():
             continue
-        records.append({"pid": int(row["pid"]), "command": command})
+        pid = int(row["pid"])
+        records.append({"pid": pid, "command": command, "cwd": process_cwd(pid)})
     return records
 
 
@@ -354,14 +375,22 @@ def redislite_package_version(command: str) -> str | None:
 def annotate_redislite_process_records(records: list[dict[str, Any]], *, current_version: str | None) -> list[dict[str, Any]]:
     annotated: list[dict[str, Any]] = []
     current_prefix = str(Path(sys.prefix).resolve())
+    current_app_support = app_support_dir().expanduser().resolve()
     for record in records:
         command = str(record.get("command") or "")
+        cwd_text = str(record.get("cwd") or "").strip()
+        try:
+            cwd = Path(cwd_text).expanduser().resolve() if cwd_text else None
+        except Exception:
+            cwd = None
         package_version = redislite_package_version(command)
         enriched = dict(record)
         enriched["package_version"] = package_version
         enriched["current_package_version"] = current_version
         enriched["stale_package_version"] = bool(package_version and current_version and package_version != current_version)
         enriched["matches_current_prefix"] = bool(current_prefix and current_prefix in command)
+        enriched["current_app_support"] = str(current_app_support)
+        enriched["in_current_app_support"] = bool(cwd and (cwd == current_app_support or current_app_support in cwd.parents))
         annotated.append(enriched)
     return annotated
 
@@ -383,10 +412,11 @@ def reap_stale_redislite_processes(*, expected_max: int = 2, cleanup_current_exc
     current_version = autopsy_distribution_version()
     before = annotate_redislite_process_records(redislite_process_records(), current_version=current_version)
     expected = max(0, int(expected_max))
-    terminate_records = [record for record in before if record.get("stale_package_version")]
+    cleanup_candidates = [record for record in before if record.get("in_current_app_support")]
+    terminate_records = [record for record in cleanup_candidates if record.get("stale_package_version")]
 
     if cleanup_current_excess:
-        remaining = [record for record in before if not record.get("stale_package_version")]
+        remaining = [record for record in cleanup_candidates if not record.get("stale_package_version")]
         kept = sorted(
             remaining,
             key=lambda record: redislite_keep_score(record, current_version=current_version),

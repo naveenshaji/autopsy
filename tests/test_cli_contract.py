@@ -1611,6 +1611,9 @@ class AutopsyCLIContractTests(unittest.TestCase):
         current = {"pid": 32, "command": "/opt/homebrew/Cellar/autopsy-memory/0.1.28/libexec/lib/python3.12/site-packages/redislite/bin/redis-server unixsocket:/tmp/autopsy-current/redis.socket"}
         terminated: list[int] = []
         with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            mock.patch.object(mcp_bridge, "app_support_dir", return_value=Path(temp_dir)),
+            mock.patch.object(mcp_bridge, "process_cwd", side_effect=lambda _pid: str(Path(temp_dir) / "FalkorDB")),
             mock.patch.object(mcp_bridge, "process_table_rows", side_effect=[[old, current], [current], [current]]),
             mock.patch.object(mcp_bridge, "autopsy_distribution_version", return_value="0.1.28"),
             mock.patch.object(mcp_bridge, "terminate_pid", side_effect=lambda pid: terminated.append(int(pid))),
@@ -1622,6 +1625,25 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["count"], 1)
         self.assertEqual(payload["cleanup"]["before_count"], 2)
         self.assertEqual(payload["cleanup"]["after_count"], 1)
+
+    def test_redislite_lifecycle_cleanup_ignores_other_app_support_roots(self):
+        other = {"pid": 41, "command": "/opt/homebrew/Cellar/autopsy-memory/0.1.27/libexec/lib/python3.12/site-packages/redislite/bin/redis-server unixsocket:/tmp/autopsy-other/redis.socket"}
+        terminated: list[int] = []
+        with (
+            tempfile.TemporaryDirectory() as current_dir,
+            tempfile.TemporaryDirectory() as other_dir,
+            mock.patch.object(mcp_bridge, "app_support_dir", return_value=Path(current_dir)),
+            mock.patch.object(mcp_bridge, "process_cwd", return_value=str(Path(other_dir) / "FalkorDB")),
+            mock.patch.object(mcp_bridge, "process_table_rows", side_effect=[[other], [other], [other]]),
+            mock.patch.object(mcp_bridge, "autopsy_distribution_version", return_value="0.1.28"),
+            mock.patch.object(mcp_bridge, "terminate_pid", side_effect=lambda pid: terminated.append(int(pid))),
+        ):
+            payload = mcp_bridge.redislite_lifecycle_payload(expected_max=0, cleanup=True)
+
+        self.assertEqual(terminated, [])
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["count"], 1)
+        self.assertFalse(payload["records"][0]["in_current_app_support"])
 
     def test_worker_lifecycle_payload_flags_mismatched_current_worker(self):
         with (
