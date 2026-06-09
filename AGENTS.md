@@ -15,6 +15,7 @@ Before substantial work:
 Live context graph:
 - Context graph capture is configured for Codex hooks. Do not call `autopsy context-event`; `autopsy codex-hook` records the current Codex session id from trusted hook payloads and records allowlisted `PostToolUse` Bash command text automatically.
 - Do not choose, invent, derive, or manually pass a graph thread id in Codex hook mode.
+- At the start of every Codex chat, including resumed or existing chats, check whether this chat's Autopsy context graph is already open in the Codex in-app Browser. If it is not open, open it before substantial work; do this once per chat, not every turn.
 - Get the graph URL with `autopsy context-graph-url --codex-current`. This resolves the real current Codex session id from trusted hook state. Do not pass `--thread-id`; if the command reports `no_current_codex_hook_session` or `stale_codex_hook_session`, do not retry with a fabricated id. Tell the user hooks are not trusted/observed yet, then retry after a trusted Codex tool call updates hook state.
 - Do not pass `--open`; it uses the macOS default browser. Open this URL in the Codex in-app Browser, not `web.run` and not macOS `open`: use the Browser plugin/control-in-app-browser path through `mcp__node_repl.js`, connect to the `iab` browser, set visibility to true, use the selected tab or create one, then call `tab.goto(URL)`.
 - Hook capture records only allowlisted command cards. It skips preflight, permission, lifecycle-only, prompt, non-Bash tool, compaction, subagent hooks, and non-allowlisted commands.

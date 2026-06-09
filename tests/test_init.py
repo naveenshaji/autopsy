@@ -158,6 +158,8 @@ Old memory instructions.
         self.assertIn("connect to the `iab` browser", block)
         self.assertIn("tab.goto(URL)", block)
         self.assertIn("Do not pass `--open`", block)
+        self.assertIn("including resumed or existing chats", block)
+        self.assertIn("do this once per chat, not every turn", block)
         self.assertNotIn('context-graph-url --thread-id "<thread-id>" --open', block)
 
     def test_codex_managed_block_suppresses_context_event_in_hook_mode(self):
@@ -170,6 +172,8 @@ Old memory instructions.
         self.assertIn("Codex hooks", block)
         self.assertIn("context-graph-url --codex-current", block)
         self.assertIn("Do not choose, invent, derive, or manually pass", block)
+        self.assertIn("including resumed or existing chats", block)
+        self.assertIn("do this once per chat, not every turn", block)
         self.assertNotIn('context-graph-url --thread-id "<thread-id>"', block)
 
     def test_global_cursor_has_no_file_target(self):

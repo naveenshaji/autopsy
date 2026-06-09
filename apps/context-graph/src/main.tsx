@@ -898,6 +898,83 @@ function shouldUseFullRelayout(snapshot: GraphSnapshot, cache: LayoutCache | nul
   return canvasDelta > (compact ? 420 : 640);
 }
 
+function addArrivalRepulsion(
+  addedIds: Set<string>,
+  currentIds: Set<string>,
+  positions: Record<string, Point>,
+  idealPositions: Record<string, Point>,
+  movableIds: Set<string>,
+  adjacency: Record<string, Set<string>>,
+  nodesById: Record<string, GraphNode>,
+  focusId: string,
+  canvasSize: Size,
+  compact: boolean,
+): void {
+  if (!addedIds.size) return;
+  const directPushes: Record<string, Point> = {};
+  const carriedPushes: Record<string, Point> = {};
+  const influenceFloor = compact ? 245 : 345;
+  const minPush = compact ? 12 : 18;
+  const maxPush = compact ? 72 : 108;
+
+  for (const id of currentIds) {
+    if (addedIds.has(id) || id === focusId) continue;
+    const current = positions[id];
+    const node = nodesById[id];
+    if (!current || !node) continue;
+
+    let pushX = 0;
+    let pushY = 0;
+    const nodeSize = layoutNodeSize(node, compact);
+    for (const addedId of addedIds) {
+      const arrival = positions[addedId];
+      const arrivalNode = nodesById[addedId];
+      if (!arrival || !arrivalNode) continue;
+
+      const dx = current.x - arrival.x;
+      const dy = current.y - arrival.y;
+      const dist = Math.max(Math.sqrt(dx * dx + dy * dy), 1);
+      const arrivalSize = layoutNodeSize(arrivalNode, compact);
+      const clearance = Math.max(
+        (nodeSize.width + arrivalSize.width) * 0.72,
+        (nodeSize.height + arrivalSize.height) * 1.04,
+      ) + (compact ? 48 : 70);
+      const influence = Math.max(influenceFloor, clearance);
+      if (dist > influence) continue;
+
+      const stableAngle = 2 * Math.PI * stableUnit(`${id}:${addedId}`, 307);
+      const directionX = dist <= 1.01 ? Math.cos(stableAngle) : dx / dist;
+      const directionY = dist <= 1.01 ? Math.sin(stableAngle) : dy / dist;
+      const falloff = Math.pow((influence - dist) / influence, 0.78);
+      const push = clamp(influence * falloff * 0.34, minPush, maxPush);
+      pushX += directionX * push;
+      pushY += directionY * push;
+    }
+
+    if (Math.abs(pushX) + Math.abs(pushY) > 0.5) {
+      directPushes[id] = { x: pushX, y: pushY };
+    }
+  }
+
+  for (const [id, push] of Object.entries(directPushes)) {
+    for (const neighborId of adjacency[id] ?? []) {
+      if (!currentIds.has(neighborId) || addedIds.has(neighborId) || neighborId === focusId || directPushes[neighborId]) continue;
+      const carried = carriedPushes[neighborId] ?? { x: 0, y: 0 };
+      carriedPushes[neighborId] = {
+        x: carried.x + push.x * 0.34,
+        y: carried.y + push.y * 0.34,
+      };
+    }
+  }
+
+  for (const [id, push] of Object.entries({ ...carriedPushes, ...directPushes })) {
+    const current = positions[id];
+    if (!current) continue;
+    movableIds.add(id);
+    idealPositions[id] = clampedPosition({ x: current.x + push.x, y: current.y + push.y }, canvasSize, compact);
+  }
+}
+
 function incrementalLayout(snapshot: GraphSnapshot, cache: LayoutCache, center: Point, canvasSize: Size, compact: boolean): Record<string, Point> {
   const adjacency = graphAdjacency(snapshot);
   const focusId = focusNodeId(snapshot);
@@ -984,52 +1061,12 @@ function incrementalLayout(snapshot: GraphSnapshot, cache: LayoutCache, center: 
     idealPositions[id] = seeded;
   }
 
-  if (addedIds.size) {
-    const influenceFloor = compact ? 190 : 270;
-    const minPush = compact ? 8 : 12;
-    const maxPush = compact ? 42 : 62;
-
-    for (const id of currentIds) {
-      if (addedIds.has(id) || id === focusId) continue;
-      const current = positions[id];
-      const node = nodesById[id];
-      if (!current || !node) continue;
-
-      let pushX = 0;
-      let pushY = 0;
-      const nodeSize = layoutNodeSize(node, compact);
-      for (const addedId of addedIds) {
-        const arrival = positions[addedId];
-        const arrivalNode = nodesById[addedId];
-        if (!arrival || !arrivalNode) continue;
-
-        const dx = current.x - arrival.x;
-        const dy = current.y - arrival.y;
-        const dist = Math.max(Math.sqrt(dx * dx + dy * dy), 1);
-        const arrivalSize = layoutNodeSize(arrivalNode, compact);
-        const clearance = Math.max(
-          (nodeSize.width + arrivalSize.width) * 0.58,
-          (nodeSize.height + arrivalSize.height) * 0.86,
-        ) + (compact ? 34 : 48);
-        const influence = Math.max(influenceFloor, clearance);
-        if (dist > influence) continue;
-
-        const stableAngle = 2 * Math.PI * stableUnit(`${id}:${addedId}`, 307);
-        const directionX = dist <= 1.01 ? Math.cos(stableAngle) : dx / dist;
-        const directionY = dist <= 1.01 ? Math.sin(stableAngle) : dy / dist;
-        const push = clamp((influence - dist) * 0.22, minPush, maxPush);
-        pushX += directionX * push;
-        pushY += directionY * push;
-      }
-
-      if (Math.abs(pushX) + Math.abs(pushY) > 0.5) {
-        movableIds.add(id);
-        idealPositions[id] = clampedPosition({ x: current.x + pushX, y: current.y + pushY }, canvasSize, compact);
-      }
-    }
-  }
+  addArrivalRepulsion(addedIds, currentIds, positions, idealPositions, movableIds, adjacency, nodesById, focusId, canvasSize, compact);
 
   const fixedIds = new Set([...currentIds].filter((id) => !movableIds.has(id) && id !== focusId));
+  const iterations = addedIds.size
+    ? (denseCommandLayout ? (compact ? 38 : 48) : (compact ? 24 : 32))
+    : (denseCommandLayout ? (compact ? 24 : 32) : (compact ? 12 : 16));
   return relaxPositions(
     snapshot,
     positions,
@@ -1038,7 +1075,7 @@ function incrementalLayout(snapshot: GraphSnapshot, cache: LayoutCache, center: 
     adjacency,
     fixedIds,
     nodesById,
-    denseCommandLayout ? (compact ? 24 : 32) : (compact ? 12 : 16),
+    iterations,
     compact,
     denseCommandLayout,
   );
