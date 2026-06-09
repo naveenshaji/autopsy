@@ -3517,6 +3517,56 @@ def fetch_activity_writes(graph, *, limit: int) -> list[dict[str, Any]]:
     return writes
 
 
+def fetch_context_graph_thread_writes(graph, *, thread_id: str, since_at: str = "", limit: int = 6) -> list[dict[str, Any]]:
+    thread_key = str(thread_id or "").strip()
+    if not thread_key:
+        return []
+    bounded_limit = max(1, min(int(limit), 12))
+    result = graph.query(
+        """
+        MATCH (node:SemanticItem)-[:ABOUT]-(thread:Thread {stable_key: $thread_id})
+        WHERE coalesce(node.source_kind, '') <> 'graph_episode'
+          AND NOT coalesce(node.stable_key, '') STARTS WITH 'turn-outcome:'
+          AND (coalesce(node.expired_at, node.expires_at, '') = '')
+          AND ($since_at = '' OR coalesce(node.updated_at, node.created_at, '') >= $since_at)
+        OPTIONAL MATCH (node)-[:ABOUT]-(repo:Repository)
+        WITH node, collect(DISTINCT coalesce(repo.label, '')) AS repositories
+        RETURN
+          node.stable_key,
+          node.kind,
+          node.label,
+          coalesce(node.summary, ''),
+          coalesce(node.detail_content, ''),
+          coalesce(node.updated_at, node.created_at),
+          coalesce(node.source_kind, ''),
+          repositories
+        ORDER BY coalesce(node.updated_at, node.created_at) DESC
+        LIMIT $limit
+        """,
+        params={"thread_id": thread_key, "since_at": str(since_at or "").strip(), "limit": bounded_limit},
+    )
+    writes: list[dict[str, Any]] = []
+    for row in result_rows(result):
+        repositories = [str(value) for value in (row[7] or []) if str(value or "").strip()]
+        summary = str(row[3] or "") or str(row[4] or "")
+        kind = normalize_note_kind(str(row[1] or ""), fallback="memory_note")
+        writes.append(
+            {
+                "type": "write",
+                "stable_key": str(row[0] or ""),
+                "kind": kind,
+                "memory_type": memory_type_for_kind(kind),
+                "title": summary_snippet(str(row[2] or "Untitled memory"), 120),
+                "summary": summary_snippet(summary, 220),
+                "updated_at": str(row[5] or ""),
+                "source": str(row[6] or "memory"),
+                "repositories": repositories,
+                "severity": "info",
+            }
+        )
+    return writes
+
+
 def fetch_activity_consults(graph, *, limit: int) -> list[dict[str, Any]]:
     bounded_limit = max(1, min(int(limit), 50))
     result = graph.query(
@@ -6080,7 +6130,8 @@ def create_graph_note_payload(
     workspace_key = str(workspace_record.get("root_path") or workspace_record.get("workspace_key") or "")
     workspace_node = lookup_node_by_stable_key(graph, workspace_key)
     repository_stable_key = canonical_repository_stable_key(graph, repository_root_path)
-    thread_node = lookup_node_by_stable_key(graph, thread_id) if thread_id else None
+    thread_key = ""
+    thread_node = None
     normalized_tags = memory_tags_with_namespaces_and_entity_scopes(tags, namespaces, entity_scopes)
     normalized_metadata = memory_metadata_with_namespaces_and_entity_scopes(metadata, namespaces, entity_scopes)
 
@@ -6114,9 +6165,19 @@ def create_graph_note_payload(
         updated_at=created_at,
         origin="falkor",
     )
+    if thread_id:
+        thread_key = ensure_thread_node(
+            graph,
+            {"id": thread_id, "preview": summary, "name": title},
+            timestamp=created_at,
+            origin="falkor",
+        )
+        thread_node = lookup_node_by_stable_key(graph, thread_key) if thread_key else None
     if workspace_node:
         create_structural_edge(graph, from_entity_id=note_id, to_entity_id=workspace_node["entity_id"], relation="belongs_to", timestamp=created_at, origin="falkor")
         create_structural_edge(graph, from_entity_id=episode_id, to_entity_id=workspace_node["entity_id"], relation="belongs_to", timestamp=created_at, origin="falkor")
+    if thread_key and workspace_key:
+        upsert_structural_edge(graph, from_stable_key=thread_key, to_stable_key=workspace_key, relation="belongs_to", timestamp=created_at, origin="falkor")
     repository_node = lookup_node_by_stable_key(graph, repository_stable_key) if repository_stable_key else None
     if repository_stable_key and repository_node is None:
         repository_key = ensure_repository_node(
@@ -6159,6 +6220,7 @@ def update_graph_item_payload(
     namespaces: list[str] | tuple[str, ...] | str | None = None,
     entity_scopes: Any = None,
     metadata: Any = None,
+    thread_id: str | None = None,
 ) -> dict[str, Any]:
     existing = fetch_item(graph, stable_key)
     if core_memory_block_read_only(existing):
@@ -6202,6 +6264,19 @@ def update_graph_item_payload(
         },
     )
     workspace_key, repository_key, thread_key = extract_context_links(existing)
+    requested_thread_id = str(thread_id or "").strip()
+    if requested_thread_id:
+        ensured_thread_key = ensure_thread_node(
+            graph,
+            {"id": requested_thread_id, "preview": summary, "name": title},
+            timestamp=created_at,
+            origin="falkor",
+        )
+        if ensured_thread_key:
+            thread_key = ensured_thread_key
+            if workspace_key:
+                upsert_structural_edge(graph, from_stable_key=thread_key, to_stable_key=workspace_key, relation="belongs_to", timestamp=created_at, origin="falkor")
+            upsert_structural_edge(graph, from_stable_key=stable_key, to_stable_key=thread_key, relation="about", timestamp=created_at, origin="falkor")
     episode_id = next_entity_id(graph)
     episode_key = f"episode:{episode_id}"
     create_memory_node(
@@ -14396,6 +14471,20 @@ def current_codex_hook_thread_state() -> dict[str, Any]:
     }
 
 
+def current_write_thread_id(explicit_thread_id: str | None = None) -> str | None:
+    explicit = str(explicit_thread_id or "").strip()
+    if explicit:
+        return explicit
+    try:
+        state = current_codex_hook_thread_state()
+    except Exception:
+        return None
+    if bool(state.get("ok")):
+        thread_id = str(state.get("thread_id") or "").strip()
+        return thread_id or None
+    return None
+
+
 def codex_hook_metadata(hook: dict[str, Any]) -> dict[str, Any]:
     return {}
 
@@ -15590,7 +15679,7 @@ def cmd_create_note(args: argparse.Namespace) -> None:
         title=title,
         content=content,
         repository_root_path=repository_scope_path_from_args(args),
-        thread_id=str(getattr(args, "thread_id", "") or "").strip() or None,
+        thread_id=current_write_thread_id(getattr(args, "thread_id", None)),
         tags=list(getattr(args, "tag", None) or []),
         namespaces=list(getattr(args, "namespace", None) or []),
         entity_scopes=entity_scopes_from_args(args),
@@ -15650,6 +15739,7 @@ def cmd_update_item(args: argparse.Namespace) -> None:
         namespaces=list(getattr(args, "namespace", None) or []),
         entity_scopes=entity_scopes_from_args(args) if entity_scope_args_present(args) else None,
         metadata=list(getattr(args, "metadata", None)) if getattr(args, "metadata", None) is not None else None,
+        thread_id=current_write_thread_id(getattr(args, "thread_id", None)),
     )
     if payload.get("blocked"):
         payload["write_quality"] = write_quality

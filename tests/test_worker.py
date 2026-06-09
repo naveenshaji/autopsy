@@ -165,6 +165,54 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
         self.assertEqual(depends_on["factText"], "One depends on Two")
         self.assertNotIn("memory_consult", json.dumps(snapshot["events"]))
 
+    def test_context_graph_snapshot_renders_thread_memory_writes_directly(self):
+        worker = load_worker_module()
+        writes = [
+            {
+                "stable_key": "graph-note:write",
+                "kind": "decision",
+                "memory_type": "semantic",
+                "title": "Show memory writes in graph",
+                "summary": "The context graph renders memory writes from Autopsy thread links.",
+                "updated_at": "2026-06-06T00:00:03Z",
+                "source": "graph_note",
+                "repositories": ["Autopsy"],
+            }
+        ]
+
+        with mock.patch.object(worker, "context_graph_thread_memory_writes", return_value=writes) as fetch_writes:
+            snapshot = worker.build_context_graph_snapshot_from_state({
+                "thread_id": "thread-1",
+                "created_at": "2026-06-06T00:00:00Z",
+                "updated_at": "2026-06-06T00:00:03Z",
+                "revision": 1,
+                "events": [
+                    {
+                        "id": "current-consult",
+                        "event_type": "command",
+                        "content": "autopsy consult --current-only --query graph",
+                        "run_id": "turn-1",
+                        "metadata": {"command": "autopsy consult --current-only --query graph"},
+                        "timestamp": "2026-06-06T00:00:01Z",
+                    }
+                ],
+            })
+
+        fetch_writes.assert_called_once()
+        self.assertEqual(fetch_writes.call_args.args[0], "thread-1")
+        self.assertEqual(fetch_writes.call_args.kwargs["since_at"], "2026-06-06T00:00:01Z")
+        write_nodes = [node for node in snapshot["nodes"] if node["kind"] == "memory_write"]
+        self.assertEqual(len(write_nodes), 1)
+        self.assertEqual(write_nodes[0]["label"], "Show memory writes in graph")
+        self.assertEqual(write_nodes[0]["visualKind"], "memory_write")
+        self.assertEqual(write_nodes[0]["sourceKind"], "autopsy_memory")
+        self.assertEqual(write_nodes[0]["sourceRef"], "graph-note:write")
+        self.assertIn("written", write_nodes[0]["stateFlags"])
+        self.assertIn("decision", write_nodes[0]["detailChips"])
+        self.assertIn("Autopsy", write_nodes[0]["detailChips"])
+        self.assertIn("wrote_memory", {connection["relation"] for connection in snapshot["connections"]})
+        self.assertNotIn("memory_write", json.dumps(snapshot["events"]))
+
     def test_context_graph_all_allowlisted_command_families_render_semantically(self):
         worker = load_worker_module()
         commands = [

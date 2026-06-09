@@ -16,6 +16,8 @@ autopsy consult --current-only --query "<task/context query>"
 
 Prefer `context` for a compact pre-work memory pack. Use `autopsy context --format text --current-only --query "<task/context query>"` when you want a ready-to-insert context block instead of JSON. Prefer `consult` over `search` when relying on memory.
 
+Consult Autopsy again within the same turn when the question changes, retrieval is incomplete, lineage/staleness warnings appear, or a decision depends on memory not covered by the first read.
+
 Compatibility form:
 
 ```bash
@@ -138,6 +140,8 @@ autopsy capture-outcome --outcome question --title "..." --content "..."
 autopsy capture-outcome --outcome resolved-question --title "..." --content "..."
 autopsy capture-outcome --outcome reverted-attempt --title "..." --content "..."
 ```
+
+Multiple writes in one turn are valid when they capture distinct decisions, attempts, observations, procedures, questions, or resolved questions. Avoid duplicate or low-signal writes.
 
 For repo work, attribute writes:
 

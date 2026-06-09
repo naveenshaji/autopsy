@@ -1251,6 +1251,54 @@ class AutopsyCLIContractTests(unittest.TestCase):
         payload = json.loads(stream.getvalue())
         self.assertEqual(payload["item"]["stableKey"], "graph-note:new")
 
+    def test_create_note_uses_current_codex_thread_for_write_attribution(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "capture-outcome",
+            "--outcome",
+            "decision",
+            "--title",
+            "Thread write",
+            "--content",
+            "This write should attach to the current Codex context graph thread.",
+            "--no-relations-ok",
+        ])
+        captured: dict[str, object] = {}
+
+        class Graph:
+            pass
+
+        originals = {
+            "open_workspace_graph": cli.open_workspace_graph,
+            "build_write_quality_payload": cli.build_write_quality_payload,
+            "write_quality_blocks_write": cli.write_quality_blocks_write,
+            "create_graph_note_payload": cli.create_graph_note_payload,
+            "refresh_activity_snapshot": cli.refresh_activity_snapshot,
+            "current_write_thread_id": cli.current_write_thread_id,
+        }
+        try:
+            cli.open_workspace_graph = lambda _args: (cli, {"root_path": "/tmp/memory-root"}, {}, Graph())
+            cli.build_write_quality_payload = lambda *_args, **_kwargs: {"warnings": [], "complete": True}
+            cli.write_quality_blocks_write = lambda _quality: False
+            cli.current_write_thread_id = lambda explicit_thread_id=None: str(explicit_thread_id or "") or "session-actual"
+
+            def fake_create_graph_note_payload(*_args, **kwargs):
+                captured.update(kwargs)
+                return {"item": {"stableKey": "graph-note:new"}}
+
+            cli.create_graph_note_payload = fake_create_graph_note_payload
+            cli.refresh_activity_snapshot = lambda *_args, **_kwargs: None
+            stream = io.StringIO()
+            with contextlib.redirect_stdout(stream):
+                cli.cmd_create_note(args)
+        finally:
+            for name, value in originals.items():
+                setattr(cli, name, value)
+
+        self.assertEqual(captured["thread_id"], "session-actual")
+        payload = json.loads(stream.getvalue())
+        self.assertEqual(payload["item"]["stableKey"], "graph-note:new")
+
     def test_create_graph_note_payload_ensures_fresh_repository_node_and_links_note(self):
         class Result:
             def __init__(self, rows):
@@ -1318,7 +1366,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
                 title="Fresh repo write",
                 content="This write should create and link a repository node.",
                 repository_root_path="/tmp/fresh-repo",
-                thread_id=None,
+                thread_id="session-actual",
             )
         finally:
             cli.build_graph_item_detail_payload = original_build_detail
@@ -1329,6 +1377,10 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(repo["kind"], "repository")
         repo_edges = [edge for edge in graph.edges if edge["relation"] == "about" and edge["to_id"] == repo["entity_id"]]
         self.assertEqual(len(repo_edges), 2)
+        thread = graph.nodes["session-actual"]
+        self.assertEqual(thread["kind"], "thread")
+        thread_edges = [edge for edge in graph.edges if edge["relation"] == "about" and edge["to_id"] == thread["entity_id"]]
+        self.assertEqual(len(thread_edges), 2)
 
     def test_mcp_create_note_accepts_repo_scope_fields(self):
         captured: dict[str, object] = {}
@@ -2306,6 +2358,41 @@ class AutopsyCLIContractTests(unittest.TestCase):
             self.assertEqual(payload["thread_id"], "session-actual")
             self.assertEqual(payload["thread_source"]["source"], "codex-hook")
             self.assertIn("/context-graph/threads/session-actual", payload["url"])
+
+    def test_current_write_thread_id_uses_explicit_or_fresh_hook_state_only(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state_path = Path(tmp_dir) / "codex-hook-session.json"
+            state_path.write_text(
+                json.dumps({
+                    "thread_id": "session-actual",
+                    "updated_at": "2999-01-01T00:00:00+00:00",
+                    "hook_event_name": "PreToolUse",
+                    "source": "codex-hook",
+                }),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(os.environ, {"AUTOPSY_CODEX_HOOK_STATE_PATH": str(state_path)}):
+                self.assertEqual(cli.current_write_thread_id("explicit-thread"), "explicit-thread")
+                self.assertEqual(cli.current_write_thread_id(), "session-actual")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state_path = Path(tmp_dir) / "missing-codex-hook-session.json"
+            with mock.patch.dict(os.environ, {"AUTOPSY_CODEX_HOOK_STATE_PATH": str(state_path)}):
+                self.assertIsNone(cli.current_write_thread_id())
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state_path = Path(tmp_dir) / "stale-codex-hook-session.json"
+            state_path.write_text(
+                json.dumps({
+                    "thread_id": "stale-session",
+                    "updated_at": "2000-01-01T00:00:00+00:00",
+                    "hook_event_name": "PreToolUse",
+                    "source": "codex-hook",
+                }),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(os.environ, {"AUTOPSY_CODEX_HOOK_STATE_PATH": str(state_path)}):
+                self.assertIsNone(cli.current_write_thread_id())
 
     def test_context_graph_url_codex_current_refuses_missing_hook_state(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

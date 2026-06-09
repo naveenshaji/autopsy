@@ -11,6 +11,7 @@ Before substantial work:
 - Use `autopsy context --format text --current-only --query "<task/context query>"` when you want a ready-to-insert context block instead of JSON.
 - Run `autopsy consult --current-only --query "<task/context query>"`.
 - Prefer `context` for pre-work grounding and `consult` over `search` when relying on memory.
+- Consult Autopsy again within the same turn when the question changes, retrieval is incomplete, lineage/staleness warnings appear, or a decision depends on memory not covered by the first read.
 
 Live context graph:
 - Context graph capture is configured for Codex hooks. Do not call `autopsy context-event`; `autopsy codex-hook` records the current Codex session id from trusted hook payloads and records allowlisted `PostToolUse` Bash command text automatically.
@@ -53,6 +54,7 @@ When reading memory:
 
 When writing memory:
 - After material work, write durable outcomes with `autopsy capture-outcome`.
+- Multiple writes in one turn are valid when they capture distinct decisions, attempts, observations, procedures, questions, or resolved questions. Avoid duplicate or low-signal writes.
 - Use specific outcomes: `decision`, `attempt`, `observation`, `procedure`, `question`, `preference`, `plan`, `resolved-question`, or `reverted-attempt`.
 - Add at least one explicit semantic relation for durable writes: `--informed-by`, `--answers`, `--supersedes`, `--reverts`, `--depends-on`, `--implements`, `--constrains`, or `--refines`.
 - Relation flags are ontology-checked; use them between memory items, and target `--answers` at an open question.

@@ -27,6 +27,7 @@ _EMBEDDINGS_STATUS_CACHE = {}
 _FALKOR_CONTEXT_CACHE = {}
 _FALKOR_FAILURE_CACHE = {}
 _CONTEXT_GRAPH_MEMORY_ENRICH_CACHE = {}
+_CONTEXT_GRAPH_MEMORY_WRITE_CACHE = {}
 _FALKOR_CONTEXT_LOCK = threading.Lock()
 _CONTEXT_GRAPH_LOCK = threading.Lock()
 _FALKOR_VALIDATION_TTL_SECONDS = 10.0
@@ -86,7 +87,9 @@ CONTEXT_GRAPH_METADATA_ALLOW_KEYS = {
     'command': 'command',
 }
 CONTEXT_GRAPH_MEMORY_ENRICH_TTL_SECONDS = 30.0
+CONTEXT_GRAPH_MEMORY_WRITE_TTL_SECONDS = 2.0
 CONTEXT_GRAPH_MEMORY_RELATION_LIMIT = 4
+CONTEXT_GRAPH_MEMORY_WRITE_LIMIT = 6
 
 
 def context_graph_truthy_setting(value, default: bool = False) -> bool:
@@ -1309,6 +1312,62 @@ def context_graph_memory_enrichment_for_command(command: str, view: dict) -> dic
     return payload
 
 
+def context_graph_thread_memory_writes_uncached(thread_id: str, *, since_at: str = "", limit: int = CONTEXT_GRAPH_MEMORY_WRITE_LIMIT) -> list[dict]:
+    if not str(thread_id or '').strip():
+        return []
+    try:
+        _tool, module, _workspace, _embeddings_config, _embeddings_status, falkor = context_graph_default_memory_context()
+    except Exception:
+        return []
+
+    try:
+        return run_falkor_operation(
+            falkor,
+            lambda graph: module.fetch_context_graph_thread_writes(
+                graph,
+                thread_id=str(thread_id or '').strip(),
+                since_at=str(since_at or '').strip(),
+                limit=max(1, min(int(limit), 12)),
+            ),
+        )
+    except (Exception, SystemExit):
+        return []
+
+
+def context_graph_thread_memory_writes(thread_id: str, *, since_at: str = "", limit: int = CONTEXT_GRAPH_MEMORY_WRITE_LIMIT) -> list[dict]:
+    thread_key = str(thread_id or '').strip()
+    if not thread_key:
+        return []
+    bounded_limit = max(1, min(int(limit), 12))
+    cache_key = hashlib.sha256(json.dumps({
+        'thread_id': thread_key,
+        'since_at': str(since_at or '').strip(),
+        'limit': bounded_limit,
+        'cwd': os.getcwd(),
+    }, sort_keys=True).encode('utf-8')).hexdigest()
+    now = time.monotonic()
+    cached = _CONTEXT_GRAPH_MEMORY_WRITE_CACHE.get(cache_key)
+    if cached is not None and now - float(cached.get('cached_at') or 0.0) < CONTEXT_GRAPH_MEMORY_WRITE_TTL_SECONDS:
+        return copy.deepcopy(cached.get('payload') or [])
+    payload = context_graph_thread_memory_writes_uncached(thread_key, since_at=since_at, limit=bounded_limit)
+    _CONTEXT_GRAPH_MEMORY_WRITE_CACHE.clear()
+    _CONTEXT_GRAPH_MEMORY_WRITE_CACHE[cache_key] = {
+        'cached_at': now,
+        'payload': copy.deepcopy(payload),
+    }
+    return payload
+
+
+def context_graph_write_since_at(events: list[dict], multi_turn: bool) -> str:
+    if multi_turn or not events:
+        return ''
+    for event in events:
+        timestamp = str(event.get('timestamp') or event.get('updated_at') or event.get('created_at') or '').strip()
+        if timestamp:
+            return timestamp
+    return ''
+
+
 def build_context_graph_snapshot(thread_id: str) -> dict:
     with _CONTEXT_GRAPH_LOCK:
         state = load_context_graph_thread_state(thread_id)
@@ -1510,6 +1569,55 @@ def build_context_graph_snapshot_from_state(state: dict) -> dict:
             for key, node_id in list(memory_node_ids.items())[:CONTEXT_GRAPH_MEMORY_RELATION_LIMIT]:
                 add_edge('retrieved', command_node_id, node_id, 'Matched by memory relation text')
 
+    def add_memory_write_nodes(parent_node_id: int) -> None:
+        writes = context_graph_thread_memory_writes(
+            thread_id,
+            since_at=context_graph_write_since_at(events, multi_turn),
+            limit=CONTEXT_GRAPH_MEMORY_WRITE_LIMIT,
+        )
+        if not isinstance(writes, list):
+            return
+        for write in writes[:CONTEXT_GRAPH_MEMORY_WRITE_LIMIT]:
+            if not isinstance(write, dict):
+                continue
+            stable_key = str(write.get('stable_key') or '').strip()
+            if not stable_key:
+                continue
+            kind = str(write.get('kind') or 'memory').strip() or 'memory'
+            repositories = [
+                str(repo).strip()
+                for repo in list(write.get('repositories') or [])
+                if str(repo).strip()
+            ]
+            chips = ['written', kind] + repositories[:2]
+            write_node_id = add_node(
+                key=f'memory_write:{stable_key}',
+                kind='memory_write',
+                label=str(write.get('title') or stable_key),
+                summary=str(write.get('summary') or kind),
+                state_flags=['current', 'written'],
+                source_kind='autopsy_memory',
+                source_ref=stable_key,
+                visual_kind='memory_write',
+                detail_chips=chips,
+                updated_at=str(write.get('updated_at') or ''),
+                provenance={
+                    'stable_key': stable_key,
+                    'source': str(write.get('source') or 'memory'),
+                    'memory_type': str(write.get('memory_type') or ''),
+                },
+            )
+            add_edge(
+                'wrote_memory',
+                write_node_id,
+                parent_node_id,
+                'Memory written in this context',
+                subject_label=str(write.get('title') or stable_key),
+                subject_kind=kind,
+                object_label='Current context',
+                object_kind='turn_context',
+            )
+
     command_events = [
         event for event in events
         if normalize_context_event_type(event.get('event_type')) in {'command', 'shell_command'}
@@ -1654,6 +1762,8 @@ def build_context_graph_snapshot_from_state(state: dict) -> dict:
             },
         )
         add_edge(str(config['relation']), collapsed_node_id, parent_node_id)
+
+    add_memory_write_nodes(focus_node_id)
 
     thread_summary = context_graph_thread_summary(state)
     thread_summary['event_count'] = len(events)
@@ -2820,7 +2930,7 @@ def handle_memory_graph_note_create(payload: dict) -> dict:
             title=title,
             content=content,
             repository_root_path=repository_root_path or None,
-            thread_id=str(request.get('thread_id') or '') or None,
+            thread_id=module.current_write_thread_id(str(request.get('thread_id') or '')),
             tags=list_request_argument(request, 'tags'),
             namespaces=list_request_argument(request, 'namespaces'),
             entity_scopes=list_request_argument(request, 'entity_scopes'),
@@ -2880,6 +2990,7 @@ def handle_memory_graph_item_update(payload: dict) -> dict:
             namespaces=list_request_argument(request, 'namespaces'),
             entity_scopes=list_request_argument(request, 'entity_scopes') if request.get('entity_scopes') is not None else None,
             metadata=metadata_request_argument(request) if request.get('metadata') is not None else None,
+            thread_id=module.current_write_thread_id(str(request.get('thread_id') or '')),
         )
         response['write_quality'] = write_quality
         module.refresh_activity_snapshot(graph, tool=tool, workspace=workspace)

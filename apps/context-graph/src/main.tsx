@@ -351,6 +351,8 @@ function descriptorForNode(node: GraphNode): Descriptor {
       return { icon: Brain, category: "Reasoning", prominence: "secondary", metricText: leadingCount(node.label), tone: "orange" };
     case "memory_status_context":
       return { icon: Brain, category: "Memory Status", prominence: "secondary", tone: "gray" };
+    case "memory_write":
+      return { icon: Pencil, category: "Memory Write", prominence: "primary", tone: "green" };
     case "memory_query_context":
       return { icon: Brain, category: "Memory Consult", prominence: "secondary", tone: "indigo" };
     case "memory_search_context":
