@@ -50,6 +50,37 @@ Stop and remove the menu bar LaunchAgent with:
 autopsy menubar --uninstall-launch-agent
 ```
 
+## macOS Prerelease Recovery
+
+On macOS prereleases such as macOS 27, Homebrew may be Tier 2 until upstream CI
+and bottle coverage catch up. Homebrew may also require explicit trust for
+formulae from third-party taps.
+
+If Homebrew still runs but refuses the Autopsy tap or formula, trust the formula
+and build from source:
+
+```bash
+brew trust --formula naveenshaji/autopsy/autopsy-memory
+brew update
+brew reinstall --build-from-source naveenshaji/autopsy/autopsy-memory
+autopsy install --smoke-test
+```
+
+If Homebrew itself cannot update, upgrade, or reinstall on that macOS release,
+download a release tarball and run the bundled Homebrew-style installer instead:
+
+```bash
+AUTOPSY_VERSION="${AUTOPSY_VERSION:-$(curl -fsSL https://api.github.com/repos/naveenshaji/autopsy/releases/latest | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)}"
+tmpdir="$(mktemp -d)"
+curl -fsSL "https://codeload.github.com/naveenshaji/autopsy/tar.gz/refs/tags/$AUTOPSY_VERSION" | tar -xz -C "$tmpdir"
+"$tmpdir/autopsy-${AUTOPSY_VERSION#v}/scripts/install-global.sh"
+autopsy install --smoke-test
+```
+
+Pass `AUTOPSY_VERSION=vX.Y.Z` to pin a specific release. Pass
+`AUTOPSY_INSTALL_PREFIX=$HOME/.local` when `/opt/homebrew` is not writable or
+when you want a user-local recovery install.
+
 ## Python/Pip Installs
 
 `pip install autopsy-memory` is useful for development, but on macOS it is not

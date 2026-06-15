@@ -1591,6 +1591,179 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(env["PYTHONNOUSERSITE"], "1")
         self.assertEqual(env["PYTHONDONTWRITEBYTECODE"], "1")
 
+    def test_default_worker_environment_marks_embedded_db_owner(self):
+        env = mcp_bridge.default_worker_environment()
+
+        self.assertEqual(env["AUTOPSY_EMBEDDED_DB_OWNER"], "worker")
+
+    def test_guarded_falkor_graph_advances_sidecar_after_mutation(self):
+        class Result:
+            def __init__(self, rows):
+                self.result_set = rows
+
+        class Graph:
+            name = "unit"
+
+            def __init__(self):
+                self.generation = 0
+                self.user_mutations = 0
+                self.save_calls = 0
+                self.client = types.SimpleNamespace(save=lambda: setattr(self, "save_calls", self.save_calls + 1))
+
+            def query(self, query, params=None):
+                params = params or {}
+                if "MATCH (guard:AutopsyMemoryGuard" in query and "RETURN coalesce(guard.generation, 0)" in query:
+                    return Result([[self.generation]] if self.generation else [])
+                if "MATCH (guard:AutopsyMemoryGuard" in query and "RETURN guard.stable_key" in query:
+                    return Result([[cli.MEMORY_DATABASE_GUARD_STABLE_KEY]] if self.generation else [])
+                if "CREATE (:AutopsyMemoryGuard" in query or "SET guard.policy" in query:
+                    self.generation = int(params["generation"])
+                    return Result([])
+                self.user_mutations += 1
+                return Result([])
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lite_path = str(Path(temp_dir) / "autopsy-memory.db")
+            graph = Graph()
+            guarded = cli.guarded_falkor_graph(graph, lite_path=lite_path, graph_name="unit")
+
+            guarded.query("CREATE (:Probe)")
+
+            sidecar = cli.read_memory_database_guard_sidecar(lite_path)
+
+        self.assertEqual(graph.user_mutations, 1)
+        self.assertEqual(graph.generation, 1)
+        self.assertEqual(graph.save_calls, 1)
+        self.assertEqual(sidecar["generation"], 1)
+        self.assertEqual(sidecar["policy"], cli.MEMORY_DATABASE_GUARD_POLICY)
+
+    def test_guarded_falkor_graph_blocks_rollback_before_read(self):
+        class Result:
+            def __init__(self, rows):
+                self.result_set = rows
+
+        class Graph:
+            name = "unit"
+
+            def __init__(self):
+                self.user_queries = 0
+
+            def query(self, query, params=None):
+                if "MATCH (guard:AutopsyMemoryGuard" in query and "RETURN coalesce(guard.generation, 0)" in query:
+                    return Result([[2]])
+                if "MATCH (guard:AutopsyMemoryGuard" in query and "RETURN guard.stable_key" in query:
+                    return Result([[cli.MEMORY_DATABASE_GUARD_STABLE_KEY]])
+                self.user_queries += 1
+                return Result([[1]])
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lite_path = str(Path(temp_dir) / "autopsy-memory.db")
+            log_path = Path(temp_dir) / "memory-guard.jsonl"
+            cli.write_memory_database_guard_sidecar(
+                lite_path,
+                graph_name="unit",
+                generation=3,
+                updated_at="2026-06-11T00:00:00Z",
+            )
+            graph = Graph()
+
+            with mock.patch.dict(os.environ, {"AUTOPSY_MEMORY_GUARD_LOG_PATH": str(log_path)}):
+                with self.assertRaises(cli.MemoryDatabaseRollbackError):
+                    cli.guarded_falkor_graph(graph, lite_path=lite_path, graph_name="unit").query("RETURN 1")
+            diagnostics = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(graph.user_queries, 0)
+        self.assertEqual(diagnostics[-1]["event"], "rollback_detected")
+
+    def test_guarded_falkor_graph_blocks_rollback_before_mutation(self):
+        class Result:
+            def __init__(self, rows):
+                self.result_set = rows
+
+        class Graph:
+            name = "unit"
+
+            def __init__(self):
+                self.user_mutations = 0
+
+            def query(self, query, params=None):
+                if "MATCH (guard:AutopsyMemoryGuard" in query and "RETURN coalesce(guard.generation, 0)" in query:
+                    return Result([[7]])
+                if "MATCH (guard:AutopsyMemoryGuard" in query and "RETURN guard.stable_key" in query:
+                    return Result([[cli.MEMORY_DATABASE_GUARD_STABLE_KEY]])
+                self.user_mutations += 1
+                return Result([])
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lite_path = str(Path(temp_dir) / "autopsy-memory.db")
+            log_path = Path(temp_dir) / "memory-guard.jsonl"
+            cli.write_memory_database_guard_sidecar(
+                lite_path,
+                graph_name="unit",
+                generation=8,
+                updated_at="2026-06-11T00:00:00Z",
+            )
+            graph = Graph()
+            guarded = cli.GuardedFalkorGraph(graph, lite_path=lite_path, graph_name="unit")
+
+            with mock.patch.dict(os.environ, {"AUTOPSY_MEMORY_GUARD_LOG_PATH": str(log_path)}):
+                with self.assertRaises(cli.MemoryDatabaseRollbackError):
+                    guarded.query("SET n.value = 1")
+            diagnostics = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(graph.user_mutations, 0)
+        self.assertEqual(diagnostics[-1]["event"], "rollback_detected")
+
+    def test_reset_falkordb_lite_client_uses_nosave_when_guard_is_stale(self):
+        class Result:
+            def __init__(self, rows):
+                self.result_set = rows
+
+        class Graph:
+            name = "unit"
+
+            def query(self, query, params=None):
+                if "MATCH (guard:AutopsyMemoryGuard" in query and "RETURN coalesce(guard.generation, 0)" in query:
+                    return Result([[4]])
+                return Result([])
+
+        class InnerClient:
+            def __init__(self):
+                self.shutdown_calls: list[dict[str, object]] = []
+
+            def shutdown(self, **kwargs):
+                self.shutdown_calls.append(kwargs)
+
+        class Client:
+            def __init__(self):
+                self.client = InnerClient()
+
+            def select_graph(self, _graph_name):
+                return Graph()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lite_path = str(Path(temp_dir) / "autopsy-memory.db")
+            log_path = Path(temp_dir) / "memory-guard.jsonl"
+            client = Client()
+            cli.write_memory_database_guard_sidecar(
+                lite_path,
+                graph_name="unit",
+                generation=5,
+                updated_at="2026-06-11T00:00:00Z",
+            )
+            cli._FALKORDB_LITE_CLIENTS[lite_path] = client
+            cli._FALKORDB_LITE_GRAPH_NAMES[lite_path] = {"unit"}
+            try:
+                with mock.patch.dict(os.environ, {"AUTOPSY_MEMORY_GUARD_LOG_PATH": str(log_path)}):
+                    cli.reset_falkordb_lite_client(lite_path)
+            finally:
+                cli._FALKORDB_LITE_CLIENTS.pop(lite_path, None)
+                cli._FALKORDB_LITE_GRAPH_NAMES.pop(lite_path, None)
+            diagnostics = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(client.client.shutdown_calls, [{"nosave": True, "save": False, "now": True, "force": True}])
+        self.assertEqual(diagnostics[-1]["event"], "nosave_shutdown_due_to_rollback_risk")
+
     def test_redislite_lifecycle_payload_reports_excess_autopsy_processes(self):
         rows = [
             {"pid": 31, "command": "/pkg/redislite/bin/redis-server unixsocket:/tmp/autopsy-a/redis.socket"},

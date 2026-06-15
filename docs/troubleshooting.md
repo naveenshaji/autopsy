@@ -37,6 +37,23 @@ which autopsy
 autopsy version --json
 ```
 
+On macOS prereleases, Homebrew may require explicit trust for third-party taps:
+
+```bash
+brew trust --formula naveenshaji/autopsy/autopsy-memory
+brew reinstall --build-from-source naveenshaji/autopsy/autopsy-memory
+```
+
+If Homebrew itself cannot update, upgrade, or reinstall on that macOS release,
+download a release tarball and run the bundled installer instead:
+
+```bash
+AUTOPSY_VERSION="${AUTOPSY_VERSION:-$(curl -fsSL https://api.github.com/repos/naveenshaji/autopsy/releases/latest | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)}"
+tmpdir="$(mktemp -d)"
+curl -fsSL "https://codeload.github.com/naveenshaji/autopsy/tar.gz/refs/tags/$AUTOPSY_VERSION" | tar -xz -C "$tmpdir"
+"$tmpdir/autopsy-${AUTOPSY_VERSION#v}/scripts/install-global.sh"
+```
+
 `autopsy install` repairs Homebrew PATH linkage when it can do so safely. If
 `doctor` reports a valid Homebrew command shadowed later on PATH, move
 Homebrew's bin directory earlier in your shell PATH or remove the earlier

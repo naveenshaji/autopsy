@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Adds an embedded FalkorDBLite generation guard with a persisted sidecar,
+  mutation locking, rollback diagnostics, and `NOSAVE` shutdown for cooperating
+  stale processes.
+- Adds a GitHub release bootstrap installer for macOS prerelease users when
+  Homebrew cannot update or reinstall, and documents Homebrew tap trust recovery.
+
 ## 0.1.26 - 2026-06-06
 
 Hardens Codex hook-mode context graph session resolution.

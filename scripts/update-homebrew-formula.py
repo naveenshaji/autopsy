@@ -303,6 +303,13 @@ class {FORMULA_CLASS} < Formula
 
       To stop only the menu bar utility:
         autopsy menubar --uninstall-launch-agent
+
+      On macOS prereleases, Homebrew may require third-party tap trust:
+        brew trust --formula naveenshaji/autopsy/autopsy-memory
+
+      If Homebrew cannot update or reinstall on that macOS release, download a
+      GitHub release tarball and run scripts/install-global.sh from the unpacked
+      source tree as the non-Homebrew recovery path.
     EOS
   end
 

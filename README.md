@@ -164,6 +164,9 @@ brew upgrade autopsy-memory
 autopsy install
 ```
 
+If Homebrew cannot update or reinstall on a macOS prerelease, use the release
+bootstrap path in [docs/homebrew.md](docs/homebrew.md#macos-prerelease-recovery).
+
 Stop the menu bar app:
 
 ```bash
@@ -218,6 +221,9 @@ Common fixes:
 
 - If `autopsy` is not found, run `brew update && brew upgrade autopsy-memory`,
   then open a new terminal and run `autopsy install`.
+- If macOS prerelease Homebrew blocks tap updates, run
+  `brew trust --formula naveenshaji/autopsy/autopsy-memory`; if Homebrew itself
+  cannot update, use the release bootstrap in `docs/homebrew.md`.
 - If the menu bar app is missing, run `autopsy install`.
 - If the menu bar app starts but shows no recent activity, run
   `autopsy activity` once and then reopen the menu.

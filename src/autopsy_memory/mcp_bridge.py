@@ -76,6 +76,7 @@ def default_worker_environment() -> dict[str, str]:
     env["AUTOPSY_MEMORY_BACKEND"] = "falkordb"
     env["AUTOPSY_FALKORDB_ENABLED"] = "1"
     env["AUTOPSY_FALKORDB_GRAPH_NAME"] = env.get("AUTOPSY_FALKORDB_GRAPH_NAME") or DEFAULT_GRAPH_NAME
+    env["AUTOPSY_EMBEDDED_DB_OWNER"] = "worker"
     if not env.get("AUTOPSY_FALKORDB_HOST") and not env.get("AUTOPSY_FALKORDB_PORT"):
         env["AUTOPSY_FALKORDB_LITE_PATH"] = env.get("AUTOPSY_FALKORDB_LITE_PATH") or str(
             app_support_dir() / "FalkorDB" / "autopsy-memory.db"

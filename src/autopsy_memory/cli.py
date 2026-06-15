@@ -2,6 +2,7 @@
 import argparse
 import atexit
 import copy
+import contextlib
 import hashlib
 import json
 import math
@@ -18,6 +19,11 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - fcntl is expected on supported macOS installs.
+    fcntl = None
 
 from .cli_parser import CommandHandlers, build_parser as build_cli_parser, normalized_cli_args
 from .context_graph_settings import (
@@ -58,6 +64,8 @@ CORE_MEMORY_BLOCK_MAX_LIMIT = 20000
 MEMORY_HISTORY_EVENT_KIND = "memory_history_event"
 DERIVED_OBSERVATION_POLICY = "derived_graph_observation_v1"
 OBSERVATION_DEFAULT_EVIDENCE_LIMIT = 5
+MEMORY_DATABASE_GUARD_POLICY = "embedded_falkordb_generation_guard_v1"
+MEMORY_DATABASE_GUARD_STABLE_KEY = "autopsy:embedded-falkordb-generation"
 
 SEARCHABLE_KINDS = {
     "decision",
@@ -454,6 +462,7 @@ RELATION_TERM_STOP_TOKENS = ENTITY_STOP_TOKENS | {
 _GRAPH_VECTOR_AVAILABILITY: dict[str, bool] = {}
 _GRAPH_SEMANTIC_ITEM_COUNT: dict[str, int] = {}
 _FALKORDB_LITE_CLIENTS: dict[str, Any] = {}
+_FALKORDB_LITE_GRAPH_NAMES: dict[str, set[str]] = {}
 _FALKORDB_LITE_SHUTDOWN_REGISTERED = False
 _EMBEDDING_MODEL_CACHE: dict[tuple[str, str], Any] = {}
 _RERANKER_MODEL_CACHE: dict[tuple[str, str], Any] = {}
@@ -1650,6 +1659,318 @@ def workspace_graph_name(base_graph_name: str, workspace: dict[str, Any]) -> str
     return f"{base_graph_name}_{slug}_{suffix}"
 
 
+class MemoryDatabaseRollbackError(RuntimeError):
+    """Raised when the embedded DB is older than Autopsy's durable guard state."""
+
+
+def memory_database_guard_enabled() -> bool:
+    disabled = str(os.environ.get("AUTOPSY_MEMORY_GUARD_DISABLED") or "").strip().lower()
+    return disabled not in {"1", "true", "yes", "on"}
+
+
+def memory_database_guard_sidecar_path(lite_path: str | Path) -> Path:
+    return Path(str(Path(lite_path).expanduser()) + ".guard.json")
+
+
+def memory_database_guard_lock_path(lite_path: str | Path) -> Path:
+    return Path(str(memory_database_guard_sidecar_path(lite_path)) + ".lock")
+
+
+def memory_database_guard_generation(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def read_memory_database_guard_sidecar(lite_path: str | Path) -> dict[str, Any]:
+    path = memory_database_guard_sidecar_path(lite_path)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def write_memory_database_guard_sidecar(
+    lite_path: str | Path,
+    *,
+    graph_name: str,
+    generation: int,
+    updated_at: str,
+) -> dict[str, Any]:
+    payload = {
+        "schema_version": 1,
+        "policy": MEMORY_DATABASE_GUARD_POLICY,
+        "lite_path": str(Path(lite_path).expanduser()),
+        "graph_name": graph_name,
+        "generation": int(generation),
+        "updated_at": updated_at,
+        "process_id": os.getpid(),
+        "autopsy_version": package_version(),
+    }
+    write_json_atomic(memory_database_guard_sidecar_path(lite_path), payload)
+    return payload
+
+
+def memory_database_guard_diagnostic_log_path() -> Path:
+    raw_path = str(os.environ.get("AUTOPSY_MEMORY_GUARD_LOG_PATH") or "").strip()
+    if raw_path:
+        return Path(raw_path).expanduser()
+    return APP_SUPPORT_DIR_DEFAULT / "Diagnostics" / "memory-guard.jsonl"
+
+
+def record_memory_database_guard_diagnostic(event: str, payload: dict[str, Any]) -> None:
+    try:
+        path = memory_database_guard_diagnostic_log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "timestamp": utc_now_iso(),
+            "event": event,
+            "policy": MEMORY_DATABASE_GUARD_POLICY,
+            "process_id": os.getpid(),
+            **payload,
+        }
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, sort_keys=True) + "\n")
+    except Exception:
+        pass
+
+
+@contextlib.contextmanager
+def memory_database_guard_lock(lite_path: str | Path):
+    path = memory_database_guard_lock_path(lite_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = path.open("a+", encoding="utf-8")
+    try:
+        if fcntl is not None:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        if fcntl is not None:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+        handle.close()
+
+
+def graph_query_looks_mutating(query: Any) -> bool:
+    text = str(query or "")
+    return bool(re.search(r"\b(CREATE|DELETE|MERGE|REMOVE|SET)\b", text, flags=re.IGNORECASE))
+
+
+def memory_guard_raw_graph(graph):
+    return getattr(graph, "_autopsy_guard_raw_graph", graph)
+
+
+def memory_database_guard_graph_generation(graph) -> int:
+    rows = result_rows(memory_guard_raw_graph(graph).query(
+        """
+        MATCH (guard:AutopsyMemoryGuard {stable_key: $stable_key})
+        RETURN coalesce(guard.generation, 0)
+        LIMIT 1
+        """,
+        params={"stable_key": MEMORY_DATABASE_GUARD_STABLE_KEY},
+    ))
+    if not rows:
+        return 0
+    row = rows[0]
+    value = row[0] if isinstance(row, (list, tuple)) and row else row
+    return memory_database_guard_generation(value)
+
+
+def set_memory_database_guard_graph_generation(
+    graph,
+    *,
+    lite_path: str | Path,
+    graph_name: str,
+    generation: int,
+    updated_at: str,
+) -> None:
+    raw_graph = memory_guard_raw_graph(graph)
+    existing = result_rows(raw_graph.query(
+        """
+        MATCH (guard:AutopsyMemoryGuard {stable_key: $stable_key})
+        RETURN guard.stable_key
+        LIMIT 1
+        """,
+        params={"stable_key": MEMORY_DATABASE_GUARD_STABLE_KEY},
+    ))
+    params = {
+        "stable_key": MEMORY_DATABASE_GUARD_STABLE_KEY,
+        "policy": MEMORY_DATABASE_GUARD_POLICY,
+        "lite_path": str(Path(lite_path).expanduser()),
+        "graph_name": graph_name,
+        "generation": int(generation),
+        "updated_at": updated_at,
+        "process_id": os.getpid(),
+        "autopsy_version": package_version(),
+    }
+    if existing:
+        raw_graph.query(
+            """
+            MATCH (guard:AutopsyMemoryGuard {stable_key: $stable_key})
+            SET guard.policy = $policy,
+                guard.lite_path = $lite_path,
+                guard.graph_name = $graph_name,
+                guard.generation = $generation,
+                guard.updated_at = $updated_at,
+                guard.process_id = $process_id,
+                guard.autopsy_version = $autopsy_version
+            """,
+            params=params,
+        )
+        return
+    raw_graph.query(
+        """
+        CREATE (:AutopsyMemoryGuard {
+            stable_key: $stable_key,
+            policy: $policy,
+            lite_path: $lite_path,
+            graph_name: $graph_name,
+            generation: $generation,
+            updated_at: $updated_at,
+            process_id: $process_id,
+            autopsy_version: $autopsy_version
+        })
+        """,
+        params=params,
+    )
+
+
+def persist_memory_database_guard_graph(graph) -> None:
+    raw_graph = memory_guard_raw_graph(graph)
+    client = getattr(raw_graph, "client", None)
+    save = getattr(client, "save", None)
+    if callable(save):
+        save()
+        return
+    execute_command = getattr(client, "execute_command", None)
+    if callable(execute_command):
+        execute_command("SAVE")
+
+
+def memory_database_guard_state(graph, lite_path: str | Path, *, graph_name: str | None = None) -> dict[str, Any]:
+    sidecar = read_memory_database_guard_sidecar(lite_path)
+    graph_generation = memory_database_guard_graph_generation(graph)
+    sidecar_generation = memory_database_guard_generation(sidecar.get("generation"))
+    return {
+        "policy": MEMORY_DATABASE_GUARD_POLICY,
+        "ok": graph_generation >= sidecar_generation,
+        "lite_path": str(Path(lite_path).expanduser()),
+        "graph_name": str(graph_name or getattr(graph, "name", "") or ""),
+        "graph_generation": graph_generation,
+        "sidecar_generation": sidecar_generation,
+        "sidecar_path": str(memory_database_guard_sidecar_path(lite_path)),
+        "sidecar_updated_at": str(sidecar.get("updated_at") or ""),
+    }
+
+
+def assert_memory_database_guard_current(graph, lite_path: str | Path, *, graph_name: str | None = None) -> dict[str, Any]:
+    if not memory_database_guard_enabled():
+        return {"policy": MEMORY_DATABASE_GUARD_POLICY, "ok": True, "disabled": True}
+    state = memory_database_guard_state(graph, lite_path, graph_name=graph_name)
+    if not bool(state.get("ok")):
+        record_memory_database_guard_diagnostic("rollback_detected", state)
+        raise MemoryDatabaseRollbackError(
+            "Autopsy memory database rollback detected: "
+            f"embedded graph {state['lite_path']} is at generation {state['graph_generation']}, "
+            f"but guard sidecar {state['sidecar_path']} records generation {state['sidecar_generation']}. "
+            "Refusing to use this stale FalkorDBLite snapshot because it may have overwritten newer memory. "
+            "Restore from a backup or repair the embedded database before retrying."
+        )
+    return state
+
+
+def advance_memory_database_guard_generation(
+    graph,
+    lite_path: str | Path,
+    *,
+    graph_name: str,
+) -> dict[str, Any]:
+    if not memory_database_guard_enabled():
+        return {"policy": MEMORY_DATABASE_GUARD_POLICY, "ok": True, "disabled": True}
+    state = assert_memory_database_guard_current(graph, lite_path, graph_name=graph_name)
+    generation = max(
+        memory_database_guard_generation(state.get("graph_generation")),
+        memory_database_guard_generation(state.get("sidecar_generation")),
+    ) + 1
+    updated_at = utc_now_iso()
+    set_memory_database_guard_graph_generation(
+        graph,
+        lite_path=lite_path,
+        graph_name=graph_name,
+        generation=generation,
+        updated_at=updated_at,
+    )
+    persist_memory_database_guard_graph(graph)
+    sidecar = write_memory_database_guard_sidecar(
+        lite_path,
+        graph_name=graph_name,
+        generation=generation,
+        updated_at=updated_at,
+    )
+    return {
+        "policy": MEMORY_DATABASE_GUARD_POLICY,
+        "ok": True,
+        "lite_path": str(Path(lite_path).expanduser()),
+        "graph_name": graph_name,
+        "graph_generation": generation,
+        "sidecar_generation": generation,
+        "sidecar_path": str(memory_database_guard_sidecar_path(lite_path)),
+        "sidecar": sidecar,
+    }
+
+
+class GuardedFalkorGraph:
+    def __init__(self, graph, *, lite_path: str, graph_name: str):
+        self._autopsy_guard_raw_graph = graph
+        self._autopsy_guard_lite_path = lite_path
+        self._autopsy_guard_graph_name = graph_name
+
+    def __getattr__(self, name: str):
+        return getattr(self._autopsy_guard_raw_graph, name)
+
+    @property
+    def name(self) -> str:
+        return str(getattr(self._autopsy_guard_raw_graph, "name", "") or self._autopsy_guard_graph_name)
+
+    def query(self, query, *args, **kwargs):
+        if not memory_database_guard_enabled():
+            return self._autopsy_guard_raw_graph.query(query, *args, **kwargs)
+        if graph_query_looks_mutating(query):
+            with memory_database_guard_lock(self._autopsy_guard_lite_path):
+                assert_memory_database_guard_current(
+                    self._autopsy_guard_raw_graph,
+                    self._autopsy_guard_lite_path,
+                    graph_name=self._autopsy_guard_graph_name,
+                )
+                result = self._autopsy_guard_raw_graph.query(query, *args, **kwargs)
+                advance_memory_database_guard_generation(
+                    self._autopsy_guard_raw_graph,
+                    self._autopsy_guard_lite_path,
+                    graph_name=self._autopsy_guard_graph_name,
+                )
+                return result
+        assert_memory_database_guard_current(
+            self._autopsy_guard_raw_graph,
+            self._autopsy_guard_lite_path,
+            graph_name=self._autopsy_guard_graph_name,
+        )
+        return self._autopsy_guard_raw_graph.query(query, *args, **kwargs)
+
+
+def guarded_falkor_graph(graph, *, lite_path: str, graph_name: str):
+    if not memory_database_guard_enabled():
+        return graph
+    guarded = GuardedFalkorGraph(graph, lite_path=lite_path, graph_name=graph_name)
+    assert_memory_database_guard_current(graph, lite_path, graph_name=graph_name)
+    return guarded
+
+
 def ensure_graph(host: str, port: int, graph_name: str, lite_path: str | None = None):
     if lite_path:
         FalkorDBLite = load_falkordblite()
@@ -1665,7 +1986,8 @@ def ensure_graph(host: str, port: int, graph_name: str, lite_path: str | None = 
             if client is None:
                 client = FalkorDBLite(resolved_path, serverconfig=serverconfig)
                 _FALKORDB_LITE_CLIENTS[resolved_path] = client
-            return client.select_graph(graph_name)
+            _FALKORDB_LITE_GRAPH_NAMES.setdefault(resolved_path, set()).add(graph_name)
+            return guarded_falkor_graph(client.select_graph(graph_name), lite_path=resolved_path, graph_name=graph_name)
         except Exception as exc:
             if not is_stale_falkordb_lite_error(exc):
                 raise
@@ -1673,7 +1995,8 @@ def ensure_graph(host: str, port: int, graph_name: str, lite_path: str | None = 
             backup_stale_falkordb_lite_settings(resolved_path)
             client = FalkorDBLite(resolved_path, serverconfig=serverconfig)
             _FALKORDB_LITE_CLIENTS[resolved_path] = client
-            return client.select_graph(graph_name)
+            _FALKORDB_LITE_GRAPH_NAMES.setdefault(resolved_path, set()).add(graph_name)
+            return guarded_falkor_graph(client.select_graph(graph_name), lite_path=resolved_path, graph_name=graph_name)
     FalkorDB = load_falkordb()
     client = FalkorDB(host=host, port=port)
     return client.select_graph(graph_name)
@@ -1788,17 +2111,73 @@ def backup_stale_falkordb_lite_settings(lite_path: str | None) -> str | None:
     return str(backup_path)
 
 
+def falkordb_lite_client_rollback_risk(client, resolved_path: str) -> dict[str, Any]:
+    if not memory_database_guard_enabled():
+        return {"policy": MEMORY_DATABASE_GUARD_POLICY, "ok": True, "disabled": True}
+    graph_names = sorted(_FALKORDB_LITE_GRAPH_NAMES.get(resolved_path) or [])
+    if not graph_names:
+        return {"policy": MEMORY_DATABASE_GUARD_POLICY, "ok": True, "graphs": []}
+    checked: list[dict[str, Any]] = []
+    for graph_name in graph_names:
+        try:
+            state = memory_database_guard_state(client.select_graph(graph_name), resolved_path, graph_name=graph_name)
+        except Exception as exc:
+            checked.append({"graph_name": graph_name, "ok": False, "error": str(exc), "unknown": True})
+            continue
+        checked.append(state)
+        if not bool(state.get("ok")):
+            return {
+                "policy": MEMORY_DATABASE_GUARD_POLICY,
+                "ok": False,
+                "reason": "graph_generation_behind_sidecar",
+                "stale_graph": state,
+                "graphs": checked,
+            }
+    return {"policy": MEMORY_DATABASE_GUARD_POLICY, "ok": True, "graphs": checked}
+
+
+def close_falkordb_lite_client(client, *, save: bool = True) -> None:
+    if save:
+        shutdown = getattr(client, "shutdown", None)
+        if callable(shutdown):
+            shutdown()
+            return
+        close = getattr(client, "close", None)
+        if callable(close):
+            close()
+            return
+    inner_client = getattr(client, "client", None)
+    shutdown = getattr(inner_client, "shutdown", None)
+    if callable(shutdown):
+        shutdown(nosave=not save, save=save, now=True, force=True)
+        return
+    cleanup = getattr(inner_client, "_cleanup", None)
+    if save and callable(cleanup):
+        cleanup()
+
+
 def reset_falkordb_lite_client(lite_path: str | None) -> None:
     if not lite_path:
         return
     resolved_path = str(Path(lite_path).expanduser())
     client = _FALKORDB_LITE_CLIENTS.pop(resolved_path, None)
-    shutdown = getattr(client, 'shutdown', None)
-    if callable(shutdown):
-        try:
-            shutdown()
-        except Exception:
-            pass
+    if client is None:
+        return
+    try:
+        risk = falkordb_lite_client_rollback_risk(client, resolved_path)
+        if not bool(risk.get("ok", True)):
+            record_memory_database_guard_diagnostic(
+                "nosave_shutdown_due_to_rollback_risk",
+                {
+                    "lite_path": resolved_path,
+                    "risk": risk,
+                },
+            )
+        close_falkordb_lite_client(client, save=bool(risk.get("ok", True)))
+    except Exception:
+        pass
+    finally:
+        _FALKORDB_LITE_GRAPH_NAMES.pop(resolved_path, None)
 
 
 def reset_stale_falkordb_lite_runtime(args: argparse.Namespace) -> dict[str, Any]:

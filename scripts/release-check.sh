@@ -33,6 +33,7 @@ fi
 "$PYTHON" -m unittest discover -s tests
 sh -n scripts/install.sh
 sh -n scripts/install-global.sh
+sh -n scripts/install-release.sh
 sh -n scripts/menubar-check.sh
 sh -n scripts/install-matrix-check.sh
 sh -n scripts/homebrew-current-check.sh
