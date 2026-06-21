@@ -67,19 +67,26 @@ autopsy install --smoke-test
 ```
 
 If Homebrew itself cannot update, upgrade, or reinstall on that macOS release,
-download a release tarball and run the bundled Homebrew-style installer instead:
+run the release bootstrap script instead:
 
 ```bash
-AUTOPSY_VERSION="${AUTOPSY_VERSION:-$(curl -fsSL https://api.github.com/repos/naveenshaji/autopsy/releases/latest | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)}"
-tmpdir="$(mktemp -d)"
-curl -fsSL "https://codeload.github.com/naveenshaji/autopsy/tar.gz/refs/tags/$AUTOPSY_VERSION" | tar -xz -C "$tmpdir"
-"$tmpdir/autopsy-${AUTOPSY_VERSION#v}/scripts/install-global.sh"
+curl -fsSL https://raw.githubusercontent.com/naveenshaji/autopsy/main/scripts/install-release.sh | sh
 autopsy install --smoke-test
 ```
 
-Pass `AUTOPSY_VERSION=vX.Y.Z` to pin a specific release. Pass
-`AUTOPSY_INSTALL_PREFIX=$HOME/.local` when `/opt/homebrew` is not writable or
-when you want a user-local recovery install.
+Pass the tag to pin a specific release and avoid any latest-release lookup:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/naveenshaji/autopsy/main/scripts/install-release.sh | sh -s -- v0.1.30
+autopsy install --smoke-test
+```
+
+Pass `AUTOPSY_INSTALL_PREFIX=$HOME/.local` when piping to `sh` if
+`/opt/homebrew` is not writable or when you want a user-local recovery install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/naveenshaji/autopsy/main/scripts/install-release.sh | AUTOPSY_INSTALL_PREFIX="$HOME/.local" sh -s -- v0.1.30
+```
 
 ## Python/Pip Installs
 

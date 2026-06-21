@@ -34,9 +34,17 @@ fi
 
 if [ -z "$VERSION" ]; then
   VERSION="$(
-    curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" |
+    curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null |
       sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' |
-      head -1
+      head -1 || true
+  )"
+fi
+
+if [ -z "$VERSION" ]; then
+  VERSION="$(
+    curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" 2>/dev/null |
+      sed -n 's#.*/tag/\([^/?#]*\).*#\1#p' |
+      head -1 || true
   )"
 fi
 
