@@ -1143,6 +1143,15 @@ def refresh_activity_snapshot_for_worker(module, falkor: dict, tool, workspace: 
         pass
 
 
+def attach_auto_backup_after_worker_write(module, response: dict, graph, workspace: dict, *, reason: str) -> dict:
+    if not isinstance(response, dict) or response.get('blocked'):
+        return response
+    attach = getattr(module, 'attach_auto_backup_after_write', None)
+    if not callable(attach):
+        return response
+    return attach(response, graph, workspace, reason=reason) or response
+
+
 def handle_memory_consult(payload: dict) -> dict:
     request = payload.get('request') or {}
     tool, module, workspace, embeddings_config, embeddings_status, falkor = require_falkor_context(payload)
@@ -1270,10 +1279,10 @@ def handle_memory_neighbors(payload: dict) -> dict:
 
 def handle_memory_observe(payload: dict) -> dict:
     request = payload.get('request') or {}
-    tool, _module, workspace, _embeddings_config, _embeddings_status, falkor = require_falkor_context(payload, include_embeddings_status=False)
-    return run_falkor_operation(
-        falkor,
-        lambda graph: falkor['module'].build_observe_payload(
+    tool, module, workspace, _embeddings_config, _embeddings_status, falkor = require_falkor_context(payload, include_embeddings_status=False)
+
+    def observe(graph):
+        response = module.build_observe_payload(
             graph,
             tool=tool,
             workspace=workspace,
@@ -1283,8 +1292,12 @@ def handle_memory_observe(payload: dict) -> dict:
             title=str(request.get('title') or ''),
             write=bool(request.get('write')),
             write_if_stale=bool(request.get('write_if_stale')),
-        ),
-    )
+        )
+        if bool(response.get('written')):
+            attach_auto_backup_after_worker_write(module, response, graph, workspace, reason='worker_observe')
+        return response
+
+    return run_falkor_operation(falkor, observe)
 
 
 def handle_memory_consolidate_session(payload: dict) -> dict:
@@ -1304,6 +1317,7 @@ def handle_memory_consolidate_session(payload: dict) -> dict:
         )
         if bool(request.get('write')) and str((response.get('workflow') or {}).get('status') or '') == 'ok':
             module.refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
+            attach_auto_backup_after_worker_write(module, response, graph, workspace, reason='worker_consolidate_session')
         return response
 
     return run_falkor_operation(falkor, consolidate_session)
@@ -1327,6 +1341,7 @@ def handle_memory_import_session(payload: dict) -> dict:
         )
         if not bool(request.get('dry_run')) and str((response.get('workflow') or {}).get('status') or '') == 'ok':
             module.refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
+            attach_auto_backup_after_worker_write(module, response, graph, workspace, reason='worker_import_session')
         return response
 
     return run_falkor_operation(falkor, import_session)
@@ -1398,6 +1413,7 @@ def handle_memory_expire(payload: dict) -> dict:
             clear=bool(request.get('clear')),
         )
         module.refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
+        attach_auto_backup_after_worker_write(module, response, graph, workspace, reason='worker_expire_item')
         return response
 
     return run_falkor_operation(falkor, expire_item)
@@ -1426,6 +1442,7 @@ def handle_memory_pin(payload: dict) -> dict:
             clear=bool(request.get('clear')),
         )
         module.refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
+        attach_auto_backup_after_worker_write(module, response, graph, workspace, reason='worker_pin_item')
         return response
 
     return run_falkor_operation(falkor, pin_item)
@@ -1534,6 +1551,7 @@ def handle_memory_graph_note_create(payload: dict) -> dict:
                 response['created_relations'] = relations
         response['write_quality'] = write_quality
         module.refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
+        attach_auto_backup_after_worker_write(module, response, graph, workspace, reason='worker_create_note')
         return response
 
     return run_falkor_operation(
@@ -1581,6 +1599,7 @@ def handle_memory_graph_item_update(payload: dict) -> dict:
         )
         response['write_quality'] = write_quality
         module.refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
+        attach_auto_backup_after_worker_write(module, response, graph, workspace, reason='worker_update_item')
         return response
 
     return run_falkor_operation(
@@ -1592,9 +1611,10 @@ def handle_memory_graph_item_update(payload: dict) -> dict:
 def handle_memory_graph_conflict_resolve(payload: dict) -> dict:
     request = payload.get('request') or {}
     tool, _module, workspace, _embeddings_config, _embeddings_status, falkor = require_falkor_context(payload)
-    response = run_falkor_operation(
-        falkor,
-        lambda graph: falkor['module'].resolve_graph_conflict_payload(
+    module = falkor['module']
+
+    def resolve_conflict(graph):
+        response = module.resolve_graph_conflict_payload(
             graph,
             tool=tool,
             workspace=workspace,
@@ -1602,10 +1622,12 @@ def handle_memory_graph_conflict_resolve(payload: dict) -> dict:
             superseded_stable_keys=[str(value) for value in (request.get('superseded_stable_keys') or [])],
             relation=str(request.get('relation') or ''),
             summary=str(request.get('summary') or '') or None,
-        ),
-    )
-    refresh_activity_snapshot_for_worker(falkor['module'], falkor, tool, workspace)
-    return response
+        )
+        module.refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
+        attach_auto_backup_after_worker_write(module, response, graph, workspace, reason='worker_conflict_resolve')
+        return response
+
+    return run_falkor_operation(falkor, resolve_conflict)
 
 
 def handle_memory_graph_item_delete(payload: dict) -> dict:
@@ -1621,7 +1643,9 @@ def handle_memory_graph_item_delete(payload: dict) -> dict:
             stable_key=stable_key,
         )
         module.refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
-        return {"deleted": True, "stable_key": stable_key}
+        response = {"deleted": True, "stable_key": stable_key}
+        attach_auto_backup_after_worker_write(module, response, graph, workspace, reason='worker_delete_item')
+        return response
 
     return run_falkor_operation(falkor, delete_item)
 

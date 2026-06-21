@@ -477,6 +477,50 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
         self.assertFalse(payload["write"])
         self.assertTrue(payload["write_if_stale"])
 
+    def test_observe_route_attaches_auto_backup_after_written_observation(self):
+        worker = load_worker_module()
+        original = worker.run_falkor_operation
+        original_context = worker.require_falkor_context
+
+        class Tool:
+            def workspace_payload(self, workspace):
+                return workspace
+
+        calls = []
+
+        class Module:
+            def build_observe_payload(self, *_args, **kwargs):
+                calls.append({"write": kwargs["write"], "write_if_stale": kwargs["write_if_stale"]})
+                return {
+                    "written": True,
+                    "workflow": {"status": "written", "complete": True},
+                }
+
+            def attach_auto_backup_after_write(self, response, _graph, workspace, *, reason):
+                calls.append({"backup_reason": reason, "root_path": workspace["root_path"]})
+                response["auto_backup"] = {"status": "skipped", "reason": reason}
+                response["write_recovery"] = {"backup_complete": True}
+                return response
+
+        module = Module()
+        worker.require_falkor_context = lambda *_args, **_kwargs: (Tool(), module, {"root_path": "/tmp/autopsy-test"}, None, None, {"module": module, "graph_name": "autopsy_test"})
+        worker.run_falkor_operation = lambda _falkor, operation: operation(object())
+        try:
+            payload = worker.handle_memory_observe({"request": {"stable_key": "graph-note:seed", "write": True}})
+        finally:
+            worker.run_falkor_operation = original
+            worker.require_falkor_context = original_context
+
+        self.assertEqual(payload["auto_backup"]["reason"], "worker_observe")
+        self.assertTrue(payload["write_recovery"]["backup_complete"])
+        self.assertEqual(
+            calls,
+            [
+                {"write": True, "write_if_stale": False},
+                {"backup_reason": "worker_observe", "root_path": "/tmp/autopsy-test"},
+            ],
+        )
+
     def test_worker_note_create_returns_blocked_missing_relation_payload(self):
         worker = load_worker_module()
         original = worker.run_falkor_operation
@@ -527,6 +571,83 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
         self.assertEqual(payload["operation"], "create")
         self.assertEqual(calls, [])
 
+    def test_worker_note_create_attaches_auto_backup_after_write(self):
+        worker = load_worker_module()
+        original = worker.run_falkor_operation
+        original_context = worker.require_falkor_context
+
+        class Tool:
+            def workspace_payload(self, workspace):
+                return workspace
+
+        calls = []
+
+        class Module:
+            class MissingRelationTargetsError(Exception):
+                pass
+
+            def relation_specs_from_mapping(self, _request):
+                return []
+
+            def relation_target_records(self, *_args, **_kwargs):
+                return []
+
+            def build_write_quality_payload(self, *_args, **_kwargs):
+                return {"complete": True, "warnings": []}
+
+            def write_quality_blocks_write(self, _write_quality):
+                return False
+
+            def create_graph_note_payload(self, *_args, **_kwargs):
+                calls.append("create")
+                return {"item": {"stableKey": "graph-note:new"}}
+
+            def payload_item_stable_key(self, _response):
+                return "graph-note:new"
+
+            def create_requested_fact_relations_from_specs(self, *_args, **_kwargs):
+                return []
+
+            def refresh_activity_snapshot(self, *_args, **_kwargs):
+                calls.append("refresh")
+
+            def current_write_thread_id(self, _thread_id):
+                return None
+
+            def attach_auto_backup_after_write(self, response, _graph, workspace, *, reason):
+                calls.append({"backup_reason": reason, "root_path": workspace["root_path"]})
+                response["auto_backup"] = {"status": "skipped", "reason": reason}
+                response["write_recovery"] = {"backup_complete": True}
+                return response
+
+        module = Module()
+        worker.require_falkor_context = lambda *_args, **_kwargs: (Tool(), module, {"root_path": "/tmp/autopsy-test"}, None, None, {"module": module, "graph_name": "autopsy_test"})
+        worker.run_falkor_operation = lambda _falkor, operation: operation(object())
+        try:
+            payload = worker.handle_memory_graph_note_create(
+                {
+                    "request": {
+                        "title": "Created from worker",
+                        "content": "This should be backed up after writing.",
+                        "no_relations_ok": True,
+                    }
+                }
+            )
+        finally:
+            worker.run_falkor_operation = original
+            worker.require_falkor_context = original_context
+
+        self.assertEqual(payload["auto_backup"]["reason"], "worker_create_note")
+        self.assertTrue(payload["write_recovery"]["backup_complete"])
+        self.assertEqual(
+            calls,
+            [
+                "create",
+                "refresh",
+                {"backup_reason": "worker_create_note", "root_path": "/tmp/autopsy-test"},
+            ],
+        )
+
     def test_worker_update_missing_source_returns_blocked_payload_before_write_quality(self):
         worker = load_worker_module()
         original = worker.run_falkor_operation
@@ -574,6 +695,77 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
         self.assertEqual(payload["operation"], "update")
         self.assertEqual(calls, [])
 
+    def test_worker_update_attaches_auto_backup_after_write(self):
+        worker = load_worker_module()
+        original = worker.run_falkor_operation
+        original_context = worker.require_falkor_context
+
+        class Tool:
+            def workspace_payload(self, workspace):
+                return workspace
+
+        calls = []
+
+        class Module:
+            def lookup_node_by_stable_key(self, _graph, stable_key):
+                return {"stable_key": stable_key}
+
+            def build_write_quality_payload(self, *_args, **_kwargs):
+                return {"complete": True, "warnings": []}
+
+            def write_quality_blocks_write(self, _write_quality):
+                return False
+
+            def update_graph_item_payload(self, _graph, *, stable_key, kind, title, content, **_kwargs):
+                calls.append({"update": stable_key, "kind": kind, "title": title, "content": content})
+                return {"item": {"stableKey": stable_key}}
+
+            def current_write_thread_id(self, _thread_id):
+                return None
+
+            def refresh_activity_snapshot(self, *_args, **_kwargs):
+                calls.append("refresh")
+
+            def attach_auto_backup_after_write(self, response, _graph, workspace, *, reason):
+                calls.append({"backup_reason": reason, "root_path": workspace["root_path"]})
+                response["auto_backup"] = {"status": "skipped", "reason": reason}
+                response["write_recovery"] = {"backup_complete": True}
+                return response
+
+        module = Module()
+        worker.require_falkor_context = lambda *_args, **_kwargs: (Tool(), module, {"root_path": "/tmp/autopsy-test"}, None, None, {"module": module, "graph_name": "autopsy_test"})
+        worker.run_falkor_operation = lambda _falkor, operation: operation(object())
+        try:
+            payload = worker.handle_memory_graph_item_update(
+                {
+                    "request": {
+                        "stable_key": "graph-note:update-me",
+                        "kind": "attempt",
+                        "title": "Updated",
+                        "content": "Updated memory content.",
+                    }
+                }
+            )
+        finally:
+            worker.run_falkor_operation = original
+            worker.require_falkor_context = original_context
+
+        self.assertEqual(payload["auto_backup"]["reason"], "worker_update_item")
+        self.assertTrue(payload["write_recovery"]["backup_complete"])
+        self.assertEqual(
+            calls,
+            [
+                {
+                    "update": "graph-note:update-me",
+                    "kind": "attempt",
+                    "title": "Updated",
+                    "content": "Updated memory content.",
+                },
+                "refresh",
+                {"backup_reason": "worker_update_item", "root_path": "/tmp/autopsy-test"},
+            ],
+        )
+
     def test_worker_delete_missing_source_returns_blocked_payload_before_delete(self):
         worker = load_worker_module()
         original = worker.run_falkor_operation
@@ -610,6 +802,134 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
         self.assertEqual(payload["reason"], "missing_memory_item")
         self.assertEqual(payload["operation"], "delete")
         self.assertEqual(calls, [])
+
+    def test_worker_delete_attaches_auto_backup_after_write(self):
+        worker = load_worker_module()
+        original = worker.run_falkor_operation
+        original_context = worker.require_falkor_context
+
+        class Tool:
+            def workspace_payload(self, workspace):
+                return workspace
+
+        calls = []
+
+        class Module:
+            def lookup_node_by_stable_key(self, _graph, stable_key):
+                return {"stable_key": stable_key}
+
+            def delete_graph_item_payload(self, _graph, *, stable_key):
+                calls.append({"delete": stable_key})
+
+            def refresh_activity_snapshot(self, *_args, **_kwargs):
+                calls.append("refresh")
+
+            def attach_auto_backup_after_write(self, response, _graph, workspace, *, reason):
+                calls.append({"backup_reason": reason, "root_path": workspace["root_path"]})
+                response["auto_backup"] = {"status": "skipped", "reason": reason}
+                response["write_recovery"] = {"backup_complete": True}
+                return response
+
+        module = Module()
+        worker.require_falkor_context = lambda *_args, **_kwargs: (Tool(), module, {"root_path": "/tmp/autopsy-test"}, None, None, {"module": module, "graph_name": "autopsy_test"})
+        worker.run_falkor_operation = lambda _falkor, operation: operation(object())
+        try:
+            payload = worker.handle_memory_graph_item_delete({"request": {"stable_key": "graph-note:delete-me"}})
+        finally:
+            worker.run_falkor_operation = original
+            worker.require_falkor_context = original_context
+
+        self.assertTrue(payload["deleted"])
+        self.assertEqual(payload["stable_key"], "graph-note:delete-me")
+        self.assertEqual(payload["auto_backup"]["reason"], "worker_delete_item")
+        self.assertEqual(
+            calls,
+            [
+                {"delete": "graph-note:delete-me"},
+                "refresh",
+                {"backup_reason": "worker_delete_item", "root_path": "/tmp/autopsy-test"},
+            ],
+        )
+
+    def test_worker_conflict_resolve_attaches_auto_backup_after_write(self):
+        worker = load_worker_module()
+        original = worker.run_falkor_operation
+        original_context = worker.require_falkor_context
+
+        class Tool:
+            def workspace_payload(self, workspace):
+                return workspace
+
+        calls = []
+
+        class Module:
+            def resolve_graph_conflict_payload(
+                self,
+                _graph,
+                *,
+                current_stable_key,
+                superseded_stable_keys,
+                relation,
+                summary,
+                **_kwargs,
+            ):
+                calls.append(
+                    {
+                        "current": current_stable_key,
+                        "superseded": superseded_stable_keys,
+                        "relation": relation,
+                        "summary": summary,
+                    }
+                )
+                return {
+                    "resolved": True,
+                    "current_stable_key": current_stable_key,
+                    "superseded_stable_keys": superseded_stable_keys,
+                }
+
+            def refresh_activity_snapshot(self, *_args, **_kwargs):
+                calls.append("refresh")
+
+            def attach_auto_backup_after_write(self, response, _graph, workspace, *, reason):
+                calls.append({"backup_reason": reason, "root_path": workspace["root_path"]})
+                response["auto_backup"] = {"status": "skipped", "reason": reason}
+                response["write_recovery"] = {"backup_complete": True}
+                return response
+
+        module = Module()
+        worker.require_falkor_context = lambda *_args, **_kwargs: (Tool(), module, {"root_path": "/tmp/autopsy-test"}, None, None, {"module": module, "graph_name": "autopsy_test"})
+        worker.run_falkor_operation = lambda _falkor, operation: operation(object())
+        try:
+            payload = worker.handle_memory_graph_conflict_resolve(
+                {
+                    "request": {
+                        "current_stable_key": "graph-note:current",
+                        "superseded_stable_keys": ["graph-note:old"],
+                        "relation": "supersedes",
+                        "summary": "Current memory replaces the stale one.",
+                    }
+                }
+            )
+        finally:
+            worker.run_falkor_operation = original
+            worker.require_falkor_context = original_context
+
+        self.assertTrue(payload["resolved"])
+        self.assertEqual(payload["auto_backup"]["reason"], "worker_conflict_resolve")
+        self.assertTrue(payload["write_recovery"]["backup_complete"])
+        self.assertEqual(
+            calls,
+            [
+                {
+                    "current": "graph-note:current",
+                    "superseded": ["graph-note:old"],
+                    "relation": "supersedes",
+                    "summary": "Current memory replaces the stale one.",
+                },
+                "refresh",
+                {"backup_reason": "worker_conflict_resolve", "root_path": "/tmp/autopsy-test"},
+            ],
+        )
 
     def test_worker_item_missing_key_returns_blocked_payload_before_detail_fetch(self):
         worker = load_worker_module()
@@ -753,6 +1073,12 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
             def refresh_activity_snapshot(self, *_args, **_kwargs):
                 calls.append("refresh")
 
+            def attach_auto_backup_after_write(self, response, _graph, workspace, *, reason):
+                calls.append({"backup_reason": reason, "root_path": workspace["root_path"]})
+                response["auto_backup"] = {"status": "skipped", "reason": reason}
+                response["write_recovery"] = {"backup_complete": True}
+                return response
+
         module = Module()
         worker.require_falkor_context = lambda *_args, **_kwargs: (Tool(), module, {"root_path": "/tmp/autopsy-test"}, None, None, {"module": module, "graph_name": "autopsy_test"})
         worker.run_falkor_operation = lambda _falkor, operation: operation(object())
@@ -774,6 +1100,8 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
 
         self.assertEqual(payload["written"]["stable_key"], "graph-note:consolidated")
         self.assertEqual(payload["workspace"]["root_path"], "/tmp/autopsy-test")
+        self.assertEqual(payload["auto_backup"]["reason"], "worker_consolidate_session")
+        self.assertTrue(payload["write_recovery"]["backup_complete"])
         self.assertEqual(
             calls,
             [
@@ -785,6 +1113,7 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
                     "write": True,
                 },
                 "refresh",
+                {"backup_reason": "worker_consolidate_session", "root_path": "/tmp/autopsy-test"},
             ],
         )
 
@@ -939,6 +1268,12 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
             def refresh_activity_snapshot(self, *_args, **_kwargs):
                 calls.append("refresh")
 
+            def attach_auto_backup_after_write(self, response, _graph, workspace, *, reason):
+                calls.append({"backup_reason": reason, "root_path": workspace["root_path"]})
+                response["auto_backup"] = {"status": "skipped", "reason": reason}
+                response["write_recovery"] = {"backup_complete": True}
+                return response
+
         module = Module()
         worker.require_falkor_context = lambda *_args, **_kwargs: (Tool(), module, {"root_path": "/tmp/autopsy-test"}, None, None, {"module": module, "graph_name": "autopsy_test"})
         worker.run_falkor_operation = lambda _falkor, operation: operation(object())
@@ -961,6 +1296,8 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
 
         self.assertEqual(payload["imported"]["session_node"], "session-import:abc")
         self.assertEqual(payload["workspace"]["root_path"], "/tmp/autopsy-test")
+        self.assertEqual(payload["auto_backup"]["reason"], "worker_import_session")
+        self.assertTrue(payload["write_recovery"]["backup_complete"])
         self.assertEqual(
             calls,
             [
@@ -973,6 +1310,7 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
                     "repository_root_path": "/tmp/repo",
                 },
                 "refresh",
+                {"backup_reason": "worker_import_session", "root_path": "/tmp/autopsy-test"},
             ],
         )
 
@@ -1124,6 +1462,12 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
             def refresh_activity_snapshot(self, *_args, **_kwargs):
                 calls.append("refresh")
 
+            def attach_auto_backup_after_write(self, response, _graph, workspace, *, reason):
+                calls.append({"backup_reason": reason, "root_path": workspace["root_path"]})
+                response["auto_backup"] = {"status": "skipped", "reason": reason}
+                response["write_recovery"] = {"backup_complete": True}
+                return response
+
         module = Module()
         worker.require_falkor_context = lambda *_args, **_kwargs: (Tool(), module, {"root_path": "/tmp/autopsy-test"}, None, None, {"module": module, "graph_name": "autopsy_test"})
         worker.run_falkor_operation = lambda _falkor, operation: operation(object())
@@ -1144,6 +1488,8 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
 
         self.assertEqual(payload["lifecycle_operation"]["operation"], "expire")
         self.assertEqual(payload["workspace"]["root_path"], "/tmp/autopsy-test")
+        self.assertEqual(payload["auto_backup"]["reason"], "worker_expire_item")
+        self.assertTrue(payload["write_recovery"]["backup_complete"])
         self.assertEqual(
             calls,
             [
@@ -1154,6 +1500,7 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
                     "clear": False,
                 },
                 "refresh",
+                {"backup_reason": "worker_expire_item", "root_path": "/tmp/autopsy-test"},
             ],
         )
 
@@ -1248,6 +1595,12 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
             def refresh_activity_snapshot(self, *_args, **_kwargs):
                 calls.append("refresh")
 
+            def attach_auto_backup_after_write(self, response, _graph, workspace, *, reason):
+                calls.append({"backup_reason": reason, "root_path": workspace["root_path"]})
+                response["auto_backup"] = {"status": "skipped", "reason": reason}
+                response["write_recovery"] = {"backup_complete": True}
+                return response
+
         module = Module()
         worker.require_falkor_context = lambda *_args, **_kwargs: (Tool(), module, {"root_path": "/tmp/autopsy-test"}, None, None, {"module": module, "graph_name": "autopsy_test"})
         worker.run_falkor_operation = lambda _falkor, operation: operation(object())
@@ -1271,6 +1624,8 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
 
         self.assertEqual(payload["core_memory_operation"]["operation"], "pin")
         self.assertEqual(payload["workspace"]["root_path"], "/tmp/autopsy-test")
+        self.assertEqual(payload["auto_backup"]["reason"], "worker_pin_item")
+        self.assertTrue(payload["write_recovery"]["backup_complete"])
         self.assertEqual(
             calls,
             [
@@ -1285,6 +1640,7 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
                     "clear": False,
                 },
                 "refresh",
+                {"backup_reason": "worker_pin_item", "root_path": "/tmp/autopsy-test"},
             ],
         )
 
