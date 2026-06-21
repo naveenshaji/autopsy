@@ -7,9 +7,11 @@ import importlib.metadata
 import json
 import sys
 
+from . import __version__
+
 
 PACKAGE_NAME = "autopsy-memory"
-FALLBACK_VERSION = "0.1.12"
+FALLBACK_VERSION = __version__
 
 AGENT_INSTRUCTIONS = """## Autopsy Memory Usage
 

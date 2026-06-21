@@ -11,8 +11,10 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+import autopsy_memory
 from autopsy_memory import cli
 from autopsy_memory import doctor
+from autopsy_memory import metadata
 from autopsy_memory import mcp_bridge
 from autopsy_memory import worker
 
@@ -35,6 +37,14 @@ class AutopsyCLIContractTests(unittest.TestCase):
         payload = json.loads(stream.getvalue())
         self.assertEqual(payload["package"], "autopsy-memory")
         self.assertRegex(payload["version"], r"^\d+\.\d+\.\d+")
+
+    def test_package_version_falls_back_to_source_version(self):
+        with mock.patch.object(
+            metadata.importlib.metadata,
+            "version",
+            side_effect=metadata.importlib.metadata.PackageNotFoundError("autopsy-memory"),
+        ):
+            self.assertEqual(metadata.package_version(), autopsy_memory.__version__)
 
     def test_default_unified_memory_root_is_neutral_app_support_path(self):
         defaults = [
