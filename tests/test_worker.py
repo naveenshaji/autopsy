@@ -75,6 +75,82 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
         self.assertEqual(payload["workflow"]["next_step"], "restore_or_repair_embedded_memory_snapshot")
         self.assertEqual(payload["request"], {"repo": "/tmp/repo"})
 
+    def test_maybe_load_falkor_context_resets_lite_client_on_rollback(self):
+        worker = load_worker_module()
+        original_settings = worker.falkor_backend_settings
+        reset_calls: list[str] = []
+        sync_called: list[bool] = []
+
+        class MemoryDatabaseRollbackError(RuntimeError):
+            pass
+
+        class Module:
+            def workspace_graph_name(self, graph_name, _workspace):
+                return graph_name
+
+            def ensure_workspace_graph(self, **_kwargs):
+                raise MemoryDatabaseRollbackError("Autopsy memory database rollback detected")
+
+            def sync_workspace_payload(self, *_args, **_kwargs):
+                sync_called.append(True)
+
+            def reset_falkordb_lite_client(self, lite_path):
+                reset_calls.append(lite_path)
+
+        worker.falkor_backend_settings = lambda: {
+            "host": "127.0.0.1",
+            "port": 6381,
+            "graph_name": "autopsy_memory",
+            "lite_path": "/tmp/stale-autopsy.db",
+        }
+        try:
+            with self.assertRaises(MemoryDatabaseRollbackError):
+                worker.maybe_load_falkor_context(
+                    {"tool_path": "/tmp/autopsy-cli.py"},
+                    {"root_path": "/tmp/repo"},
+                    Module(),
+                    {},
+                )
+        finally:
+            worker.falkor_backend_settings = original_settings
+            worker._FALKOR_CONTEXT_CACHE.clear()
+
+        self.assertEqual(reset_calls, ["/tmp/stale-autopsy.db"])
+        self.assertEqual(sync_called, [])
+
+    def test_run_falkor_operation_does_not_retry_after_rollback(self):
+        worker = load_worker_module()
+        reset_calls: list[str] = []
+        ensure_calls: list[str] = []
+        operation_calls: list[bool] = []
+
+        class MemoryDatabaseRollbackError(RuntimeError):
+            pass
+
+        class Module:
+            def ensure_graph(self, _host, _port, graph_name, lite_path=None):
+                ensure_calls.append(f"{graph_name}:{lite_path}")
+                raise MemoryDatabaseRollbackError("Autopsy memory database rollback detected")
+
+            def reset_falkordb_lite_client(self, lite_path):
+                reset_calls.append(lite_path)
+
+        with self.assertRaises(MemoryDatabaseRollbackError):
+            worker.run_falkor_operation(
+                {
+                    "module": Module(),
+                    "host": "127.0.0.1",
+                    "port": 6381,
+                    "graph_name": "autopsy_memory",
+                    "lite_path": "/tmp/stale-autopsy.db",
+                },
+                lambda _graph: operation_calls.append(True),
+            )
+
+        self.assertEqual(ensure_calls, ["autopsy_memory:/tmp/stale-autopsy.db"])
+        self.assertEqual(reset_calls, ["/tmp/stale-autopsy.db"])
+        self.assertEqual(operation_calls, [])
+
     def test_diagnostics_route_does_not_open_falkor_context(self):
         worker = load_worker_module()
         original_context = worker.require_falkor_context

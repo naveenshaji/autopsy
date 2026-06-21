@@ -2347,7 +2347,11 @@ def backup_stale_falkordb_lite_settings(lite_path: str | None) -> str | None:
 def falkordb_lite_client_rollback_risk(client, resolved_path: str) -> dict[str, Any]:
     if not memory_database_guard_enabled():
         return {"policy": MEMORY_DATABASE_GUARD_POLICY, "ok": True, "disabled": True}
-    graph_names = sorted(_FALKORDB_LITE_GRAPH_NAMES.get(resolved_path) or [])
+    sidecar = read_memory_database_guard_sidecar(resolved_path)
+    graph_names = sorted({
+        *(str(name) for name in (_FALKORDB_LITE_GRAPH_NAMES.get(resolved_path) or []) if str(name)),
+        *memory_database_guard_sidecar_graphs(sidecar).keys(),
+    })
     if not graph_names:
         return {"policy": MEMORY_DATABASE_GUARD_POLICY, "ok": True, "graphs": []}
     checked: list[dict[str, Any]] = []
@@ -2362,7 +2366,7 @@ def falkordb_lite_client_rollback_risk(client, resolved_path: str) -> dict[str, 
             return {
                 "policy": MEMORY_DATABASE_GUARD_POLICY,
                 "ok": False,
-                "reason": "graph_generation_behind_sidecar",
+                "reason": "embedded_database_contains_graph_generation_behind_sidecar",
                 "stale_graph": state,
                 "graphs": checked,
             }
@@ -10288,6 +10292,7 @@ def context_block_section_title(section: str) -> str:
         "procedures": "Procedures",
         "observations": "Observations",
         "retrieved_memory": "Retrieved Memory",
+        "weak_signals": "Weak Signals",
         "related_memory": "Related Memory",
         "relations": "Relations",
         "active_now": "Active Now",
@@ -11464,12 +11469,13 @@ def build_context_pack_payload(
     relationship_hits = list((consult_payload or {}).get("relationship_hits") or [])
     read_guard = (consult_payload or {}).get("read_guard") if isinstance(consult_payload, dict) else {}
     read_guard_blocked_count = int((read_guard or {}).get("blocked_count") or 0) if isinstance(read_guard, dict) else 0
-    weak_candidates = (
-        list((consult_payload or {}).get("relationship_candidate_hits") or [])
-        + list((consult_payload or {}).get("vector_only_hits") or [])
-        + list((consult_payload or {}).get("lexical_only_hits") or [])
-        + list((consult_payload or {}).get("entity_only_hits") or [])
-    )
+    weak_candidate_sources = [
+        ("relationship_candidate", list((consult_payload or {}).get("relationship_candidate_hits") or [])),
+        ("vector_only", list((consult_payload or {}).get("vector_only_hits") or [])),
+        ("lexical_only", list((consult_payload or {}).get("lexical_only_hits") or [])),
+        ("entity_only", list((consult_payload or {}).get("entity_only_hits") or [])),
+    ]
+    weak_candidates = [candidate for _source, candidates in weak_candidate_sources for candidate in candidates]
 
     core_sections = {
         "pinned_memory": [compact_context_item(item, max_body_chars=360) for item in list(status.get("pinned_memory") or [])],
@@ -11528,6 +11534,30 @@ def build_context_pack_payload(
             if not bool(compacted["lineage"].get("current", True)):
                 continue
         related_memory_items.append(compacted)
+    related_memory_keys = {str(item.get("stable_key") or "") for item in related_memory_items if str(item.get("stable_key") or "")}
+    weak_signal_candidates: list[dict[str, Any]] = []
+    weak_seen: set[str] = set()
+    weak_excluded = pinned_keys | retrieved_keys | related_memory_keys
+    for source, candidates in weak_candidate_sources:
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            stable_key = str(candidate.get("stable_key") or candidate.get("stableKey") or "")
+            dedupe_key = stable_key or f"{source}:{context_item_title(candidate)}:{context_item_body(candidate, max_chars=160)}"
+            if not dedupe_key or dedupe_key in weak_seen or (stable_key and stable_key in weak_excluded):
+                continue
+            weak_seen.add(dedupe_key)
+            compacted = compact_context_item(candidate, max_body_chars=260)
+            compacted["signal_source"] = source
+            compacted["weak"] = True
+            for key in ("source_stable_key", "target_stable_key", "predicate", "fact_text", "relationship_score", "entity_matches", "retrieval_reasons"):
+                if candidate.get(key) not in (None, "", []):
+                    compacted[key] = candidate.get(key)
+            weak_signal_candidates.append(compacted)
+            if len(weak_signal_candidates) >= 6:
+                break
+        if len(weak_signal_candidates) >= 6:
+            break
 
     entries: list[dict[str, Any]] = []
     used_chars = 0
@@ -11645,6 +11675,29 @@ def build_context_pack_payload(
         )
         truncated = truncated or was_truncated
 
+    for item in weak_signal_candidates:
+        stable_key = str(item.get("stable_key") or "")
+        source = str(item.get("signal_source") or "side_channel").replace("_", "-")
+        text = f"weak {source}: {item['kind'] or 'memory'}: {item['title']}"
+        if item.get("summary"):
+            text = f"{text} - {item['summary']}"
+        fact_text = summary_snippet(str(item.get("fact_text") or ""), limit=160)
+        if fact_text:
+            text = f"{text} [candidate relation: {fact_text}]"
+        text = f"{text} [weak: inspect the exact item before relying]"
+        used_chars, was_truncated = append_context_entry(
+            entries,
+            {
+                "section": "weak_signals",
+                "priority": 2,
+                "stable_key": stable_key,
+                "text": text,
+            },
+            max_chars=max_chars,
+            used_chars=used_chars,
+        )
+        truncated = truncated or was_truncated
+
     seen_entry_keys: set[str] = set()
     for section, items in core_sections.items():
         if section == "pinned_memory":
@@ -11680,6 +11733,9 @@ def build_context_pack_payload(
     stable_keys = [
         str(item.get("stable_key") or item.get("stableKey") or "")
         for item in inspected_items + consult_hits
+    ] + [
+        str(item.get("stable_key") or "")
+        for item in weak_signal_candidates
     ] + core_followup_keys
     reliable_hit_count = len(consult_hits) if consult_payload else 0
     weak_signal_count = len(weak_candidates) if consult_payload else 0
@@ -11738,6 +11794,7 @@ def build_context_pack_payload(
             "filters": ((consult_payload or {}).get("routing") or {}).get("filters") if isinstance((consult_payload or {}).get("routing"), dict) else {},
             "hit_count": reliable_hit_count,
             "weak_signal_count": weak_signal_count,
+            "weak_signal_candidates": weak_signal_candidates,
             "stale_hit_count": stale_retrieved_count,
             "hits": consult_hits,
             "items": retrieved,

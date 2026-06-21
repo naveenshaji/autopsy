@@ -746,14 +746,19 @@ def maybe_load_falkor_context(payload: dict, workspace: dict, module, embeddings
             validated_at = float(cached.get('validated_at') or 0.0)
             if now - validated_at < _FALKOR_VALIDATION_TTL_SECONDS:
                 return cached
-        graph, resolved_graph_name = module.ensure_workspace_graph(
-            workspace=workspace,
-            host=settings['host'],
-            port=settings['port'],
-            graph_name_base=settings['graph_name'],
-            lite_path=settings.get('lite_path'),
-        )
-        module.sync_workspace_payload(graph, workspace=workspace)
+        try:
+            graph, resolved_graph_name = module.ensure_workspace_graph(
+                workspace=workspace,
+                host=settings['host'],
+                port=settings['port'],
+                graph_name_base=settings['graph_name'],
+                lite_path=settings.get('lite_path'),
+            )
+            module.sync_workspace_payload(graph, workspace=workspace)
+        except Exception as exc:
+            if worker_memory_database_rollback_error(exc):
+                reset_falkor_lite_client(module, settings.get('lite_path'))
+            raise
         cached = {
             'module': module,
             'graph_name': resolved_graph_name,
@@ -766,19 +771,39 @@ def maybe_load_falkor_context(payload: dict, workspace: dict, module, embeddings
         return cached
 
 
-def run_falkor_operation(falkor: dict, operation):
-    graph = falkor['module'].ensure_graph(
-        falkor['host'],
-        falkor['port'],
-        falkor['graph_name'],
-        lite_path=falkor.get('lite_path'),
+def worker_memory_database_rollback_error(error: Exception | str) -> bool:
+    return (
+        error.__class__.__name__ == 'MemoryDatabaseRollbackError'
+        or 'Autopsy memory database rollback detected' in str(error)
     )
+
+
+def reset_falkor_lite_client(module, lite_path: str | None) -> None:
+    if not lite_path:
+        return
+    reset_lite_client = getattr(module, 'reset_falkordb_lite_client', None)
+    if callable(reset_lite_client):
+        reset_lite_client(lite_path)
+
+
+def run_falkor_operation(falkor: dict, operation):
+    try:
+        graph = falkor['module'].ensure_graph(
+            falkor['host'],
+            falkor['port'],
+            falkor['graph_name'],
+            lite_path=falkor.get('lite_path'),
+        )
+    except Exception as exc:
+        if worker_memory_database_rollback_error(exc):
+            reset_falkor_lite_client(falkor['module'], falkor.get('lite_path'))
+        raise
     try:
         return operation(graph)
-    except Exception:
-        reset_lite_client = getattr(falkor['module'], 'reset_falkordb_lite_client', None)
-        if callable(reset_lite_client):
-            reset_lite_client(falkor.get('lite_path'))
+    except Exception as exc:
+        reset_falkor_lite_client(falkor['module'], falkor.get('lite_path'))
+        if worker_memory_database_rollback_error(exc):
+            raise
         graph = falkor['module'].ensure_graph(
             falkor['host'],
             falkor['port'],

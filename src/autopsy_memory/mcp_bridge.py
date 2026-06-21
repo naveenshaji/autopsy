@@ -6,6 +6,7 @@ import json
 import os
 import re
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -21,6 +22,7 @@ SERVER_VERSION = "0.1.0"
 DEFAULT_GRAPH_NAME = "autopsy_memory"
 RELATION_FIELDS = ("informed_by", "answers", "supersedes", "reverts", "depends_on", "implements", "constrains", "refines")
 AUTOPSY_CELLAR_VERSION_RE = re.compile(r"/Cellar/autopsy-memory/([^/\s]+)/")
+REDISLITE_UNIX_SOCKET_RE = re.compile(r"(?:^|\s)unixsocket:([^\s]+)")
 
 
 class BridgeError(RuntimeError):
@@ -237,6 +239,57 @@ def terminate_pid(pid: Any) -> None:
         time.sleep(0.05)
 
 
+def wait_for_pid_exit(pid: Any, *, timeout: float) -> bool:
+    try:
+        value = int(pid)
+    except Exception:
+        return True
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    while time.monotonic() < deadline:
+        try:
+            os.kill(value, 0)
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            return False
+        time.sleep(0.05)
+    return False
+
+
+def redislite_unix_socket_from_command(command: str) -> str | None:
+    match = REDISLITE_UNIX_SOCKET_RE.search(str(command or ""))
+    if not match:
+        return None
+    value = match.group(1).strip().strip("'\"")
+    return value or None
+
+
+def redislite_shutdown_nosave(record: dict[str, Any], *, timeout: float = 1.0) -> bool:
+    socket_path = redislite_unix_socket_from_command(str(record.get("command") or ""))
+    if not socket_path or not Path(socket_path).exists():
+        return False
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(timeout)
+            sock.connect(socket_path)
+            sock.sendall(b"*2\r\n$8\r\nSHUTDOWN\r\n$6\r\nNOSAVE\r\n")
+            try:
+                sock.recv(16)
+            except OSError:
+                pass
+    except OSError:
+        return False
+    return True
+
+
+def terminate_redislite_record(record: dict[str, Any]) -> dict[str, Any]:
+    pid = int(record["pid"])
+    if redislite_shutdown_nosave(record) and wait_for_pid_exit(pid, timeout=3):
+        return {"pid": pid, "method": "shutdown_nosave"}
+    terminate_pid(pid)
+    return {"pid": pid, "method": "signal"}
+
+
 def clear_worker_info() -> None:
     try:
         info_file().unlink()
@@ -267,10 +320,12 @@ def read_falkor_settings() -> dict[str, Any] | None:
 def terminate_falkor_runtime_from_settings() -> dict[str, Any]:
     settings = read_falkor_settings() or {}
     pidfile = str(settings.get("pidfile") or "").strip()
+    unixsocket = str(settings.get("unixsocket") or "").strip()
     payload: dict[str, Any] = {
         "pidfile": pidfile or None,
         "pid": None,
         "terminated": False,
+        "termination_method": None,
         "settings_backup": None,
     }
     if pidfile:
@@ -280,8 +335,12 @@ def terminate_falkor_runtime_from_settings() -> dict[str, Any]:
         except Exception as exc:
             payload["pid_error"] = str(exc)
         if payload.get("pid"):
-            terminate_pid(payload["pid"])
+            termination = terminate_redislite_record({
+                "pid": payload["pid"],
+                "command": f"redis-server unixsocket:{unixsocket}" if unixsocket else "redis-server",
+            })
             payload["terminated"] = True
+            payload["termination_method"] = termination.get("method")
     payload["settings_backup"] = clear_stale_falkor_settings()
     return payload
 
@@ -426,18 +485,21 @@ def reap_stale_redislite_processes(*, expected_max: int = 2, cleanup_current_exc
         terminate_records.extend(record for record in remaining if int(record["pid"]) not in kept_pids)
 
     terminated: list[int] = []
+    termination_methods: list[dict[str, Any]] = []
     seen: set[int] = set()
     for record in terminate_records:
         pid = int(record["pid"])
         if pid in seen:
             continue
         seen.add(pid)
-        terminate_pid(pid)
+        termination = terminate_redislite_record(record)
         terminated.append(pid)
+        termination_methods.append(termination)
 
     after = annotate_redislite_process_records(redislite_process_records(), current_version=current_version)
     return {
         "terminated": terminated,
+        "termination_methods": termination_methods,
         "before_count": len(before),
         "after_count": len(after),
         "expected_max": expected,
@@ -540,9 +602,13 @@ def start_worker_locked() -> dict[str, Any]:
         return existing
 
     if existing:
+        try:
+            reap_stale_redislite_processes(expected_max=0, cleanup_current_excess=True)
+        except Exception:
+            pass
+        terminate_falkor_runtime_from_settings()
         terminate_pid(existing.get("pid"))
         clear_worker_info()
-        terminate_falkor_runtime_from_settings()
     reap_stale_worker_processes(info_path=info_file())
     reap_stale_redislite_processes(expected_max=0, cleanup_current_excess=True)
 

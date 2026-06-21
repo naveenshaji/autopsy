@@ -2770,6 +2770,75 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(client.client.shutdown_calls, [{"nosave": True, "save": False, "now": True, "force": True}])
         self.assertEqual(diagnostics[-1]["event"], "nosave_shutdown_due_to_rollback_risk")
 
+    def test_reset_falkordb_lite_client_checks_unopened_sidecar_graphs_before_saving(self):
+        class Result:
+            def __init__(self, rows):
+                self.result_set = rows
+
+        class Graph:
+            def __init__(self, name: str):
+                self.name = name
+
+            def query(self, query, params=None):
+                if "MATCH (guard:AutopsyMemoryGuard" in query and "RETURN coalesce(guard.generation, 0)" in query:
+                    generations = {
+                        "opened_graph": 3,
+                        "unopened_stale_graph": 4,
+                    }
+                    return Result([[generations.get(self.name, 0)]])
+                return Result([])
+
+        class InnerClient:
+            def __init__(self):
+                self.shutdown_calls: list[dict[str, object]] = []
+
+            def shutdown(self, **kwargs):
+                self.shutdown_calls.append(kwargs)
+
+        class Client:
+            def __init__(self):
+                self.client = InnerClient()
+                self.selected_graphs: list[str] = []
+
+            def select_graph(self, graph_name):
+                self.selected_graphs.append(graph_name)
+                return Graph(str(graph_name))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lite_path = str(Path(temp_dir) / "autopsy-memory.db")
+            log_path = Path(temp_dir) / "memory-guard.jsonl"
+            client = Client()
+            cli.write_memory_database_guard_sidecar(
+                lite_path,
+                graph_name="opened_graph",
+                generation=3,
+                updated_at="2026-06-11T00:00:00Z",
+            )
+            cli.write_memory_database_guard_sidecar(
+                lite_path,
+                graph_name="unopened_stale_graph",
+                generation=7,
+                updated_at="2026-06-12T00:00:00Z",
+            )
+            cli._FALKORDB_LITE_CLIENTS[lite_path] = client
+            cli._FALKORDB_LITE_GRAPH_NAMES[lite_path] = {"opened_graph"}
+            try:
+                with mock.patch.dict(os.environ, {"AUTOPSY_MEMORY_GUARD_LOG_PATH": str(log_path)}):
+                    cli.reset_falkordb_lite_client(lite_path)
+            finally:
+                cli._FALKORDB_LITE_CLIENTS.pop(lite_path, None)
+                cli._FALKORDB_LITE_GRAPH_NAMES.pop(lite_path, None)
+            diagnostics = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(client.client.shutdown_calls, [{"nosave": True, "save": False, "now": True, "force": True}])
+        self.assertIn("unopened_stale_graph", client.selected_graphs)
+        self.assertEqual(diagnostics[-1]["event"], "nosave_shutdown_due_to_rollback_risk")
+        self.assertEqual(
+            diagnostics[-1]["risk"]["reason"],
+            "embedded_database_contains_graph_generation_behind_sidecar",
+        )
+        self.assertEqual(diagnostics[-1]["risk"]["stale_graph"]["graph_name"], "unopened_stale_graph")
+
     def test_ensure_graph_closes_stale_embedded_snapshot_with_nosave_before_reraising(self):
         class Result:
             def __init__(self, rows):
@@ -3233,6 +3302,78 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["count"], 1)
         self.assertEqual(payload["cleanup"]["before_count"], 2)
         self.assertEqual(payload["cleanup"]["after_count"], 1)
+
+    def test_redislite_lifecycle_cleanup_prefers_shutdown_nosave(self):
+        old = {"pid": 31, "command": "/opt/homebrew/Cellar/autopsy-memory/0.1.27/libexec/lib/python3.12/site-packages/redislite/bin/redis-server unixsocket:/tmp/autopsy-old/redis.socket"}
+        current = {"pid": 32, "command": "/opt/homebrew/Cellar/autopsy-memory/0.1.28/libexec/lib/python3.12/site-packages/redislite/bin/redis-server unixsocket:/tmp/autopsy-current/redis.socket"}
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            mock.patch.object(mcp_bridge, "app_support_dir", return_value=Path(temp_dir)),
+            mock.patch.object(mcp_bridge, "process_cwd", side_effect=lambda _pid: str(Path(temp_dir) / "FalkorDB")),
+            mock.patch.object(mcp_bridge, "process_table_rows", side_effect=[[old, current], [current], [current]]),
+            mock.patch.object(mcp_bridge, "autopsy_distribution_version", return_value="0.1.28"),
+            mock.patch.object(mcp_bridge, "redislite_shutdown_nosave", return_value=True) as nosave,
+            mock.patch.object(mcp_bridge, "wait_for_pid_exit", return_value=True),
+            mock.patch.object(mcp_bridge, "terminate_pid") as terminate,
+        ):
+            payload = mcp_bridge.redislite_lifecycle_payload(expected_max=1, cleanup=True)
+
+        nosave.assert_called_once()
+        self.assertEqual(nosave.call_args.args[0]["pid"], 31)
+        self.assertEqual(nosave.call_args.args[0]["command"], old["command"])
+        terminate.assert_not_called()
+        self.assertEqual(payload["cleanup"]["terminated"], [31])
+        self.assertEqual(payload["cleanup"]["termination_methods"], [{"pid": 31, "method": "shutdown_nosave"}])
+
+    def test_redislite_lifecycle_cleanup_falls_back_to_signal_when_nosave_unavailable(self):
+        old = {"pid": 31, "command": "/opt/homebrew/Cellar/autopsy-memory/0.1.27/libexec/lib/python3.12/site-packages/redislite/bin/redis-server unixsocket:/tmp/autopsy-old/redis.socket"}
+        terminated: list[int] = []
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            mock.patch.object(mcp_bridge, "app_support_dir", return_value=Path(temp_dir)),
+            mock.patch.object(mcp_bridge, "process_cwd", return_value=str(Path(temp_dir) / "FalkorDB")),
+            mock.patch.object(mcp_bridge, "process_table_rows", side_effect=[[old], [], []]),
+            mock.patch.object(mcp_bridge, "autopsy_distribution_version", return_value="0.1.28"),
+            mock.patch.object(mcp_bridge, "redislite_shutdown_nosave", return_value=False),
+            mock.patch.object(mcp_bridge, "terminate_pid", side_effect=lambda pid: terminated.append(int(pid))),
+        ):
+            payload = mcp_bridge.redislite_lifecycle_payload(expected_max=0, cleanup=True)
+
+        self.assertEqual(terminated, [31])
+        self.assertEqual(payload["cleanup"]["terminated"], [31])
+        self.assertEqual(payload["cleanup"]["termination_methods"], [{"pid": 31, "method": "signal"}])
+
+    def test_terminate_falkor_runtime_from_settings_uses_shutdown_nosave(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            support_dir = Path(temp_dir)
+            runtime_dir = support_dir / "FalkorDB"
+            runtime_dir.mkdir(parents=True)
+            pidfile = runtime_dir / "redis.pid"
+            pidfile.write_text("31", encoding="utf-8")
+            settings = runtime_dir / "autopsy-memory.db.settings"
+            settings.write_text(
+                json.dumps({
+                    "pidfile": str(pidfile),
+                    "unixsocket": "/tmp/autopsy-runtime/redis.socket",
+                }),
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(mcp_bridge, "app_support_dir", return_value=support_dir),
+                mock.patch.object(
+                    mcp_bridge,
+                    "terminate_redislite_record",
+                    return_value={"pid": 31, "method": "shutdown_nosave"},
+                ) as terminate,
+            ):
+                payload = mcp_bridge.terminate_falkor_runtime_from_settings()
+
+        terminate.assert_called_once()
+        self.assertEqual(terminate.call_args.args[0]["pid"], 31)
+        self.assertEqual(terminate.call_args.args[0]["command"], "redis-server unixsocket:/tmp/autopsy-runtime/redis.socket")
+        self.assertTrue(payload["terminated"])
+        self.assertEqual(payload["termination_method"], "shutdown_nosave")
+        self.assertIn(".stale-", str(payload["settings_backup"]))
 
     def test_redislite_lifecycle_cleanup_ignores_other_app_support_roots(self):
         other = {"pid": 41, "command": "/opt/homebrew/Cellar/autopsy-memory/0.1.27/libexec/lib/python3.12/site-packages/redislite/bin/redis-server unixsocket:/tmp/autopsy-other/redis.socket"}
@@ -5512,6 +5653,22 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertFalse(payload["workflow"]["complete"])
         self.assertEqual(payload["retrieval"]["weak_signal_count"], 2)
         self.assertEqual(payload["retrieval"]["hit_count"], 0)
+        self.assertEqual(
+            [item["stable_key"] for item in payload["retrieval"]["weak_signal_candidates"]],
+            ["graph-note:weak-vector", "graph-note:weak-entity"],
+        )
+        self.assertEqual(
+            [item["signal_source"] for item in payload["retrieval"]["weak_signal_candidates"]],
+            ["vector_only", "entity_only"],
+        )
+        weak_entries = [entry for entry in payload["agent_context"] if entry["section"] == "weak_signals"]
+        self.assertEqual([entry["stable_key"] for entry in weak_entries], ["graph-note:weak-vector", "graph-note:weak-entity"])
+        self.assertTrue(all("[weak: inspect the exact item before relying]" in entry["text"] for entry in weak_entries))
+        self.assertIn("Weak Signals", payload["context_block"])
+        self.assertIn("[graph-note:weak-vector]", payload["context_block"])
+        self.assertIn("weak vector-only", payload["context_block"])
+        self.assertNotIn("Retrieved Memory\n- [graph-note:weak-vector]", payload["context_block"])
+        self.assertEqual(payload["followups"][0]["stable_key"], "graph-note:weak-vector")
 
     def test_context_command_uses_single_process_consult_by_default(self):
         parser = cli.build_parser()
