@@ -12680,6 +12680,213 @@ def payload_item_stable_key(payload: dict[str, Any] | None) -> str:
     return str(item.get("stable_key") or item.get("stableKey") or "")
 
 
+def payload_written_stable_key(payload: dict[str, Any] | None) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    item_key = payload_item_stable_key(payload)
+    if item_key:
+        return item_key
+    written = payload.get("written")
+    if isinstance(written, dict):
+        key = str(written.get("stable_key") or written.get("stableKey") or "").strip()
+        if key:
+            return key
+    imported = payload.get("imported")
+    if isinstance(imported, dict):
+        key = str(imported.get("session_node") or imported.get("stable_key") or imported.get("stableKey") or "").strip()
+        if key:
+            return key
+    key = str(payload.get("stable_key") or payload.get("stableKey") or "").strip()
+    return key
+
+
+def graph_name_for_payload(graph) -> str:
+    return str(getattr(graph, "name", "") or getattr(graph, "graph_name", "") or "")
+
+
+def graph_has_query_api(graph) -> bool:
+    return callable(getattr(graph, "query", None))
+
+
+def build_write_ack_payload(
+    payload: dict[str, Any] | None,
+    graph,
+    *,
+    stable_key: str = "",
+    operation: str,
+    expected_present: bool = True,
+) -> dict[str, Any]:
+    key = str(stable_key or payload_written_stable_key(payload) or "").strip()
+    ack: dict[str, Any] = {
+        "policy": "write_ack_v1",
+        "operation": str(operation or ""),
+        "stable_key": key,
+        "expected_present": bool(expected_present),
+        "verified": False,
+        "status": "missing_stable_key",
+        "verified_at": utc_now_iso(),
+        "graph_name": graph_name_for_payload(graph),
+    }
+    if not key:
+        ack["message"] = "Write response did not expose a stable key to verify."
+        return ack
+
+    item = (payload or {}).get("item") if isinstance(payload, dict) else None
+    if expected_present and isinstance(item, dict) and str(item.get("stable_key") or item.get("stableKey") or "") == key:
+        ack.update(
+            {
+                "verified": True,
+                "status": "verified_present",
+                "source": "item_detail_payload",
+                "entity_id": item.get("id") or item.get("entity_id"),
+                "kind": item.get("kind"),
+                "title": item.get("title"),
+            }
+        )
+        return ack
+
+    if not graph_has_query_api(graph):
+        ack.update(
+            {
+                "status": "query_unavailable",
+                "message": "Write verification could not query the graph in this runtime.",
+            }
+        )
+        return ack
+
+    try:
+        node = lookup_node_by_stable_key(graph, key)
+    except Exception as exc:
+        ack.update(
+            {
+                "status": "verification_error",
+                "error": str(exc),
+                "message": "Write verification failed while querying the graph.",
+            }
+        )
+        return ack
+
+    if expected_present:
+        if node:
+            ack.update(
+                {
+                    "verified": True,
+                    "status": "verified_present",
+                    "source": "graph_lookup",
+                    "entity_id": node.get("entity_id"),
+                    "kind": node.get("kind"),
+                    "title": node.get("label"),
+                }
+            )
+        else:
+            ack.update(
+                {
+                    "status": "missing_after_write",
+                    "message": "Write returned a stable key, but the key was not readable in the graph immediately after mutation.",
+                }
+            )
+        return ack
+
+    if node:
+        ack.update(
+            {
+                "status": "still_present_after_delete",
+                "entity_id": node.get("entity_id"),
+                "kind": node.get("kind"),
+                "title": node.get("label"),
+                "message": "Delete returned success, but the stable key was still readable immediately after mutation.",
+            }
+        )
+    else:
+        ack.update(
+            {
+                "verified": True,
+                "status": "verified_absent",
+                "source": "graph_lookup",
+            }
+        )
+    return ack
+
+
+def annotate_write_workflow_with_ack(payload: dict[str, Any], write_ack: dict[str, Any]) -> None:
+    payload["write_ack"] = write_ack
+    workflow = dict(payload.get("workflow") if isinstance(payload.get("workflow"), dict) else {})
+    had_workflow = bool(workflow)
+    workflow["write_verified"] = bool(write_ack.get("verified"))
+    workflow["write_ack_status"] = str(write_ack.get("status") or "")
+    if not had_workflow:
+        workflow["status"] = "ok" if bool(write_ack.get("verified")) else "write_verification_failed"
+        workflow["complete"] = bool(write_ack.get("verified"))
+        workflow["next_step"] = "done" if bool(write_ack.get("verified")) else "inspect_write_ack"
+        workflow["message"] = "Write was verified in the graph." if bool(write_ack.get("verified")) else str(write_ack.get("message") or "Write verification failed.")
+    elif not bool(write_ack.get("verified")):
+        workflow["status"] = "write_verification_failed"
+        workflow["complete"] = False
+        if str(workflow.get("next_step") or "") in {"", "done"}:
+            workflow["next_step"] = "inspect_write_ack"
+        base_message = str(workflow.get("message") or "").strip()
+        ack_message = str(write_ack.get("message") or "Write verification failed.").strip()
+        workflow["message"] = f"{base_message} {ack_message}".strip()
+    else:
+        workflow.setdefault("status", "ok")
+        workflow.setdefault("complete", True)
+        workflow.setdefault("next_step", "done")
+        workflow.setdefault("message", "Write was verified in the graph.")
+
+    suggested = list(workflow.get("suggested_next_steps") or [])
+    if not bool(write_ack.get("verified")):
+        stable_key = str(write_ack.get("stable_key") or "").strip()
+        if stable_key and not any(step.get("name") == "inspect-write-key" for step in suggested if isinstance(step, dict)):
+            suggested.append(
+                workflow_step(
+                    "inspect-write-key",
+                    "Verify whether the returned stable key exists in the active memory graph.",
+                    f"autopsy item {cli_quote(stable_key)}",
+                )
+            )
+        if not any(step.get("name") == "check-memory-health" for step in suggested if isinstance(step, dict)):
+            suggested.append(
+                workflow_step(
+                    "check-memory-health",
+                    "Check backend, rollback guard, and backup health before trusting this write.",
+                    "autopsy health",
+                )
+            )
+    if suggested:
+        workflow["suggested_next_steps"] = suggested
+    payload["workflow"] = workflow
+
+
+def attach_write_ack_after_write(
+    payload: dict[str, Any],
+    graph,
+    *,
+    stable_key: str = "",
+    operation: str,
+    expected_present: bool = True,
+) -> dict[str, Any]:
+    ack = build_write_ack_payload(
+        payload,
+        graph,
+        stable_key=stable_key,
+        operation=operation,
+        expected_present=expected_present,
+    )
+    annotate_write_workflow_with_ack(payload, ack)
+    return payload
+
+
+def write_ack_blocks_success(payload: dict[str, Any]) -> bool:
+    ack = payload.get("write_ack") if isinstance(payload, dict) else None
+    return isinstance(ack, dict) and not bool(ack.get("verified"))
+
+
+def print_write_payload(payload: dict[str, Any]) -> None:
+    print(json.dumps(payload, indent=2))
+    if write_ack_blocks_success(payload):
+        raise SystemExit(2)
+
+
 def benchmark_attribute(name: str, checks: list[dict[str, Any]], *, seconds: float | None = None, details: dict[str, Any] | None = None) -> dict[str, Any]:
     total = max(len(checks), 1)
     passed = sum(1 for check in checks if bool(check.get("passed")))
@@ -14057,6 +14264,16 @@ def benchmark_writes_and_relations(graph, *, tool, workspace: dict[str, Any]) ->
         elapsed_total += elapsed
         stable_key = payload_item_stable_key(created)
         checks.append({"path": "create", "stable_key": stable_key, "passed": bool(stable_key), "error": error, "seconds": round(elapsed, 3)})
+        create_ack = build_write_ack_payload(created, graph, stable_key=stable_key, operation="benchmark_create")
+        checks.append(
+            {
+                "path": "write_ack_create",
+                "stable_key": stable_key,
+                "passed": bool(create_ack.get("verified")) and str(create_ack.get("status") or "") == "verified_present",
+                "status": create_ack.get("status"),
+                "error": create_ack.get("error"),
+            }
+        )
 
         fetched, elapsed, error = timed_call(lambda: fetch_item(graph, stable_key))
         elapsed_total += elapsed
@@ -14195,7 +14412,23 @@ def benchmark_writes_and_relations(graph, *, tool, workspace: dict[str, Any]) ->
             delete_graph_item_payload(graph, stable_key=target_episode_key, record_history=False)
         missing_after_delete = lookup_node_by_stable_key(graph, stable_key) is None
         target_missing_after_delete = not target_key or lookup_node_by_stable_key(graph, target_key) is None
+        delete_ack = build_write_ack_payload(
+            {"deleted": True, "stable_key": stable_key},
+            graph,
+            stable_key=stable_key,
+            operation="benchmark_delete",
+            expected_present=False,
+        )
         checks.append({"path": "delete", "stable_key": stable_key, "passed": missing_after_delete, "error": error, "seconds": round(elapsed, 3)})
+        checks.append(
+            {
+                "path": "write_ack_delete",
+                "stable_key": stable_key,
+                "passed": bool(delete_ack.get("verified")) and str(delete_ack.get("status") or "") == "verified_absent",
+                "status": delete_ack.get("status"),
+                "error": delete_ack.get("error"),
+            }
+        )
         checks.append({"path": "delete_relation_target", "stable_key": target_key, "passed": target_missing_after_delete, "error": None})
     except Exception as exc:
         checks.append({"path": "write_probe", "passed": False, "error": str(exc)})
@@ -14724,8 +14957,9 @@ def cmd_import_session(args: argparse.Namespace) -> None:
         repository_root_path=repository_scope_path_from_args(args),
     )
     if not bool(getattr(args, "dry_run", False)) and str((payload.get("workflow") or {}).get("status") or "") == "ok":
+        attach_write_ack_after_write(payload, graph, stable_key=payload_written_stable_key(payload), operation="import_session")
         attach_auto_backup_after_write(payload, graph, workspace, reason="import_session")
-    print(json.dumps(payload, indent=2))
+    print_write_payload(payload)
 
 
 def cmd_consolidate_session(args: argparse.Namespace) -> None:
@@ -14744,8 +14978,9 @@ def cmd_consolidate_session(args: argparse.Namespace) -> None:
         print(json.dumps(payload, indent=2))
         raise SystemExit(2)
     if bool(getattr(args, "write", False)) and str((payload.get("workflow") or {}).get("status") or "") == "ok":
+        attach_write_ack_after_write(payload, graph, stable_key=payload_written_stable_key(payload), operation="consolidate_session")
         attach_auto_backup_after_write(payload, graph, workspace, reason="consolidate_session")
-    print(json.dumps(payload, indent=2))
+    print_write_payload(payload)
 
 
 def cmd_observe(args: argparse.Namespace) -> None:
@@ -14765,8 +15000,9 @@ def cmd_observe(args: argparse.Namespace) -> None:
         print(json.dumps(payload, indent=2))
         raise SystemExit(2)
     if bool(payload.get("written")):
+        attach_write_ack_after_write(payload, graph, stable_key=payload_written_stable_key(payload), operation="observe")
         attach_auto_backup_after_write(payload, graph, workspace, reason="observe")
-    print(json.dumps(payload, indent=2))
+    print_write_payload(payload)
     workflow = payload.get("workflow") if isinstance(payload.get("workflow"), dict) else {}
     if (bool(getattr(args, "write", False)) or bool(getattr(args, "write_if_stale", False))) and not bool(workflow.get("complete")):
         raise SystemExit(2)
@@ -16070,10 +16306,11 @@ def cmd_create_note(args: argparse.Namespace) -> None:
         if relations:
             payload = build_graph_item_detail_payload(graph, tool=tool, workspace=workspace, stable_key=stable_key)
             payload["created_relations"] = relations
+    attach_write_ack_after_write(payload, graph, stable_key=stable_key, operation="create")
     payload["write_quality"] = write_quality
     refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
     attach_auto_backup_after_write(payload, graph, workspace, reason="create_note")
-    print(json.dumps(payload, indent=2))
+    print_write_payload(payload)
 
 
 def cmd_update_item(args: argparse.Namespace) -> None:
@@ -16134,10 +16371,11 @@ def cmd_update_item(args: argparse.Namespace) -> None:
         payload = build_graph_item_detail_payload(graph, tool=tool, workspace=workspace, stable_key=args.stable_key) | {
             "created_relations": payload["created_relations"]
         }
+    attach_write_ack_after_write(payload, graph, stable_key=args.stable_key, operation="update")
     payload["write_quality"] = write_quality
     refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
     attach_auto_backup_after_write(payload, graph, workspace, reason="update_item")
-    print(json.dumps(payload, indent=2))
+    print_write_payload(payload)
 
 
 def cmd_delete_item(args: argparse.Namespace) -> None:
@@ -16148,8 +16386,9 @@ def cmd_delete_item(args: argparse.Namespace) -> None:
     delete_graph_item_payload(graph, stable_key=args.stable_key)
     refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
     payload = {"deleted": True, "stable_key": args.stable_key}
+    attach_write_ack_after_write(payload, graph, stable_key=args.stable_key, operation="delete", expected_present=False)
     attach_auto_backup_after_write(payload, graph, workspace, reason="delete_item")
-    print(json.dumps(payload, indent=2))
+    print_write_payload(payload)
 
 
 def cmd_expire_item(args: argparse.Namespace) -> None:
@@ -16166,9 +16405,10 @@ def cmd_expire_item(args: argparse.Namespace) -> None:
         reason=str(getattr(args, "reason", "") or ""),
         clear=bool(getattr(args, "clear", False)),
     )
+    attach_write_ack_after_write(payload, graph, stable_key=args.stable_key, operation="expire")
     refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
     attach_auto_backup_after_write(payload, graph, workspace, reason="expire_item")
-    print(json.dumps(payload, indent=2))
+    print_write_payload(payload)
 
 
 def cmd_pin_item(args: argparse.Namespace) -> None:
@@ -16189,9 +16429,10 @@ def cmd_pin_item(args: argparse.Namespace) -> None:
         shared=getattr(args, "shared", None),
         clear=bool(getattr(args, "clear", False)),
     )
+    attach_write_ack_after_write(payload, graph, stable_key=args.stable_key, operation="pin")
     refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
     attach_auto_backup_after_write(payload, graph, workspace, reason="pin_item")
-    print(json.dumps(payload, indent=2))
+    print_write_payload(payload)
 
 
 def export_memory_payload(

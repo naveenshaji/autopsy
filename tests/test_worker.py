@@ -151,6 +151,41 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
         self.assertEqual(reset_calls, ["/tmp/stale-autopsy.db"])
         self.assertEqual(operation_calls, [])
 
+    def test_worker_post_write_helper_attaches_ack_before_backup(self):
+        worker = load_worker_module()
+        calls = []
+
+        class Module:
+            def attach_write_ack_after_write(self, response, _graph, *, stable_key, operation, expected_present):
+                calls.append({"ack": stable_key, "operation": operation, "expected_present": expected_present})
+                response["write_ack"] = {"verified": True, "stable_key": stable_key, "operation": operation}
+                return response
+
+            def attach_auto_backup_after_write(self, response, _graph, workspace, *, reason):
+                calls.append({"backup": reason, "root_path": workspace["root_path"], "has_ack": "write_ack" in response})
+                response["auto_backup"] = {"status": "skipped", "reason": reason}
+                return response
+
+        response = worker.attach_auto_backup_after_worker_write(
+            Module(),
+            {"item": {"stableKey": "graph-note:ack"}},
+            object(),
+            {"root_path": "/tmp/autopsy-test"},
+            reason="worker_create_note",
+            operation="create",
+            stable_key="graph-note:ack",
+        )
+
+        self.assertEqual(response["write_ack"]["operation"], "create")
+        self.assertEqual(response["auto_backup"]["reason"], "worker_create_note")
+        self.assertEqual(
+            calls,
+            [
+                {"ack": "graph-note:ack", "operation": "create", "expected_present": True},
+                {"backup": "worker_create_note", "root_path": "/tmp/autopsy-test", "has_ack": True},
+            ],
+        )
+
     def test_diagnostics_route_does_not_open_falkor_context(self):
         worker = load_worker_module()
         original_context = worker.require_falkor_context

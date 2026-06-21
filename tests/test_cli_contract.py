@@ -478,6 +478,69 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(result["workflow"]["next_step"], "done")
         self.assertTrue(result["workflow"]["backup_complete"])
 
+    def test_attach_write_ack_verifies_payload_item_detail(self):
+        payload = {
+            "item": {
+                "id": 42,
+                "stableKey": "graph-note:ack",
+                "kind": "attempt",
+                "title": "Acked write",
+            }
+        }
+
+        result = cli.attach_write_ack_after_write(payload, object(), operation="create")
+
+        self.assertTrue(result["write_ack"]["verified"])
+        self.assertEqual(result["write_ack"]["status"], "verified_present")
+        self.assertEqual(result["write_ack"]["source"], "item_detail_payload")
+        self.assertEqual(result["workflow"]["write_ack_status"], "verified_present")
+        self.assertTrue(result["workflow"]["write_verified"])
+        self.assertFalse(cli.write_ack_blocks_success(result))
+
+    def test_attach_write_ack_marks_missing_after_write_incomplete(self):
+        class Result:
+            result_set = []
+
+        class Graph:
+            name = "unit"
+
+            def query(self, *_args, **_kwargs):
+                return Result()
+
+        payload = {"item": {"stableKey": "graph-note:different"}}
+        result = cli.attach_write_ack_after_write(payload, Graph(), stable_key="graph-note:missing", operation="create")
+
+        self.assertFalse(result["write_ack"]["verified"])
+        self.assertEqual(result["write_ack"]["status"], "missing_after_write")
+        self.assertEqual(result["write_ack"]["graph_name"], "unit")
+        self.assertEqual(result["workflow"]["status"], "write_verification_failed")
+        self.assertFalse(result["workflow"]["complete"])
+        self.assertEqual(result["workflow"]["next_step"], "inspect_write_ack")
+        self.assertTrue(cli.write_ack_blocks_success(result))
+
+    def test_attach_write_ack_verifies_delete_absence(self):
+        class Result:
+            result_set = []
+
+        class Graph:
+            name = "unit"
+
+            def query(self, *_args, **_kwargs):
+                return Result()
+
+        payload = {"deleted": True, "stable_key": "graph-note:deleted"}
+        result = cli.attach_write_ack_after_write(
+            payload,
+            Graph(),
+            stable_key="graph-note:deleted",
+            operation="delete",
+            expected_present=False,
+        )
+
+        self.assertTrue(result["write_ack"]["verified"])
+        self.assertEqual(result["write_ack"]["status"], "verified_absent")
+        self.assertFalse(cli.write_ack_blocks_success(result))
+
     def test_exported_write_commands_attach_auto_backup_only_after_real_writes(self):
         class Tool:
             workspace_payload = staticmethod(cli.workspace_payload)
@@ -491,6 +554,21 @@ class AutopsyCLIContractTests(unittest.TestCase):
         }
         parser = cli.build_parser()
         backup_payload = {"status": "skipped", "reason": "latest_backup_fresh", "backup_health": {"status": "fresh", "ok": True}}
+        written_keys = {"session-import:abc", "session-consolidation:abc", "observation:abc"}
+
+        class Result:
+            def __init__(self, rows):
+                self.result_set = rows
+
+        class Graph:
+            name = "unit"
+
+            def query(self, _query, params=None):
+                stable_key = (params or {}).get("stable_key")
+                if stable_key in written_keys:
+                    return Result([[1, stable_key, "attempt", "Verified write", "", "{}"]])
+                return Result([])
+
         originals = {
             "open_workspace_graph": cli.open_workspace_graph,
             "maybe_auto_backup_after_write": cli.maybe_auto_backup_after_write,
@@ -501,12 +579,13 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "build_observe_payload": cli.build_observe_payload,
         }
         try:
-            cli.open_workspace_graph = lambda _args: (Tool, workspace, {}, object())
+            cli.open_workspace_graph = lambda _args: (Tool, workspace, {}, Graph())
             cli.maybe_auto_backup_after_write = lambda *_args, **_kwargs: dict(backup_payload)
             cli.lookup_node_by_stable_key = lambda *_args, **_kwargs: {"stable_key": "graph-note:abc"}
             cli.record_memory_feedback = lambda *_args, **_kwargs: {"stable_key": "graph-note:abc", "last_feedback_rating": "useful"}
             cli.build_import_session_payload = lambda *_args, **kwargs: {
                 "dry_run": bool(kwargs.get("dry_run")),
+                "imported": None if kwargs.get("dry_run") else {"session_node": "session-import:abc"},
                 "workflow": {
                     "status": "dry_run" if kwargs.get("dry_run") else "ok",
                     "complete": True,
@@ -522,6 +601,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
             }
             cli.build_observe_payload = lambda *_args, **kwargs: {
                 "written": bool(kwargs.get("write") or kwargs.get("write_if_stale")),
+                "item": {"stableKey": "observation:abc"} if (kwargs.get("write") or kwargs.get("write_if_stale")) else None,
                 "workflow": {"status": "written", "complete": True},
             }
 
@@ -561,9 +641,15 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertNotIn("auto_backup", feedback_payload)
         self.assertNotIn("auto_backup", import_dry_run_payload)
         self.assertEqual(import_write_payload["auto_backup"], backup_payload)
+        self.assertTrue(import_write_payload["write_ack"]["verified"])
+        self.assertEqual(import_write_payload["write_ack"]["operation"], "import_session")
         self.assertNotIn("auto_backup", consolidate_draft_payload)
         self.assertEqual(consolidate_write_payload["auto_backup"], backup_payload)
+        self.assertTrue(consolidate_write_payload["write_ack"]["verified"])
+        self.assertEqual(consolidate_write_payload["write_ack"]["operation"], "consolidate_session")
         self.assertEqual(observe_payload["auto_backup"], backup_payload)
+        self.assertTrue(observe_payload["write_ack"]["verified"])
+        self.assertEqual(observe_payload["write_ack"]["operation"], "observe")
 
     def test_compare_backups_reports_item_relation_and_salvage_differences(self):
         parser = cli.build_parser()
