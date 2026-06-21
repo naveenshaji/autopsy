@@ -391,6 +391,93 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["validation"]["counts"]["restorable_items"], 1)
         self.assertEqual(saved["items"][0]["stable_key"], "graph-note:auto-backup")
 
+    def test_auto_backup_after_write_reports_invalid_backup_when_validation_fails(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            support_dir = Path(temp_dir) / "Support"
+            export_payload = {
+                "schema_version": 1,
+                "exported_at": "2026-06-21T00:00:00Z",
+                "autopsy_version": "0.0-test",
+                "graph_name": "unit",
+                "items": [
+                    {
+                        "stable_key": "graph-note:auto-backup-invalid",
+                        "kind": "decision",
+                        "title": "Auto backup invalid",
+                        "content": "Auto backup content.",
+                    }
+                ],
+                "relations": [],
+                "structural_edges": [],
+            }
+
+            with (
+                mock.patch.object(cli, "APP_SUPPORT_DIR_DEFAULT", support_dir),
+                mock.patch.object(cli, "latest_backup_status", return_value={"count": 1, "latest": "/tmp/stale.json", "valid": True, "age_seconds": 2 * 86400}),
+                mock.patch.object(cli, "semantic_backup_item_count", return_value=1),
+                mock.patch.object(cli, "export_memory_payload", return_value=export_payload),
+                mock.patch.object(cli, "restore_input_summary_or_error", return_value={"valid": False, "error": "items_must_be_array", "counts": {}}),
+            ):
+                payload = cli.maybe_auto_backup_after_write(object(), {"root_path": "/tmp/workspace"}, reason="unit")
+
+        self.assertEqual(payload["status"], "invalid")
+        self.assertFalse(payload["validation"]["valid"])
+        self.assertEqual(payload["validation"]["error"], "items_must_be_array")
+        self.assertIn("previous_backup_health", payload)
+
+    def test_attach_auto_backup_marks_workflow_incomplete_when_backup_invalid(self):
+        payload = {
+            "workflow": {
+                "status": "ok",
+                "complete": True,
+                "next_step": "done",
+                "message": "Write stored.",
+                "suggested_next_steps": [],
+            }
+        }
+        invalid_backup = {
+            "enabled": True,
+            "status": "invalid",
+            "reason": "unit",
+            "written": "/tmp/invalid.json",
+            "validation": {"valid": False, "error": "items_must_be_array"},
+            "previous_backup_health": {"status": "critical_stale", "severity": "critical"},
+        }
+
+        with mock.patch.object(cli, "maybe_auto_backup_after_write", return_value=invalid_backup):
+            result = cli.attach_auto_backup_after_write(payload, object(), {"root_path": "/tmp/workspace"}, reason="unit")
+
+        self.assertEqual(result["auto_backup"], invalid_backup)
+        self.assertFalse(result["write_recovery"]["backup_complete"])
+        self.assertEqual(result["write_recovery"]["backup_status"], "invalid")
+        self.assertEqual(result["write_recovery"]["severity"], "critical")
+        self.assertFalse(result["workflow"]["complete"])
+        self.assertEqual(result["workflow"]["next_step"], "run_autopsy_backup")
+        self.assertEqual(result["workflow"]["backup_status"], "invalid")
+        self.assertFalse(result["workflow"]["backup_complete"])
+        self.assertIn("failed restore validation", result["workflow"]["message"])
+        self.assertEqual(result["workflow"]["suggested_next_steps"][0]["command"], "autopsy backup")
+
+    def test_attach_auto_backup_marks_workflow_complete_when_backup_is_fresh(self):
+        payload = {}
+        fresh_backup = {
+            "enabled": True,
+            "status": "skipped",
+            "reason": "latest_backup_fresh",
+            "latest": "/tmp/fresh.json",
+            "backup_health": {"status": "fresh", "ok": True},
+        }
+
+        with mock.patch.object(cli, "maybe_auto_backup_after_write", return_value=fresh_backup):
+            result = cli.attach_auto_backup_after_write(payload, object(), {"root_path": "/tmp/workspace"}, reason="unit")
+
+        self.assertEqual(result["auto_backup"], fresh_backup)
+        self.assertTrue(result["write_recovery"]["backup_complete"])
+        self.assertEqual(result["workflow"]["status"], "ok")
+        self.assertTrue(result["workflow"]["complete"])
+        self.assertEqual(result["workflow"]["next_step"], "done")
+        self.assertTrue(result["workflow"]["backup_complete"])
+
     def test_exported_write_commands_attach_auto_backup_only_after_real_writes(self):
         class Tool:
             workspace_payload = staticmethod(cli.workspace_payload)
@@ -403,7 +490,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "root_path": "/tmp/workspace",
         }
         parser = cli.build_parser()
-        backup_payload = {"status": "skipped", "reason": "unit"}
+        backup_payload = {"status": "skipped", "reason": "latest_backup_fresh", "backup_health": {"status": "fresh", "ok": True}}
         originals = {
             "open_workspace_graph": cli.open_workspace_graph,
             "maybe_auto_backup_after_write": cli.maybe_auto_backup_after_write,

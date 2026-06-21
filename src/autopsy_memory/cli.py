@@ -16416,16 +16416,17 @@ def maybe_auto_backup_after_write(graph, workspace: dict[str, Any], *, reason: s
         )
         write_json_atomic(output, payload)
         summary = restore_input_summary_or_error(str(output), include_operational=False)
+        valid = bool(summary.get("valid"))
         return {
             "enabled": True,
-            "status": "created",
+            "status": "created" if valid else "invalid",
             "reason": reason,
             "written": str(output),
             "bytes": output.stat().st_size,
             "previous_latest": latest.get("latest"),
             "previous_backup_health": health,
             "validation": {
-                "valid": bool(summary.get("valid")),
+                "valid": valid,
                 "error": summary.get("error"),
                 "counts": summary.get("counts"),
             },
@@ -16442,8 +16443,93 @@ def maybe_auto_backup_after_write(graph, workspace: dict[str, Any], *, reason: s
         }
 
 
+def auto_backup_write_recovery(auto_backup: dict[str, Any]) -> dict[str, Any]:
+    status = str(auto_backup.get("status") or "unknown")
+    reason = str(auto_backup.get("reason") or "")
+    validation = auto_backup.get("validation") if isinstance(auto_backup.get("validation"), dict) else {}
+    valid = bool(validation.get("valid"))
+    complete = False
+    next_step = "run_autopsy_backup"
+    message = "Run autopsy backup to create a valid recovery copy for this write."
+
+    if status == "created" and valid:
+        complete = True
+        next_step = "done"
+        message = f"Write recovery is covered by a fresh validated backup at {auto_backup.get('written')}."
+    elif status == "skipped" and reason == "latest_backup_fresh":
+        complete = True
+        next_step = "done"
+        message = "Write recovery is covered by the latest fresh validated backup."
+    elif status == "invalid":
+        error = str(validation.get("error") or "restore validation failed")
+        message = f"Auto-backup was written but failed restore validation: {error}."
+    elif status == "error":
+        error = str(auto_backup.get("error") or "unknown error")
+        message = f"Auto-backup after write failed: {error}."
+    elif status == "disabled":
+        next_step = "enable_auto_backup_or_run_backup"
+        message = "Auto-backup after write is disabled; run autopsy backup or re-enable automatic backups."
+
+    previous_health = auto_backup.get("previous_backup_health")
+    severity = "ok" if complete else "warning"
+    if isinstance(previous_health, dict) and str(previous_health.get("severity") or "") == "critical":
+        severity = "critical"
+
+    return {
+        "backup_status": status,
+        "backup_complete": complete,
+        "backup_next_step": next_step,
+        "severity": severity,
+        "message": message,
+    }
+
+
+def annotate_write_workflow_with_backup(payload: dict[str, Any], auto_backup: dict[str, Any]) -> None:
+    recovery = auto_backup_write_recovery(auto_backup)
+    payload["write_recovery"] = recovery
+    existing_workflow = payload.get("workflow")
+    had_workflow = isinstance(existing_workflow, dict) and bool(existing_workflow)
+    workflow = dict(existing_workflow or {})
+    workflow["backup_status"] = recovery["backup_status"]
+    workflow["backup_complete"] = recovery["backup_complete"]
+    workflow["backup_severity"] = recovery["severity"]
+
+    if not had_workflow:
+        workflow["status"] = "ok" if recovery["backup_complete"] else "backup_attention"
+        workflow["complete"] = bool(recovery["backup_complete"])
+        workflow["next_step"] = recovery["backup_next_step"]
+        workflow["message"] = recovery["message"]
+    elif not recovery["backup_complete"]:
+        workflow["status"] = str(workflow.get("status") or "ok")
+        workflow["complete"] = False
+        if str(workflow.get("next_step") or "") in {"", "done"}:
+            workflow["next_step"] = recovery["backup_next_step"]
+        base_message = str(workflow.get("message") or "").strip()
+        workflow["message"] = f"{base_message} {recovery['message']}".strip()
+    else:
+        workflow.setdefault("status", "ok")
+        workflow.setdefault("complete", True)
+        workflow.setdefault("next_step", "done")
+        workflow.setdefault("message", recovery["message"])
+
+    suggested = list(workflow.get("suggested_next_steps") or [])
+    if not recovery["backup_complete"] and not any(step.get("name") == "run-backup" for step in suggested if isinstance(step, dict)):
+        suggested.append(
+            workflow_step(
+                "run-backup",
+                recovery["message"],
+                "autopsy backup",
+            )
+        )
+    if suggested:
+        workflow["suggested_next_steps"] = suggested
+    payload["workflow"] = workflow
+
+
 def attach_auto_backup_after_write(payload: dict[str, Any], graph, workspace: dict[str, Any], *, reason: str) -> dict[str, Any]:
-    payload["auto_backup"] = maybe_auto_backup_after_write(graph, workspace, reason=reason)
+    auto_backup = maybe_auto_backup_after_write(graph, workspace, reason=reason)
+    payload["auto_backup"] = auto_backup
+    annotate_write_workflow_with_backup(payload, auto_backup)
     return payload
 
 
