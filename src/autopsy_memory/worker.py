@@ -1478,32 +1478,6 @@ def handle_memory_graph_item(payload: dict) -> dict:
     )
 
 
-def handle_memory_graph_workspace(payload: dict) -> dict:
-    tool, _module, workspace, _embeddings_config, _embeddings_status, falkor = require_falkor_context(payload, include_embeddings_status=False)
-    return run_falkor_operation(
-        falkor,
-        lambda graph: falkor['module'].build_workspace_explorer_payload(
-            graph,
-            tool=tool,
-            workspace=workspace,
-        ),
-    )
-
-
-def handle_memory_graph_thread(payload: dict) -> dict:
-    request = payload.get('request') or {}
-    tool, _module, workspace, _embeddings_config, _embeddings_status, falkor = require_falkor_context(payload, include_embeddings_status=False)
-    return run_falkor_operation(
-        falkor,
-        lambda graph: falkor['module'].build_thread_explorer_payload(
-            graph,
-            tool=tool,
-            workspace=workspace,
-            thread_id=str(request.get('thread_id') or ''),
-        ),
-    )
-
-
 def handle_memory_graph_note_create(payload: dict) -> dict:
     request = payload.get('request') or {}
     tool, _module, workspace, _embeddings_config, _embeddings_status, falkor = require_falkor_context(payload)
@@ -1664,58 +1638,6 @@ def handle_memory_sync_workspace(payload: dict) -> dict:
     )
 
 
-def handle_memory_sync_thread_summary(payload: dict) -> dict:
-    request = payload.get('request') or {}
-    _tool, _module, workspace, _embeddings_config, _embeddings_status, falkor = require_falkor_context(payload)
-    return run_falkor_operation(
-        falkor,
-        lambda graph: falkor['module'].sync_thread_summary_payload(
-            graph,
-            workspace=request.get('workspace') or workspace,
-            summary=request.get('summary') or {},
-        ),
-    )
-
-
-def handle_memory_sync_thread_context(payload: dict) -> dict:
-    request = payload.get('request') or {}
-    _tool, _module, _workspace, _embeddings_config, _embeddings_status, falkor = require_falkor_context(payload)
-    return run_falkor_operation(
-        falkor,
-        lambda graph: falkor['module'].sync_thread_context_payload(
-            graph,
-            summary=request.get('summary') or {},
-            context=request.get('context') or {},
-        ),
-    )
-
-def handle_memory_capture_thread_outcomes(payload: dict) -> dict:
-    request = payload.get('request') or {}
-    _tool, _module, _workspace, _embeddings_config, _embeddings_status, falkor = require_falkor_context(payload)
-    return run_falkor_operation(
-        falkor,
-        lambda graph: falkor['module'].capture_thread_outcomes_payload(
-            graph,
-            thread=request.get('thread') or {},
-            context=request.get('context') or {},
-        ),
-    )
-
-
-def handle_memory_record_thread_fork(payload: dict) -> dict:
-    request = payload.get('request') or {}
-    _tool, _module, _workspace, _embeddings_config, _embeddings_status, falkor = require_falkor_context(payload)
-    return run_falkor_operation(
-        falkor,
-        lambda graph: falkor['module'].record_thread_fork_payload(
-            graph,
-            parent_thread_id=str(request.get('parent_thread_id') or ''),
-            child_summary=request.get('child_summary') or {},
-            child_context=request.get('child_context') or {},
-        ),
-    )
-
-
 class Handler(BaseHTTPRequestHandler):
     server_version = 'AutopsyMLWorker/0.1'
 
@@ -1867,12 +1789,6 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == '/memory/graph/item':
                 self._write_json(200, handle_memory_graph_item(payload))
                 return
-            if parsed.path == '/memory/graph/workspace':
-                self._write_json(200, handle_memory_graph_workspace(payload))
-                return
-            if parsed.path == '/memory/graph/thread':
-                self._write_json(200, handle_memory_graph_thread(payload))
-                return
             if parsed.path == '/memory/graph/note':
                 self._write_json(200, handle_memory_graph_note_create(payload))
                 return
@@ -1887,18 +1803,6 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if parsed.path == '/memory/sync/workspace':
                 self._write_json(200, handle_memory_sync_workspace(payload))
-                return
-            if parsed.path == '/memory/sync/thread-summary':
-                self._write_json(200, handle_memory_sync_thread_summary(payload))
-                return
-            if parsed.path == '/memory/sync/thread-context':
-                self._write_json(200, handle_memory_sync_thread_context(payload))
-                return
-            if parsed.path == '/memory/threads/outcomes':
-                self._write_json(200, handle_memory_capture_thread_outcomes(payload))
-                return
-            if parsed.path == '/memory/threads/fork':
-                self._write_json(200, handle_memory_record_thread_fork(payload))
                 return
             self._write_json(404, {'error': 'not found'})
         except Exception as exc:
