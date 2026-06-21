@@ -70,14 +70,14 @@ If Homebrew itself cannot update, upgrade, or reinstall on that macOS release,
 run the release bootstrap script instead:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/naveenshaji/autopsy/main/scripts/install-release.sh | sh
+curl -fsSL https://raw.githubusercontent.com/naveenshaji/autopsy/HEAD/scripts/install-release.sh | sh
 autopsy install --smoke-test
 ```
 
 Pass the tag to pin a specific release and avoid any latest-release lookup:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/naveenshaji/autopsy/main/scripts/install-release.sh | sh -s -- v0.1.30
+curl -fsSL https://raw.githubusercontent.com/naveenshaji/autopsy/HEAD/scripts/install-release.sh | sh -s -- v0.1.30
 autopsy install --smoke-test
 ```
 
@@ -85,7 +85,7 @@ Pass `AUTOPSY_INSTALL_PREFIX=$HOME/.local` when piping to `sh` if
 `/opt/homebrew` is not writable or when you want a user-local recovery install:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/naveenshaji/autopsy/main/scripts/install-release.sh | AUTOPSY_INSTALL_PREFIX="$HOME/.local" sh -s -- v0.1.30
+curl -fsSL https://raw.githubusercontent.com/naveenshaji/autopsy/HEAD/scripts/install-release.sh | AUTOPSY_INSTALL_PREFIX="$HOME/.local" sh -s -- v0.1.30
 ```
 
 ## Python/Pip Installs
