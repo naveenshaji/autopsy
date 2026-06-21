@@ -22,6 +22,8 @@ sh -n scripts/lib/python.sh
 test -s scripts/homebrew-constraints.txt
 
 TMP_DIR="${TMPDIR:-/tmp}/autopsy-release-check-$$"
+mkdir -p "$(dirname -- "$TMP_DIR")"
+TMP_DIR="$(CDPATH= cd -- "$(dirname -- "$TMP_DIR")" && pwd -P)/$(basename -- "$TMP_DIR")"
 export AUTOPSY_CLI_CONSULT_WORKER=0
 release_check_pids() {
   ps -axo pid=,command= 2>/dev/null | awk -v tmp="$TMP_DIR" '
