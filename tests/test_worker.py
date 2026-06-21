@@ -21,835 +21,12 @@ def load_worker_module():
     return module
 
 
-def context_graph_test_env(temp_dir: str) -> dict[str, str]:
-    return {
-        "AUTOPSY_CONTEXT_GRAPH_DIR": temp_dir,
-        "AUTOPSY_CONTEXT_GRAPH_SETTINGS_PATH": str(Path(temp_dir) / "context-graph-settings.json"),
-    }
-
 
 class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
     def test_int_request_argument_preserves_zero(self):
         worker = load_worker_module()
         self.assertEqual(worker.int_request_argument({"inspect_limit": 0}, "inspect_limit", 3), 0)
         self.assertEqual(worker.int_request_argument({}, "inspect_limit", 3), 3)
-
-    def test_context_graph_event_store_records_only_allowlisted_command_context(self):
-        worker = load_worker_module()
-        with tempfile.TemporaryDirectory() as temp_dir:
-            with mock.patch.dict(worker.os.environ, context_graph_test_env(temp_dir)):
-                file_read_result = worker.record_context_graph_event({
-                    "thread_id": "thread-1",
-                    "event_type": "file_read",
-                    "title": "Read worker.py",
-                    "metadata": {"path": "src/autopsy_memory/worker.py"},
-                })
-                file_search_result = worker.record_context_graph_event({
-                    "thread_id": "thread-1",
-                    "event_type": "file_search",
-                    "title": "Search context graph",
-                    "metadata": {"tool": "rg"},
-                })
-                command_result = worker.record_context_graph_event({
-                    "thread_id": "thread-1",
-                    "event_type": "command",
-                    "title": "Run pytest",
-                    "content": "rg context_graph_event src/autopsy_memory/worker.py",
-                    "metadata": {
-                        "stdout": "never persist output",
-                        "tool": "rg",
-                        "tool_use_id": "tool-1",
-                        "turn_id": "turn-1",
-                    },
-                })
-                memory_result = worker.record_context_graph_event({
-                    "thread_id": "thread-1",
-                    "event_type": "memory_consult",
-                    "title": "Memory consulted",
-                    "content": "legacy context graph",
-                    "metadata": {"stable_key": "graph-note:one"},
-                })
-
-                snapshot = worker.build_context_graph_snapshot("thread-1")
-
-        self.assertTrue(file_read_result["skipped"])
-        self.assertEqual(file_read_result["reason"], "generic_events_disabled")
-        self.assertTrue(file_search_result["skipped"])
-        self.assertEqual(file_search_result["reason"], "generic_events_disabled")
-        self.assertTrue(memory_result["skipped"])
-        self.assertEqual(memory_result["reason"], "generic_events_disabled")
-        self.assertIn("event", command_result)
-        self.assertEqual(command_result["event"]["event_type"], "command")
-        self.assertEqual(command_result["event"]["title"], "rg context_graph_event src/autopsy_memory/worker.py")
-        self.assertEqual(command_result["event"]["content"], "rg context_graph_event src/autopsy_memory/worker.py")
-        self.assertEqual(command_result["event"]["metadata"]["command"], "rg context_graph_event src/autopsy_memory/worker.py")
-        self.assertEqual(command_result["event"]["metadata"]["capture"], "command_only")
-        self.assertNotIn("stdout", command_result["event"]["metadata"])
-        self.assertNotIn("tool", command_result["event"]["metadata"])
-        self.assertNotIn("tool_use_id", command_result["event"]["metadata"])
-        self.assertNotIn("turn_id", command_result["event"]["metadata"])
-
-        self.assertEqual(snapshot["scopeTitle"], "Current Context")
-        self.assertIn("focusNodeID", snapshot)
-        self.assertEqual(snapshot["thread"]["thread_id"], "thread-1")
-        self.assertEqual(snapshot["thread"]["event_count"], 1)
-        self.assertEqual(len(snapshot["events"]), 1)
-        nodes_by_kind = {}
-        for node in snapshot["nodes"]:
-            nodes_by_kind.setdefault(node["kind"], []).append(node)
-        self.assertIn("turn_context", nodes_by_kind)
-        self.assertIn("reasoning_context", nodes_by_kind)
-        self.assertIn("file_searches", nodes_by_kind)
-        self.assertNotIn("command_context", nodes_by_kind)
-        self.assertNotIn("command_batch", nodes_by_kind)
-        self.assertNotIn("file_reads", nodes_by_kind)
-        self.assertNotIn("memory_context", nodes_by_kind)
-        command_node = nodes_by_kind["file_searches"][0]
-        self.assertEqual(command_node["label"], "1 File Search")
-        self.assertEqual(command_node["visualKind"], "file_searches")
-        self.assertIn("1 search command", command_node["detailChips"])
-        self.assertIn("pattern: context_graph_event", command_node["detailChips"])
-        self.assertIn("paths: src/autopsy_memory/worker.py", command_node["detailChips"])
-        self.assertEqual(command_node["provenance"]["commands"], ["rg context_graph_event src/autopsy_memory/worker.py"])
-        self.assertEqual(command_node["provenance"]["command_count"], 1)
-        self.assertEqual(command_node["sourceKind"], "context_graph_event")
-        self.assertNotIn("Bash", json.dumps(command_node))
-        self.assertEqual(nodes_by_kind["turn_context"][0]["stateFlags"], ["current", "in_progress"])
-        relations = {connection["relation"] for connection in snapshot["connections"]}
-        self.assertTrue({"reasoned_with", "consulted"}.issubset(relations))
-
-    def test_context_graph_memory_command_renders_relation_nodes_from_enrichment(self):
-        worker = load_worker_module()
-        enrichment = {
-            "items": [
-                {"stable_key": "graph-note:one", "kind": "attempt", "label": "One", "summary": "attempt"},
-                {"stable_key": "graph-note:two", "kind": "decision", "label": "Two", "summary": "decision"},
-            ],
-            "relations": [
-                {
-                    "from": "graph-note:one",
-                    "to": "graph-note:two",
-                    "relation": "depends_on",
-                    "predicate": "depends_on",
-                    "fact_text": "One depends on Two",
-                }
-            ],
-        }
-        with mock.patch.object(worker, "context_graph_memory_enrichment_for_command", return_value=enrichment):
-            snapshot = worker.build_context_graph_snapshot_from_state({
-                "thread_id": "thread-1",
-                "created_at": "2026-06-06T00:00:00Z",
-                "updated_at": "2026-06-06T00:00:01Z",
-                "revision": 1,
-                "events": [
-                    {
-                        "id": "memory-item",
-                        "event_type": "command",
-                        "content": "autopsy item graph-note:one",
-                        "metadata": {"command": "autopsy item graph-note:one"},
-                        "timestamp": "2026-06-06T00:00:00Z",
-                    }
-                ],
-            })
-
-        self.assertEqual(snapshot["events"][0]["content"], "autopsy item graph-note:one")
-        command_node = next(node for node in snapshot["nodes"] if node["kind"] == "command_context")
-        self.assertEqual(command_node["label"], "Inspect memory item")
-        self.assertEqual(command_node["visualKind"], "memory_item_context")
-        self.assertEqual(command_node["sourceRef"], "graph-note:one")
-        memory_nodes = [node for node in snapshot["nodes"] if node["kind"] == "graph_memory"]
-        self.assertEqual({node["label"] for node in memory_nodes}, {"One", "Two"})
-        relations = {connection["relation"] for connection in snapshot["connections"]}
-        self.assertTrue({"read_memory", "depends_on"}.issubset(relations))
-        depends_on = next(connection for connection in snapshot["connections"] if connection["relation"] == "depends_on")
-        self.assertEqual(depends_on["factText"], "One depends on Two")
-        self.assertNotIn("memory_consult", json.dumps(snapshot["events"]))
-
-    def test_context_graph_snapshot_renders_thread_memory_writes_directly(self):
-        worker = load_worker_module()
-        writes = [
-            {
-                "stable_key": "graph-note:write",
-                "kind": "decision",
-                "memory_type": "semantic",
-                "title": "Show memory writes in graph",
-                "summary": "The context graph renders memory writes from Autopsy thread links.",
-                "updated_at": "2026-06-06T00:00:03Z",
-                "source": "graph_note",
-                "repositories": ["Autopsy"],
-            }
-        ]
-
-        with mock.patch.object(worker, "context_graph_thread_memory_writes", return_value=writes) as fetch_writes:
-            snapshot = worker.build_context_graph_snapshot_from_state({
-                "thread_id": "thread-1",
-                "created_at": "2026-06-06T00:00:00Z",
-                "updated_at": "2026-06-06T00:00:03Z",
-                "revision": 1,
-                "events": [
-                    {
-                        "id": "current-consult",
-                        "event_type": "command",
-                        "content": "autopsy consult --current-only --query graph",
-                        "run_id": "turn-1",
-                        "metadata": {"command": "autopsy consult --current-only --query graph"},
-                        "timestamp": "2026-06-06T00:00:01Z",
-                    }
-                ],
-            })
-
-        fetch_writes.assert_called_once()
-        self.assertEqual(fetch_writes.call_args.args[0], "thread-1")
-        self.assertEqual(fetch_writes.call_args.kwargs["since_at"], "2026-06-06T00:00:01Z")
-        write_nodes = [node for node in snapshot["nodes"] if node["kind"] == "memory_write"]
-        self.assertEqual(len(write_nodes), 1)
-        self.assertEqual(write_nodes[0]["label"], "Show memory writes in graph")
-        self.assertEqual(write_nodes[0]["visualKind"], "memory_write")
-        self.assertEqual(write_nodes[0]["sourceKind"], "autopsy_memory")
-        self.assertEqual(write_nodes[0]["sourceRef"], "graph-note:write")
-        self.assertIn("written", write_nodes[0]["stateFlags"])
-        self.assertIn("decision", write_nodes[0]["detailChips"])
-        self.assertIn("Autopsy", write_nodes[0]["detailChips"])
-        self.assertIn("wrote_memory", {connection["relation"] for connection in snapshot["connections"]})
-        self.assertNotIn("memory_write", json.dumps(snapshot["events"]))
-
-    def test_context_graph_all_allowlisted_command_families_render_semantically(self):
-        worker = load_worker_module()
-        commands = [
-            ("autopsy status --current-only", "memory_status_context", "Check memory status"),
-            ("autopsy context --current-only --query graph", "memory_query_context", "Build memory context"),
-            ("autopsy consult --current-only --query graph", "memory_query_context", "Consult memory"),
-            ("autopsy search graph", "memory_search_context", "Search memory"),
-            ("autopsy item graph-note:one", "memory_item_context", "Inspect memory item"),
-            ("autopsy timeline graph-note:one", "memory_timeline_context", "Review memory timeline"),
-            ("autopsy history graph-note:one", "memory_history_context", "Review memory history"),
-            ("autopsy neighbors --stable-key graph-note:one", "memory_neighbors_context", "Read memory relations"),
-            ("git status --short", "git_status_context", "Check git status"),
-            ("git diff -- src/autopsy_memory/worker.py", "git_diff_context", "Review git diff"),
-            ("git show HEAD -- src/autopsy_memory/worker.py", "git_show_context", "Inspect git object"),
-            ("git log --oneline -5", "git_log_context", "Read git history"),
-            ("rg context_graph src/autopsy_memory", "file_search_context", "Search files"),
-            ("nl -ba src/autopsy_memory/worker.py", "file_read_context", "Read file"),
-            ("sed -n '1,40p' src/autopsy_memory/worker.py", "file_read_context", "Read file"),
-            ("cd apps/context-graph && rg graph src", "file_search_context", "Search files"),
-        ]
-
-        for command, visual_kind, label in commands:
-            with self.subTest(command=command):
-                self.assertTrue(worker.should_capture_context_graph_command(command))
-                view = worker.context_graph_command_view(command)
-                self.assertEqual(view["visual_kind"], visual_kind)
-                self.assertEqual(view["label"], label)
-                self.assertNotEqual(view["visual_kind"], "command_context")
-                self.assertNotEqual(view["label"], "Run command")
-
-        snapshot = worker.build_context_graph_snapshot_from_state({
-            "thread_id": "thread-1",
-            "created_at": "2026-06-06T00:00:00Z",
-            "updated_at": "2026-06-06T00:00:16Z",
-            "revision": len(commands),
-            "events": [
-                {
-                    "id": f"command-{index}",
-                    "event_type": "command",
-                    "content": command,
-                    "metadata": {"command": command},
-                    "timestamp": f"2026-06-06T00:00:{index:02d}Z",
-                }
-                for index, (command, _visual_kind, _label) in enumerate(commands)
-            ],
-        })
-
-        command_nodes = [node for node in snapshot["nodes"] if node["kind"] == "command_context"]
-        self.assertEqual(len(command_nodes), len(commands) - 5)
-        self.assertFalse(any(node.get("visualKind") == "command_context" for node in command_nodes))
-        self.assertFalse(any(node.get("label") == "Run command" for node in command_nodes))
-        file_read_nodes = [node for node in snapshot["nodes"] if node["kind"] == "file_reads"]
-        self.assertEqual(len(file_read_nodes), 1)
-        self.assertEqual(file_read_nodes[0]["label"], "2 Files Read")
-        self.assertTrue(file_read_nodes[0]["provenance"]["collapsed"])
-        self.assertEqual(file_read_nodes[0]["provenance"]["command_count"], 2)
-        self.assertIn("2 read commands", file_read_nodes[0]["detailChips"])
-        file_search_nodes = [node for node in snapshot["nodes"] if node["kind"] == "file_searches"]
-        self.assertEqual(len(file_search_nodes), 1)
-        self.assertEqual(file_search_nodes[0]["label"], "2 File Searches")
-        self.assertTrue(file_search_nodes[0]["provenance"]["collapsed"])
-        self.assertEqual(file_search_nodes[0]["provenance"]["command_count"], 2)
-        self.assertIn("2 search commands", file_search_nodes[0]["detailChips"])
-        review_nodes = [node for node in snapshot["nodes"] if node["kind"] == "review_context"]
-        self.assertEqual(len(review_nodes), 1)
-        self.assertEqual(review_nodes[0]["label"], "Review git diff")
-        self.assertTrue(review_nodes[0]["provenance"]["collapsed"])
-        self.assertEqual(review_nodes[0]["provenance"]["command_count"], 1)
-        self.assertIn("1 review command", review_nodes[0]["detailChips"])
-
-    def test_context_graph_event_store_skips_turn_completion_events(self):
-        worker = load_worker_module()
-        with tempfile.TemporaryDirectory() as temp_dir:
-            with mock.patch.dict(worker.os.environ, context_graph_test_env(temp_dir)):
-                worker.record_context_graph_event({
-                    "thread_id": "thread-1",
-                    "event_type": "command",
-                    "content": "rg context_graph_event src/autopsy_memory/worker.py",
-                })
-                completed = worker.record_context_graph_event({
-                    "thread_id": "thread-1",
-                    "event_type": "turn_completed",
-                    "title": "Turn complete",
-                    "content": "assistant text should not persist",
-                    "run_id": "turn-1",
-                    "metadata": {"turn_id": "turn-1", "status": "complete"},
-                })
-                snapshot = worker.build_context_graph_snapshot("thread-1")
-
-        self.assertTrue(completed["skipped"])
-        self.assertEqual(completed["reason"], "generic_events_disabled")
-        self.assertEqual(snapshot["thread"]["event_count"], 1)
-        self.assertEqual(len(snapshot["events"]), 1)
-        self.assertEqual(snapshot["events"][0]["event_type"], "command")
-        self.assertNotIn("assistant text should not persist", json.dumps(snapshot))
-        nodes_by_kind = {}
-        for node in snapshot["nodes"]:
-            nodes_by_kind.setdefault(node["kind"], []).append(node)
-        self.assertIn("turn_context", nodes_by_kind)
-        self.assertIn("reasoning_context", nodes_by_kind)
-        self.assertIn("file_searches", nodes_by_kind)
-        self.assertNotIn("command_batch", nodes_by_kind)
-        self.assertEqual(nodes_by_kind["turn_context"][0]["stateFlags"], ["current", "in_progress"])
-
-    def test_context_graph_snapshot_ignores_stale_lifecycle_events_for_turn_scoping(self):
-        worker = load_worker_module()
-        snapshot = worker.build_context_graph_snapshot_from_state({
-            "thread_id": "thread-1",
-            "created_at": "2026-06-06T00:00:00Z",
-            "updated_at": "2026-06-06T00:00:02Z",
-            "revision": 2,
-            "events": [
-                {
-                    "id": "command-1",
-                    "event_type": "command",
-                    "content": "rg context_graph_event src/autopsy_memory/worker.py",
-                    "run_id": "turn-1",
-                    "metadata": {"command": "rg context_graph_event src/autopsy_memory/worker.py"},
-                    "timestamp": "2026-06-06T00:00:00Z",
-                },
-                {
-                    "id": "turn-complete",
-                    "event_type": "turn_completed",
-                    "title": "Turn complete",
-                    "content": "assistant text should not render",
-                    "run_id": "turn-1",
-                    "timestamp": "2026-06-06T00:00:01Z",
-                },
-            ],
-        })
-
-        self.assertEqual(snapshot["thread"]["event_count"], 1)
-        self.assertEqual([event["id"] for event in snapshot["events"]], ["command-1"])
-        self.assertIn("In Progress - 1 active event", snapshot["nodes"][0]["summary"])
-        self.assertEqual(snapshot["nodes"][0]["stateFlags"], ["current", "in_progress"])
-        self.assertNotIn("assistant text should not render", json.dumps(snapshot))
-
-    def test_context_graph_event_store_skips_non_allowlisted_commands(self):
-        worker = load_worker_module()
-        with tempfile.TemporaryDirectory() as temp_dir:
-            with mock.patch.dict(worker.os.environ, context_graph_test_env(temp_dir)):
-                result = worker.record_context_graph_event({
-                    "thread_id": "thread-1",
-                    "event_type": "command",
-                    "content": "ls -la",
-                })
-                curl_result = worker.record_context_graph_event({
-                    "thread_id": "thread-1",
-                    "event_type": "command",
-                    "content": "curl -s http://127.0.0.1/context-graph | sed -n '1,20p'",
-                })
-                pipeline_result = worker.record_context_graph_event({
-                    "thread_id": "thread-1",
-                    "event_type": "command",
-                    "content": "rg context_graph_event src/autopsy_memory/worker.py | head -20",
-                })
-                write_result = worker.record_context_graph_event({
-                    "thread_id": "thread-1",
-                    "event_type": "command",
-                    "content": "autopsy capture-outcome --kind attempt --title write",
-                })
-                redirect_result = worker.record_context_graph_event({
-                    "thread_id": "thread-1",
-                    "event_type": "command",
-                    "content": "rg context_graph_event src/autopsy_memory/worker.py > /tmp/context.txt",
-                })
-                substitution_result = worker.record_context_graph_event({
-                    "thread_id": "thread-1",
-                    "event_type": "command",
-                    "content": "rg $(autopsy item graph-note:secret) src/autopsy_memory/worker.py",
-                })
-                background_result = worker.record_context_graph_event({
-                    "thread_id": "thread-1",
-                    "event_type": "command",
-                    "content": "rg context_graph_event src/autopsy_memory/worker.py & npm run build",
-                })
-                multiline_result = worker.record_context_graph_event({
-                    "thread_id": "thread-1",
-                    "event_type": "command",
-                    "content": "rg context_graph_event src/autopsy_memory/worker.py\nnpm run build",
-                })
-                snapshot = worker.build_context_graph_snapshot("thread-1")
-
-        self.assertTrue(result["skipped"])
-        self.assertEqual(result["reason"], "command_not_allowlisted")
-        self.assertTrue(curl_result["skipped"])
-        self.assertEqual(curl_result["reason"], "command_not_allowlisted")
-        self.assertTrue(pipeline_result["skipped"])
-        self.assertEqual(pipeline_result["reason"], "command_not_allowlisted")
-        self.assertTrue(write_result["skipped"])
-        self.assertEqual(write_result["reason"], "command_not_allowlisted")
-        self.assertTrue(redirect_result["skipped"])
-        self.assertEqual(redirect_result["reason"], "command_not_allowlisted")
-        self.assertTrue(substitution_result["skipped"])
-        self.assertEqual(substitution_result["reason"], "command_not_allowlisted")
-        self.assertTrue(background_result["skipped"])
-        self.assertEqual(background_result["reason"], "command_not_allowlisted")
-        self.assertTrue(multiline_result["skipped"])
-        self.assertEqual(multiline_result["reason"], "command_not_allowlisted")
-        self.assertEqual(snapshot["thread"]["event_count"], 0)
-        self.assertEqual(snapshot["events"], [])
-
-    def test_context_graph_event_store_prunes_stale_generic_events_on_write(self):
-        worker = load_worker_module()
-        with tempfile.TemporaryDirectory() as temp_dir:
-            with mock.patch.dict(worker.os.environ, context_graph_test_env(temp_dir)):
-                thread_file = worker.context_graph_thread_file("thread-1")
-                thread_file.parent.mkdir(parents=True)
-                thread_file.write_text(json.dumps({
-                    "thread_id": "thread-1",
-                    "created_at": "2026-06-06T00:00:00Z",
-                    "updated_at": "2026-06-06T00:00:01Z",
-                    "revision": 1,
-                    "events": [
-                        {
-                            "id": "old-generic",
-                            "event_type": "file_read",
-                            "title": "Read worker.py",
-                            "content": "file contents should not remain",
-                            "timestamp": "2026-06-06T00:00:00Z",
-                        },
-                        {
-                            "id": "old-non-allowlisted",
-                            "event_type": "command",
-                            "content": "ls -la",
-                            "timestamp": "2026-06-06T00:00:01Z",
-                        },
-                    ],
-                }), encoding="utf-8")
-
-                result = worker.record_context_graph_event({
-                    "thread_id": "thread-1",
-                    "event_type": "command",
-                    "content": "rg context_graph_event src/autopsy_memory/worker.py",
-                    "timestamp": "2026-06-06T00:00:02Z",
-                })
-                saved = json.loads(thread_file.read_text(encoding="utf-8"))
-                snapshot = worker.build_context_graph_snapshot("thread-1")
-
-        self.assertIn("event", result)
-        self.assertEqual(result["thread"]["event_count"], 1)
-        self.assertEqual([event["id"] for event in saved["events"]], [result["event"]["id"]])
-        self.assertNotIn("file contents should not remain", json.dumps(saved))
-        self.assertNotIn("ls -la", json.dumps(saved))
-        self.assertEqual(snapshot["thread"]["event_count"], 1)
-        self.assertEqual(snapshot["allEventCount"], 1)
-        self.assertEqual(len(snapshot["events"]), 1)
-
-    def test_context_graph_event_store_rejects_generic_event_with_allowed_command(self):
-        worker = load_worker_module()
-        with tempfile.TemporaryDirectory() as temp_dir:
-            with mock.patch.dict(worker.os.environ, context_graph_test_env(temp_dir)):
-                result = worker.record_context_graph_event({
-                    "thread_id": "thread-1",
-                    "event_type": "file_read",
-                    "title": "Read worker.py",
-                    "content": "rg context_graph_event src/autopsy_memory/worker.py",
-                    "metadata": {
-                        "command": "rg context_graph_event src/autopsy_memory/worker.py",
-                        "path": "src/autopsy_memory/worker.py",
-                    },
-                })
-                snapshot = worker.build_context_graph_snapshot("thread-1")
-
-        self.assertTrue(result["skipped"])
-        self.assertEqual(result["reason"], "generic_events_disabled")
-        self.assertEqual(snapshot["thread"]["event_count"], 0)
-        self.assertEqual(snapshot["events"], [])
-        self.assertNotIn("src/autopsy_memory/worker.py", json.dumps(snapshot))
-
-    def test_context_graph_event_store_skips_action_commands(self):
-        worker = load_worker_module()
-        with tempfile.TemporaryDirectory() as temp_dir:
-            with mock.patch.dict(worker.os.environ, context_graph_test_env(temp_dir)):
-                result = worker.record_context_graph_event({
-                    "thread_id": "thread-1",
-                    "event_type": "command",
-                    "content": "./.venv/bin/python -m pytest tests/test_worker.py",
-                })
-                build_result = worker.record_context_graph_event({
-                    "thread_id": "thread-1",
-                    "event_type": "command",
-                    "content": "cd apps/context-graph && npm run build",
-                })
-                mixed_result = worker.record_context_graph_event({
-                    "thread_id": "thread-1",
-                    "event_type": "command",
-                    "content": "npm run build && rg context_graph_event src/autopsy_memory/worker.py",
-                })
-                sed_write_result = worker.record_context_graph_event({
-                    "thread_id": "thread-1",
-                    "event_type": "command",
-                    "content": "sed -i '' 's/a/b/' src/autopsy_memory/worker.py",
-                })
-                git_output_result = worker.record_context_graph_event({
-                    "thread_id": "thread-1",
-                    "event_type": "command",
-                    "content": "git diff --output /tmp/diff.txt",
-                })
-                snapshot = worker.build_context_graph_snapshot("thread-1")
-
-        self.assertTrue(result["skipped"])
-        self.assertEqual(result["reason"], "command_not_allowlisted")
-        self.assertTrue(build_result["skipped"])
-        self.assertEqual(build_result["reason"], "command_not_allowlisted")
-        self.assertTrue(mixed_result["skipped"])
-        self.assertEqual(mixed_result["reason"], "command_not_allowlisted")
-        self.assertTrue(sed_write_result["skipped"])
-        self.assertEqual(sed_write_result["reason"], "command_not_allowlisted")
-        self.assertTrue(git_output_result["skipped"])
-        self.assertEqual(git_output_result["reason"], "command_not_allowlisted")
-        self.assertEqual(len(snapshot["events"]), 0)
-
-    def test_context_graph_snapshot_deduplicates_codex_hook_tool_lifecycle_events(self):
-        worker = load_worker_module()
-        snapshot = worker.build_context_graph_snapshot_from_state({
-            "thread_id": "thread-1",
-            "created_at": "2026-06-06T00:00:00Z",
-            "updated_at": "2026-06-06T00:00:01Z",
-            "revision": 2,
-            "events": [
-                {
-                    "id": "pre-event",
-                    "event_type": "command",
-                    "content": "rg context_graph tests/test_worker.py",
-                    "status": "in_progress",
-                    "run_id": "turn-1",
-                    "metadata": {
-                        "command": "rg context_graph tests/test_worker.py",
-                        "hook_event_name": "PreToolUse",
-                        "tool_use_id": "tool-1",
-                    },
-                    "timestamp": "2026-06-06T00:00:00Z",
-                },
-                {
-                    "id": "post-event",
-                    "event_type": "command",
-                    "content": "rg context_graph tests/test_worker.py",
-                    "status": "complete",
-                    "run_id": "turn-1",
-                    "metadata": {
-                        "command": "rg context_graph tests/test_worker.py",
-                        "hook_event_name": "PostToolUse",
-                        "tool_use_id": "tool-1",
-                    },
-                    "timestamp": "2026-06-06T00:00:01Z",
-                },
-            ],
-        })
-
-        self.assertEqual(snapshot["allEventCount"], 1)
-        self.assertEqual(snapshot["thread"]["event_count"], 1)
-        self.assertEqual(len(snapshot["events"]), 1)
-        self.assertEqual(snapshot["events"][0]["id"], "post-event")
-        self.assertEqual(snapshot["events"][0]["status"], "complete")
-        self.assertIn("1 active event", snapshot["nodes"][0]["summary"])
-
-    def test_context_graph_snapshot_scopes_current_turn_to_latest_run_id_without_turn_completion(self):
-        worker = load_worker_module()
-        snapshot = worker.build_context_graph_snapshot_from_state({
-            "thread_id": "thread-1",
-            "created_at": "2026-06-06T00:00:00Z",
-            "updated_at": "2026-06-06T00:00:03Z",
-            "revision": 3,
-            "events": [
-                {
-                    "id": "old-run-command",
-                    "event_type": "command",
-                    "content": "rg old src/autopsy_memory/worker.py",
-                    "run_id": "turn-1",
-                    "metadata": {"command": "rg old src/autopsy_memory/worker.py"},
-                    "timestamp": "2026-06-06T00:00:00Z",
-                },
-                {
-                    "id": "current-status",
-                    "event_type": "command",
-                    "content": "autopsy status --current-only",
-                    "run_id": "turn-2",
-                    "metadata": {"command": "autopsy status --current-only"},
-                    "timestamp": "2026-06-06T00:00:01Z",
-                },
-                {
-                    "id": "current-consult",
-                    "event_type": "command",
-                    "content": "autopsy consult --current-only --query graph",
-                    "run_id": "turn-2",
-                    "metadata": {"command": "autopsy consult --current-only --query graph"},
-                    "timestamp": "2026-06-06T00:00:02Z",
-                },
-            ],
-        })
-
-        self.assertEqual(snapshot["allEventCount"], 2)
-        self.assertEqual(snapshot["thread"]["event_count"], 2)
-        self.assertEqual([event["id"] for event in snapshot["events"]], ["current-status", "current-consult"])
-        self.assertTrue(all(event["run_id"] == "turn-2" for event in snapshot["events"]))
-        self.assertNotIn("rg old", json.dumps(snapshot["events"]))
-        self.assertIn("In Progress - 2 active events", snapshot["nodes"][0]["summary"])
-        command_nodes = [node for node in snapshot["nodes"] if node["kind"] == "command_context"]
-        self.assertEqual([node["label"] for node in command_nodes], ["Check memory status", "Consult memory"])
-        self.assertEqual([node["visualKind"] for node in command_nodes], ["memory_status_context", "memory_query_context"])
-        self.assertEqual([node["provenance"]["command"] for node in command_nodes], [
-            "autopsy status --current-only",
-            "autopsy consult --current-only --query graph",
-        ])
-        self.assertIn("query: graph", command_nodes[1]["detailChips"])
-        self.assertFalse(any(node["kind"] == "command_batch" for node in snapshot["nodes"]))
-
-    def test_context_graph_snapshot_multi_turn_setting_keeps_prior_run_commands(self):
-        worker = load_worker_module()
-        snapshot = worker.build_context_graph_snapshot_from_state({
-            "thread_id": "thread-1",
-            "created_at": "2026-06-06T00:00:00Z",
-            "updated_at": "2026-06-06T00:00:03Z",
-            "revision": 3,
-            "_context_graph_settings": {"multi_turn": True},
-            "events": [
-                {
-                    "id": "old-run-command",
-                    "event_type": "command",
-                    "content": "rg old src/autopsy_memory/worker.py",
-                    "run_id": "turn-1",
-                    "metadata": {"command": "rg old src/autopsy_memory/worker.py"},
-                    "timestamp": "2026-06-06T00:00:00Z",
-                },
-                {
-                    "id": "current-status",
-                    "event_type": "command",
-                    "content": "autopsy status --current-only",
-                    "run_id": "turn-2",
-                    "metadata": {"command": "autopsy status --current-only"},
-                    "timestamp": "2026-06-06T00:00:01Z",
-                },
-                {
-                    "id": "current-consult",
-                    "event_type": "command",
-                    "content": "autopsy consult --current-only --query graph",
-                    "run_id": "turn-2",
-                    "metadata": {"command": "autopsy consult --current-only --query graph"},
-                    "timestamp": "2026-06-06T00:00:02Z",
-                },
-            ],
-        })
-
-        self.assertEqual(snapshot["turnScope"], "multi_turn")
-        self.assertEqual(snapshot["scopeTitle"], "Multi-Turn Context")
-        self.assertEqual(snapshot["allEventCount"], 3)
-        self.assertEqual([event["id"] for event in snapshot["events"]], ["old-run-command", "current-status", "current-consult"])
-        self.assertFalse(any(node["label"] == "Multi-Turn Context" for node in snapshot["nodes"]))
-        turn_nodes = [node for node in snapshot["nodes"] if node["kind"] == "history_context"]
-        self.assertEqual([node["label"] for node in turn_nodes], ["Turn 1"])
-        self.assertEqual([node["visualKind"] for node in turn_nodes], ["turn_group_context"])
-        self.assertEqual([node["sourceRef"] for node in turn_nodes], ["turn-1"])
-        self.assertEqual(turn_nodes[0]["stateFlags"], ["complete"])
-        current_turn_node = next(node for node in snapshot["nodes"] if node["label"] == "Current Turn")
-        self.assertEqual(current_turn_node["kind"], "turn_context")
-        self.assertEqual(current_turn_node["sourceRef"], "turn-2")
-        self.assertEqual(current_turn_node["stateFlags"], ["current", "in_progress"])
-        self.assertTrue(current_turn_node["isFocus"])
-        self.assertEqual(snapshot["focusNodeID"], current_turn_node["id"])
-        command_nodes = [node for node in snapshot["nodes"] if node["kind"] == "command_context"]
-        self.assertEqual([node["label"] for node in command_nodes], ["Check memory status", "Consult memory"])
-        file_search_nodes = [node for node in snapshot["nodes"] if node["kind"] == "file_searches"]
-        self.assertEqual([node["label"] for node in file_search_nodes], ["1 File Search"])
-        node_id_by_label = {node["label"]: node["id"] for node in snapshot["nodes"]}
-        consulted_edges = {
-            connection["fromNodeID"]: connection["toNodeID"]
-            for connection in snapshot["connections"]
-            if connection["relation"] == "consulted"
-        }
-        self.assertEqual(consulted_edges[node_id_by_label["1 File Search"]], node_id_by_label["Turn 1"])
-        self.assertEqual(consulted_edges[node_id_by_label["Check memory status"]], node_id_by_label["Current Turn"])
-        self.assertEqual(consulted_edges[node_id_by_label["Consult memory"]], node_id_by_label["Current Turn"])
-        turn_edges = [
-            connection for connection in snapshot["connections"]
-            if connection["relation"] == "previous_turn"
-        ]
-        self.assertEqual({connection["fromNodeID"] for connection in turn_edges}, {node_id_by_label["Turn 1"]})
-        self.assertEqual({connection["toNodeID"] for connection in turn_edges}, {node_id_by_label["Current Turn"]})
-
-    def test_context_graph_snapshot_keeps_manual_no_run_command_after_latest_run_start(self):
-        worker = load_worker_module()
-        snapshot = worker.build_context_graph_snapshot_from_state({
-            "thread_id": "thread-1",
-            "created_at": "2026-06-06T00:00:00Z",
-            "updated_at": "2026-06-06T00:00:03Z",
-            "revision": 3,
-            "events": [
-                {
-                    "id": "old-run-command",
-                    "event_type": "command",
-                    "content": "rg old src/autopsy_memory/worker.py",
-                    "run_id": "turn-1",
-                    "metadata": {"command": "rg old src/autopsy_memory/worker.py"},
-                    "timestamp": "2026-06-06T00:00:00Z",
-                },
-                {
-                    "id": "current-status",
-                    "event_type": "command",
-                    "content": "autopsy status --current-only",
-                    "run_id": "turn-2",
-                    "metadata": {"command": "autopsy status --current-only"},
-                    "timestamp": "2026-06-06T00:00:01Z",
-                },
-                {
-                    "id": "manual-git-status",
-                    "event_type": "command",
-                    "content": "git status --short",
-                    "metadata": {"command": "git status --short"},
-                    "timestamp": "2026-06-06T00:00:02Z",
-                },
-            ],
-        })
-
-        self.assertEqual([event["id"] for event in snapshot["events"]], ["current-status", "manual-git-status"])
-        self.assertNotIn("rg old", json.dumps(snapshot["events"]))
-        command_nodes = [node for node in snapshot["nodes"] if node["kind"] == "command_context"]
-        self.assertEqual([node["label"] for node in command_nodes], ["Check memory status", "Check git status"])
-        self.assertEqual([node["visualKind"] for node in command_nodes], ["memory_status_context", "git_status_context"])
-        self.assertEqual([node["provenance"]["command"] for node in command_nodes], [
-            "autopsy status --current-only",
-            "git status --short",
-        ])
-        self.assertFalse(any(node["kind"] == "command_batch" for node in snapshot["nodes"]))
-
-    def test_context_graph_snapshot_caps_rendered_command_window(self):
-        worker = load_worker_module()
-        events = [
-            {
-                "id": f"command-{index}",
-                "event_type": "command",
-                "content": f"rg token-{index} src/autopsy_memory/worker.py",
-                "metadata": {"command": f"rg token-{index} src/autopsy_memory/worker.py"},
-                "run_id": "turn-1",
-                "timestamp": f"2026-06-06T00:00:{index:02d}Z",
-            }
-            for index in range(worker.CONTEXT_GRAPH_MAX_RENDERED_COMMAND_EVENTS + 6)
-        ]
-        snapshot = worker.build_context_graph_snapshot_from_state({
-            "thread_id": "thread-1",
-            "created_at": "2026-06-06T00:00:00Z",
-            "updated_at": "2026-06-06T00:00:40Z",
-            "revision": len(events),
-            "events": events,
-        })
-
-        self.assertEqual(snapshot["allEventCount"], len(events))
-        self.assertEqual(snapshot["thread"]["event_count"], worker.CONTEXT_GRAPH_MAX_RENDERED_COMMAND_EVENTS)
-        self.assertEqual(len(snapshot["events"]), worker.CONTEXT_GRAPH_MAX_RENDERED_COMMAND_EVENTS)
-        self.assertEqual(snapshot["events"][0]["id"], "command-6")
-        self.assertEqual(snapshot["events"][-1]["id"], f"command-{len(events) - 1}")
-        command_nodes = [node for node in snapshot["nodes"] if node["kind"] == "command_context"]
-        self.assertEqual(len(command_nodes), 0)
-        file_search_nodes = [node for node in snapshot["nodes"] if node["kind"] == "file_searches"]
-        self.assertEqual(len(file_search_nodes), 1)
-        self.assertEqual(file_search_nodes[0]["provenance"]["command_count"], worker.CONTEXT_GRAPH_MAX_RENDERED_COMMAND_EVENTS)
-        self.assertIn(f"{worker.CONTEXT_GRAPH_MAX_RENDERED_COMMAND_EVENTS} search commands", file_search_nodes[0]["detailChips"])
-        self.assertNotIn("token-0", json.dumps(snapshot["nodes"]))
-
-    def test_context_graph_snapshot_ignores_stale_generic_and_non_allowlisted_events(self):
-        worker = load_worker_module()
-        snapshot = worker.build_context_graph_snapshot_from_state({
-            "thread_id": "thread-1",
-            "created_at": "2026-06-06T00:00:00Z",
-            "updated_at": "2026-06-06T00:00:03Z",
-            "revision": 3,
-            "events": [
-                {
-                    "id": "evt-1",
-                    "event_type": "file_read",
-                    "title": "Read secret prompt text",
-                    "content": "rg context_graph tests/test_worker.py",
-                    "metadata": {"command": "rg context_graph tests/test_worker.py"},
-                    "timestamp": "2026-06-06T00:00:00Z",
-                },
-                {
-                    "id": "evt-2",
-                    "event_type": "command",
-                    "title": "ls -la",
-                    "content": "ls -la",
-                    "timestamp": "2026-06-06T00:00:01Z",
-                },
-                {
-                    "id": "evt-3",
-                    "event_type": "command",
-                    "content": "rg context_graph tests/test_worker.py",
-                    "metadata": {"command": "rg context_graph tests/test_worker.py", "tool": "Bash"},
-                    "timestamp": "2026-06-06T00:00:02Z",
-                },
-                {
-                    "id": "evt-4",
-                    "event_type": "memory_consult",
-                    "title": "Memory contents",
-                    "content": "generic memory text should not render",
-                    "timestamp": "2026-06-06T00:00:03Z",
-                },
-            ],
-        })
-
-        self.assertEqual(snapshot["allEventCount"], 1)
-        self.assertEqual(snapshot["thread"]["event_count"], 1)
-        self.assertEqual(len(snapshot["events"]), 1)
-        self.assertEqual(snapshot["events"][0]["id"], "evt-3")
-        labels = {node["label"] for node in snapshot["nodes"]}
-        kinds = {node["kind"] for node in snapshot["nodes"]}
-        self.assertIn("1 File Search", labels)
-        self.assertIn("turn_context", kinds)
-        self.assertIn("reasoning_context", kinds)
-        self.assertIn("file_searches", kinds)
-        self.assertNotIn("command_context", kinds)
-        self.assertNotIn("command_batch", kinds)
-        self.assertNotIn("file_reads", kinds)
-        self.assertNotIn("memory_context", kinds)
-        self.assertEqual(sum(1 for node in snapshot["nodes"] if node["kind"] == "file_searches"), 1)
-        command_node = next(node for node in snapshot["nodes"] if node["kind"] == "file_searches")
-        self.assertEqual(command_node["label"], "1 File Search")
-        self.assertEqual(command_node["visualKind"], "file_searches")
-        self.assertEqual(command_node["provenance"]["commands"], ["rg context_graph tests/test_worker.py"])
-        self.assertNotIn("Bash", json.dumps(command_node))
-        self.assertFalse(any("ls -la" in label for label in labels))
-        self.assertFalse(any("secret prompt text" in label for label in labels))
-
-    def test_context_graph_viewer_static_root_supports_direct_script_workers(self):
-        worker = load_worker_module()
-        with tempfile.TemporaryDirectory() as temp_dir:
-            package_dir = Path(temp_dir) / "autopsy_memory"
-            static_dir = package_dir / "context_graph_viewer" / "static"
-            static_dir.mkdir(parents=True)
-            (static_dir / "index.html").write_text("<!doctype html>", encoding="utf-8")
-
-            with mock.patch.dict(worker.os.environ, {}, clear=True):
-                with mock.patch.object(worker, "__file__", str(package_dir / "worker.py")):
-                    with mock.patch.object(worker.resources, "files", side_effect=ModuleNotFoundError("missing")):
-                        self.assertEqual(
-                            worker.context_graph_viewer_static_root().resolve(),
-                            static_dir.resolve(),
-                        )
 
     def test_consult_fails_loudly_when_falkor_context_is_unavailable(self):
         worker = load_worker_module()
@@ -864,6 +41,199 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
                 worker.handle_memory_consult({"request": {"query": "strict falkor"}})
         finally:
             worker.require_falkor_context = original
+
+    def test_health_returns_structured_runtime_failure_payload(self):
+        worker = load_worker_module()
+        original_context = worker.require_falkor_context
+        original_failure_payload = worker.falkor_start_failure_payload_for_worker
+
+        def fail_falkor_context(*_args, **_kwargs):
+            raise RuntimeError("Autopsy memory database rollback detected")
+
+        def failure_payload(payload, error):
+            return {
+                "ok": False,
+                "error": str(error),
+                "workflow": {
+                    "status": "rollback_detected",
+                    "complete": False,
+                    "next_step": "restore_or_repair_embedded_memory_snapshot",
+                },
+                "request": payload.get("request"),
+            }
+
+        worker.require_falkor_context = fail_falkor_context
+        worker.falkor_start_failure_payload_for_worker = failure_payload
+        try:
+            payload = worker.handle_memory_health({"request": {"repo": "/tmp/repo"}})
+        finally:
+            worker.require_falkor_context = original_context
+            worker.falkor_start_failure_payload_for_worker = original_failure_payload
+
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["workflow"]["status"], "rollback_detected")
+        self.assertEqual(payload["workflow"]["next_step"], "restore_or_repair_embedded_memory_snapshot")
+        self.assertEqual(payload["request"], {"repo": "/tmp/repo"})
+
+    def test_diagnostics_route_does_not_open_falkor_context(self):
+        worker = load_worker_module()
+        original_context = worker.require_falkor_context
+        original_load = worker.load_falkor_module
+
+        def fail_falkor_context(*_args, **_kwargs):
+            raise AssertionError("diagnostics should not open Falkor")
+
+        class Module:
+            def build_diagnostics_command_payload(self, args):
+                return {
+                    "selected_log": args.log,
+                    "limit": args.limit,
+                    "workflow": {"status": "ok", "complete": True},
+                }
+
+        worker.require_falkor_context = fail_falkor_context
+        worker.load_falkor_module = lambda tool_path: Module()
+        try:
+            payload = worker.handle_memory_diagnostics(
+                {
+                    "tool_path": "/tmp/autopsy-cli.py",
+                    "request": {
+                        "log": "memory-guard",
+                        "limit": 2,
+                    },
+                }
+            )
+        finally:
+            worker.require_falkor_context = original_context
+            worker.load_falkor_module = original_load
+
+        self.assertEqual(payload["selected_log"], "memory-guard")
+        self.assertEqual(payload["limit"], 2)
+        self.assertEqual(payload["workflow"]["status"], "ok")
+
+    def test_repair_embedded_snapshot_plan_forces_dry_run_safety_flags(self):
+        worker = load_worker_module()
+        original_context = worker.require_falkor_context
+        original_load = worker.load_falkor_module
+        original_settings = worker.falkor_backend_settings
+        original_resolve_workspace = worker.resolve_workspace_reference
+        captured: dict[str, object] = {}
+
+        def fail_falkor_context(*_args, **_kwargs):
+            raise AssertionError("repair preview should not open Falkor")
+
+        class Module:
+            def build_embedded_snapshot_repair_payload(self, args):
+                captured["args"] = args
+                return {
+                    "dry_run": False,
+                    "requires_confirmation": False,
+                    "workflow": {"status": "ready", "complete": False},
+                }
+
+        worker.require_falkor_context = fail_falkor_context
+        worker.load_falkor_module = lambda tool_path: Module()
+        worker.falkor_backend_settings = lambda: {
+            "host": "127.0.0.1",
+            "port": 6381,
+            "graph_name": "autopsy_memory",
+            "lite_path": "/tmp/default-autopsy.db",
+        }
+        worker.resolve_workspace_reference = lambda selector, cwd: {
+            "id": "/tmp/memory-root",
+            "workspace_key": "/tmp/memory-root",
+            "slug": "memory-root",
+            "title": "MemoryRoot",
+            "root_path": "/tmp/memory-root",
+        }
+        try:
+            payload = worker.handle_memory_repair_embedded_snapshot_plan(
+                {
+                    "tool_path": "/tmp/autopsy-cli.py",
+                    "workspace": "/tmp/requested-workspace",
+                    "cwd": "/tmp/cwd",
+                    "request": {
+                        "restore_latest_backup": True,
+                        "backup_limit": 3,
+                        "include_operational": True,
+                    },
+                }
+            )
+        finally:
+            worker.require_falkor_context = original_context
+            worker.load_falkor_module = original_load
+            worker.falkor_backend_settings = original_settings
+            worker.resolve_workspace_reference = original_resolve_workspace
+
+        args = captured["args"]
+        self.assertTrue(args.dry_run)
+        self.assertFalse(args.yes)
+        self.assertFalse(args.accept_data_loss)
+        self.assertEqual(args.lite_path, "/tmp/default-autopsy.db")
+        self.assertTrue(args.restore_latest_backup)
+        self.assertEqual(args.backup_limit, 3)
+        self.assertEqual(args.salvage_output, "")
+        self.assertEqual(args.salvage_limit, 0)
+        self.assertTrue(args.skip_salvage)
+        self.assertTrue(args.include_operational)
+        self.assertTrue(args.skip_cleanup_workers)
+        self.assertTrue(payload["dry_run"])
+        self.assertTrue(payload["requires_confirmation"])
+        self.assertTrue(payload["mcp_safety"]["plan_only"])
+        self.assertFalse(payload["mcp_safety"]["mutations_allowed"])
+        self.assertFalse(payload["mcp_safety"]["salvage_export_allowed"])
+
+    def test_repair_embedded_snapshot_plan_returns_structured_payload_on_cli_exit(self):
+        worker = load_worker_module()
+        original_context = worker.require_falkor_context
+        original_load = worker.load_falkor_module
+        original_settings = worker.falkor_backend_settings
+        original_resolve_workspace = worker.resolve_workspace_reference
+
+        def fail_falkor_context(*_args, **_kwargs):
+            raise AssertionError("repair preview should not open Falkor")
+
+        class Module:
+            def build_embedded_snapshot_repair_payload(self, _args):
+                print("repair-embedded-snapshot --restore-latest-backup found no valid default Autopsy backups", file=sys.stderr)
+                raise SystemExit(2)
+
+        worker.require_falkor_context = fail_falkor_context
+        worker.load_falkor_module = lambda tool_path: Module()
+        worker.falkor_backend_settings = lambda: {
+            "host": "127.0.0.1",
+            "port": 6381,
+            "graph_name": "autopsy_memory",
+            "lite_path": "/tmp/default-autopsy.db",
+        }
+        worker.resolve_workspace_reference = lambda selector, cwd: {
+            "id": "/tmp/memory-root",
+            "workspace_key": "/tmp/memory-root",
+            "slug": "memory-root",
+            "title": "MemoryRoot",
+            "root_path": "/tmp/memory-root",
+        }
+        try:
+            payload = worker.handle_memory_repair_embedded_snapshot_plan(
+                {
+                    "tool_path": "/tmp/autopsy-cli.py",
+                    "request": {"restore_latest_backup": True},
+                }
+            )
+        finally:
+            worker.require_falkor_context = original_context
+            worker.load_falkor_module = original_load
+            worker.falkor_backend_settings = original_settings
+            worker.resolve_workspace_reference = original_resolve_workspace
+
+        self.assertFalse(payload["ok"])
+        self.assertTrue(payload["dry_run"])
+        self.assertTrue(payload["requires_confirmation"])
+        self.assertEqual(payload["exit_code"], 2)
+        self.assertEqual(payload["workflow"]["status"], "repair_plan_unavailable")
+        self.assertIn("found no valid default Autopsy backups", payload["error"])
+        self.assertTrue(payload["mcp_safety"]["plan_only"])
+        self.assertFalse(payload["mcp_safety"]["mutations_allowed"])
 
     def test_consult_preserves_requested_route(self):
         worker = load_worker_module()
@@ -920,6 +290,45 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
         self.assertEqual(payload["filter_json"], {"OR": [{"namespace": "release"}, {"metadata": {"score": {"gte": 8}}}]})
         self.assertEqual(payload["min_fact_rating"], 0.8)
 
+    def test_consult_reports_weak_signals_for_relationship_candidates(self):
+        worker = load_worker_module()
+        original = worker.run_falkor_operation
+
+        class Tool:
+            def build_read_workflow(self, *_args, **_kwargs):
+                return {"status": "empty", "complete": False}
+
+        class Module:
+            def build_consult_payload(self, *_args, **_kwargs):
+                return {
+                    "hits": [],
+                    "items": [],
+                    "relationship_candidate_hits": [
+                        {
+                            "stable_key": "graph-note:related",
+                            "kind": "attempt",
+                            "title": "Related repair attempt",
+                        }
+                    ],
+                }
+
+        worker.run_falkor_operation = lambda _falkor, operation: operation(object())
+        try:
+            payload = worker.consult_via_falkor(
+                Tool(),
+                {"root_path": "/tmp/autopsy-test"},
+                {},
+                None,
+                {"module": Module(), "graph_name": "autopsy_test"},
+                {"query": "relationship repair", "route": "hybrid"},
+            )
+        finally:
+            worker.run_falkor_operation = original
+
+        self.assertEqual(payload["workflow"]["status"], "weak_signals_only")
+        self.assertFalse(payload["workflow"]["complete"])
+        self.assertEqual(payload["relationship_candidate_hits"][0]["stable_key"], "graph-note:related")
+
     def test_history_route_preserves_stable_key_and_limit(self):
         worker = load_worker_module()
         original = worker.run_falkor_operation
@@ -968,7 +377,8 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
                     "write_if_stale": kwargs["write_if_stale"],
                 }
 
-        worker.require_falkor_context = lambda *_args, **_kwargs: (Tool(), None, {"root_path": "/tmp/autopsy-test"}, None, None, {"module": Module(), "graph_name": "autopsy_test"})
+        module = Module()
+        worker.require_falkor_context = lambda *_args, **_kwargs: (Tool(), module, {"root_path": "/tmp/autopsy-test"}, None, None, {"module": module, "graph_name": "autopsy_test"})
         worker.run_falkor_operation = lambda _falkor, operation: operation(object())
         try:
             payload = worker.handle_memory_observe(
@@ -990,6 +400,817 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
         self.assertEqual(payload["min_fact_rating"], 0.8)
         self.assertFalse(payload["write"])
         self.assertTrue(payload["write_if_stale"])
+
+    def test_worker_note_create_returns_blocked_missing_relation_payload(self):
+        worker = load_worker_module()
+        original = worker.run_falkor_operation
+        original_context = worker.require_falkor_context
+
+        class Tool:
+            def workspace_payload(self, workspace):
+                return workspace
+
+        class MissingRelationTargetsError(Exception):
+            pass
+
+        calls = []
+
+        class Module:
+            def relation_specs_from_mapping(self, request):
+                return [{"relation": "supersedes", "target": request["supersedes"][0]}]
+
+            def relation_target_records(self, *_args, **_kwargs):
+                raise MissingRelationTargetsError("missing target")
+
+            def blocked_relation_write_payload(self, *, error, operation):
+                return {"blocked": True, "reason": "missing_relation_target", "operation": operation, "message": str(error)}
+
+            def create_graph_note_payload(self, *_args, **_kwargs):
+                calls.append("create")
+                return {}
+
+        Module.MissingRelationTargetsError = MissingRelationTargetsError
+        module = Module()
+        worker.require_falkor_context = lambda *_args, **_kwargs: (Tool(), module, {"root_path": "/tmp/autopsy-test"}, None, None, {"module": module, "graph_name": "autopsy_test"})
+        worker.run_falkor_operation = lambda _falkor, operation: operation(object())
+        try:
+            payload = worker.handle_memory_graph_note_create(
+                {
+                    "request": {
+                        "title": "Needs relation",
+                        "content": "This should not be written.",
+                        "supersedes": ["graph-note:missing"],
+                    }
+                }
+            )
+        finally:
+            worker.run_falkor_operation = original
+            worker.require_falkor_context = original_context
+
+        self.assertEqual(payload["reason"], "missing_relation_target")
+        self.assertEqual(payload["operation"], "create")
+        self.assertEqual(calls, [])
+
+    def test_worker_update_missing_source_returns_blocked_payload_before_write_quality(self):
+        worker = load_worker_module()
+        original = worker.run_falkor_operation
+        original_context = worker.require_falkor_context
+
+        class Tool:
+            def workspace_payload(self, workspace):
+                return workspace
+
+        calls = []
+
+        class Module:
+            def lookup_node_by_stable_key(self, *_args, **_kwargs):
+                return None
+
+            def blocked_missing_memory_item_payload_for_graph(self, _graph, *, stable_key, operation):
+                return {"blocked": True, "reason": "missing_memory_item", "stable_key": stable_key, "operation": operation}
+
+            def build_write_quality_payload(self, *_args, **_kwargs):
+                calls.append("write_quality")
+                return {}
+
+            def update_graph_item_payload(self, *_args, **_kwargs):
+                calls.append("update")
+                return {}
+
+        module = Module()
+        worker.require_falkor_context = lambda *_args, **_kwargs: (Tool(), module, {"root_path": "/tmp/autopsy-test"}, None, None, {"module": module, "graph_name": "autopsy_test"})
+        worker.run_falkor_operation = lambda _falkor, operation: operation(object())
+        try:
+            payload = worker.handle_memory_graph_item_update(
+                {
+                    "request": {
+                        "stable_key": "graph-note:missing",
+                        "title": "Missing source",
+                        "content": "This should not be written.",
+                    }
+                }
+            )
+        finally:
+            worker.run_falkor_operation = original
+            worker.require_falkor_context = original_context
+
+        self.assertEqual(payload["reason"], "missing_memory_item")
+        self.assertEqual(payload["operation"], "update")
+        self.assertEqual(calls, [])
+
+    def test_worker_delete_missing_source_returns_blocked_payload_before_delete(self):
+        worker = load_worker_module()
+        original = worker.run_falkor_operation
+        original_context = worker.require_falkor_context
+
+        class Tool:
+            def workspace_payload(self, workspace):
+                return workspace
+
+        calls = []
+
+        class Module:
+            def lookup_node_by_stable_key(self, *_args, **_kwargs):
+                return None
+
+            def blocked_missing_memory_item_payload_for_graph(self, _graph, *, stable_key, operation):
+                return {"blocked": True, "reason": "missing_memory_item", "stable_key": stable_key, "operation": operation}
+
+            def delete_graph_item_payload(self, *_args, **_kwargs):
+                calls.append("delete")
+
+            def refresh_activity_snapshot(self, *_args, **_kwargs):
+                calls.append("refresh")
+
+        module = Module()
+        worker.require_falkor_context = lambda *_args, **_kwargs: (Tool(), module, {"root_path": "/tmp/autopsy-test"}, None, None, {"module": module, "graph_name": "autopsy_test"})
+        worker.run_falkor_operation = lambda _falkor, operation: operation(object())
+        try:
+            payload = worker.handle_memory_graph_item_delete({"request": {"stable_key": "graph-note:missing"}})
+        finally:
+            worker.run_falkor_operation = original
+            worker.require_falkor_context = original_context
+
+        self.assertEqual(payload["reason"], "missing_memory_item")
+        self.assertEqual(payload["operation"], "delete")
+        self.assertEqual(calls, [])
+
+    def test_worker_item_missing_key_returns_blocked_payload_before_detail_fetch(self):
+        worker = load_worker_module()
+        original = worker.run_falkor_operation
+        original_context = worker.require_falkor_context
+
+        class Tool:
+            def workspace_payload(self, workspace):
+                return workspace
+
+        calls = []
+
+        class Module:
+            def lookup_node_by_stable_key(self, *_args, **_kwargs):
+                return None
+
+            def blocked_missing_memory_item_payload_for_graph(self, _graph, *, stable_key, operation):
+                return {"blocked": True, "reason": "missing_memory_item", "stable_key": stable_key, "operation": operation}
+
+            def build_graph_item_detail_payload(self, *_args, **_kwargs):
+                calls.append("detail")
+                return {}
+
+        module = Module()
+        worker.require_falkor_context = lambda *_args, **_kwargs: (Tool(), module, {"root_path": "/tmp/autopsy-test"}, None, None, {"module": module, "graph_name": "autopsy_test"})
+        worker.run_falkor_operation = lambda _falkor, operation: operation(object())
+        try:
+            payload = worker.handle_memory_graph_item({"request": {"stable_key": "graph-note:missing"}})
+        finally:
+            worker.run_falkor_operation = original
+            worker.require_falkor_context = original_context
+
+        self.assertEqual(payload["reason"], "missing_memory_item")
+        self.assertEqual(payload["operation"], "item")
+        self.assertEqual(calls, [])
+
+    def test_worker_feedback_missing_source_returns_blocked_payload_before_write(self):
+        worker = load_worker_module()
+        original = worker.run_falkor_operation
+        original_context = worker.require_falkor_context
+
+        class Tool:
+            def workspace_payload(self, workspace):
+                return workspace
+
+        calls = []
+
+        class Module:
+            def lookup_node_by_stable_key(self, *_args, **_kwargs):
+                return None
+
+            def blocked_missing_memory_item_payload_for_graph(self, _graph, *, stable_key, operation):
+                return {"blocked": True, "reason": "missing_memory_item", "stable_key": stable_key, "operation": operation}
+
+            def record_memory_feedback(self, *_args, **_kwargs):
+                calls.append("feedback")
+                return {}
+
+        module = Module()
+        worker.require_falkor_context = lambda *_args, **_kwargs: (Tool(), module, {"root_path": "/tmp/autopsy-test"}, None, None, {"module": module, "graph_name": "autopsy_test"})
+        worker.run_falkor_operation = lambda _falkor, operation: operation(object())
+        try:
+            payload = worker.handle_memory_feedback({"request": {"stable_key": "graph-note:missing", "rating": "useful"}})
+        finally:
+            worker.run_falkor_operation = original
+            worker.require_falkor_context = original_context
+
+        self.assertEqual(payload["reason"], "missing_memory_item")
+        self.assertEqual(payload["operation"], "feedback")
+        self.assertEqual(calls, [])
+
+    def test_worker_consolidate_session_preserves_draft_request(self):
+        worker = load_worker_module()
+        original = worker.run_falkor_operation
+        original_context = worker.require_falkor_context
+
+        class Tool:
+            def workspace_payload(self, workspace):
+                return workspace
+
+        class Module:
+            def build_consolidate_session_payload(self, _graph, *, tool, workspace, stable_key, kind, title, max_events, write):
+                return {
+                    "workspace": tool.workspace_payload(workspace),
+                    "stable_key": stable_key,
+                    "kind": kind,
+                    "title": title,
+                    "max_events": max_events,
+                    "write": write,
+                    "workflow": {"status": "draft"},
+                }
+
+            def refresh_activity_snapshot(self, *_args, **_kwargs):
+                raise AssertionError("draft consolidation should not refresh activity")
+
+        module = Module()
+        worker.require_falkor_context = lambda *_args, **_kwargs: (Tool(), module, {"root_path": "/tmp/autopsy-test"}, None, None, {"module": module, "graph_name": "autopsy_test"})
+        worker.run_falkor_operation = lambda _falkor, operation: operation(object())
+        try:
+            payload = worker.handle_memory_consolidate_session(
+                {
+                    "request": {
+                        "stable_key": "session-import:abc",
+                        "kind": "procedure",
+                        "title": "Release process",
+                        "max_events": 12,
+                    }
+                }
+            )
+        finally:
+            worker.run_falkor_operation = original
+            worker.require_falkor_context = original_context
+
+        self.assertEqual(payload["stable_key"], "session-import:abc")
+        self.assertEqual(payload["kind"], "procedure")
+        self.assertEqual(payload["title"], "Release process")
+        self.assertEqual(payload["max_events"], 12)
+        self.assertFalse(payload["write"])
+        self.assertEqual(payload["workspace"]["root_path"], "/tmp/autopsy-test")
+
+    def test_worker_consolidate_session_refreshes_activity_after_write(self):
+        worker = load_worker_module()
+        original = worker.run_falkor_operation
+        original_context = worker.require_falkor_context
+
+        class Tool:
+            def workspace_payload(self, workspace):
+                return workspace
+
+        calls = []
+
+        class Module:
+            def build_consolidate_session_payload(self, _graph, *, tool, workspace, stable_key, kind, title, max_events, write):
+                calls.append({"stable_key": stable_key, "kind": kind, "title": title, "max_events": max_events, "write": write})
+                return {
+                    "workspace": tool.workspace_payload(workspace),
+                    "written": {"stable_key": "graph-note:consolidated"},
+                    "workflow": {"status": "ok"},
+                }
+
+            def refresh_activity_snapshot(self, *_args, **_kwargs):
+                calls.append("refresh")
+
+        module = Module()
+        worker.require_falkor_context = lambda *_args, **_kwargs: (Tool(), module, {"root_path": "/tmp/autopsy-test"}, None, None, {"module": module, "graph_name": "autopsy_test"})
+        worker.run_falkor_operation = lambda _falkor, operation: operation(object())
+        try:
+            payload = worker.handle_memory_consolidate_session(
+                {
+                    "request": {
+                        "stable_key": "session-import:abc",
+                        "kind": "summary",
+                        "title": "Session summary",
+                        "max_events": 8,
+                        "write": True,
+                    }
+                }
+            )
+        finally:
+            worker.run_falkor_operation = original
+            worker.require_falkor_context = original_context
+
+        self.assertEqual(payload["written"]["stable_key"], "graph-note:consolidated")
+        self.assertEqual(payload["workspace"]["root_path"], "/tmp/autopsy-test")
+        self.assertEqual(
+            calls,
+            [
+                {
+                    "stable_key": "session-import:abc",
+                    "kind": "summary",
+                    "title": "Session summary",
+                    "max_events": 8,
+                    "write": True,
+                },
+                "refresh",
+            ],
+        )
+
+    def test_worker_consolidate_session_returns_blocked_payload_without_refresh(self):
+        worker = load_worker_module()
+        original = worker.run_falkor_operation
+        original_context = worker.require_falkor_context
+
+        class Tool:
+            def workspace_payload(self, workspace):
+                return workspace
+
+        calls = []
+
+        class Module:
+            def build_consolidate_session_payload(self, _graph, *, tool, workspace, stable_key, kind, title, max_events, write):
+                calls.append({"stable_key": stable_key, "write": write})
+                return {
+                    "workspace": tool.workspace_payload(workspace),
+                    "blocked": True,
+                    "reason": "missing_memory_item",
+                    "operation": "consolidate_session",
+                    "stable_key": stable_key,
+                    "write": write,
+                    "workflow": {"status": "blocked_missing_memory_item"},
+                }
+
+            def refresh_activity_snapshot(self, *_args, **_kwargs):
+                calls.append("refresh")
+
+        module = Module()
+        worker.require_falkor_context = lambda *_args, **_kwargs: (Tool(), module, {"root_path": "/tmp/autopsy-test"}, None, None, {"module": module, "graph_name": "autopsy_test"})
+        worker.run_falkor_operation = lambda _falkor, operation: operation(object())
+        try:
+            payload = worker.handle_memory_consolidate_session({"request": {"stable_key": "session-import:missing", "write": True}})
+        finally:
+            worker.run_falkor_operation = original
+            worker.require_falkor_context = original_context
+
+        self.assertTrue(payload["blocked"])
+        self.assertEqual(payload["operation"], "consolidate_session")
+        self.assertEqual(payload["reason"], "missing_memory_item")
+        self.assertTrue(payload["write"])
+        self.assertEqual(calls, [{"stable_key": "session-import:missing", "write": True}])
+
+    def test_worker_import_session_preserves_dry_run_without_refresh(self):
+        worker = load_worker_module()
+        original = worker.run_falkor_operation
+        original_context = worker.require_falkor_context
+
+        class Tool:
+            def workspace_payload(self, workspace):
+                return workspace
+
+        class Module:
+            def build_import_session_payload(
+                self,
+                _graph,
+                *,
+                tool,
+                workspace,
+                path,
+                title,
+                source,
+                max_events,
+                dry_run,
+                repository_root_path,
+            ):
+                return {
+                    "workspace": tool.workspace_payload(workspace),
+                    "path": path,
+                    "title": title,
+                    "source_label": source,
+                    "max_events": max_events,
+                    "dry_run": dry_run,
+                    "repository_root_path": repository_root_path,
+                    "workflow": {"status": "dry_run"},
+                }
+
+            def refresh_activity_snapshot(self, *_args, **_kwargs):
+                raise AssertionError("dry-run import should not refresh activity")
+
+        module = Module()
+        worker.require_falkor_context = lambda *_args, **_kwargs: (Tool(), module, {"root_path": "/tmp/autopsy-test"}, None, None, {"module": module, "graph_name": "autopsy_test"})
+        worker.run_falkor_operation = lambda _falkor, operation: operation(object())
+        try:
+            payload = worker.handle_memory_import_session(
+                {
+                    "request": {
+                        "path": "/tmp/session.jsonl",
+                        "title": "Imported Session",
+                        "source": "codex-jsonl",
+                        "max_events": 25,
+                        "dry_run": True,
+                        "repo": "/tmp/repo",
+                    }
+                }
+            )
+        finally:
+            worker.run_falkor_operation = original
+            worker.require_falkor_context = original_context
+
+        self.assertEqual(payload["path"], "/tmp/session.jsonl")
+        self.assertEqual(payload["title"], "Imported Session")
+        self.assertEqual(payload["source_label"], "codex-jsonl")
+        self.assertEqual(payload["max_events"], 25)
+        self.assertTrue(payload["dry_run"])
+        self.assertEqual(payload["repository_root_path"], "/tmp/repo")
+        self.assertEqual(payload["workspace"]["root_path"], "/tmp/autopsy-test")
+
+    def test_worker_import_session_refreshes_activity_after_write(self):
+        worker = load_worker_module()
+        original = worker.run_falkor_operation
+        original_context = worker.require_falkor_context
+
+        class Tool:
+            def workspace_payload(self, workspace):
+                return workspace
+
+        calls = []
+
+        class Module:
+            def build_import_session_payload(
+                self,
+                _graph,
+                *,
+                tool,
+                workspace,
+                path,
+                title,
+                source,
+                max_events,
+                dry_run,
+                repository_root_path,
+            ):
+                calls.append(
+                    {
+                        "path": path,
+                        "title": title,
+                        "source": source,
+                        "max_events": max_events,
+                        "dry_run": dry_run,
+                        "repository_root_path": repository_root_path,
+                    }
+                )
+                return {
+                    "workspace": tool.workspace_payload(workspace),
+                    "imported": {"session_node": "session-import:abc"},
+                    "workflow": {"status": "ok"},
+                }
+
+            def refresh_activity_snapshot(self, *_args, **_kwargs):
+                calls.append("refresh")
+
+        module = Module()
+        worker.require_falkor_context = lambda *_args, **_kwargs: (Tool(), module, {"root_path": "/tmp/autopsy-test"}, None, None, {"module": module, "graph_name": "autopsy_test"})
+        worker.run_falkor_operation = lambda _falkor, operation: operation(object())
+        try:
+            payload = worker.handle_memory_import_session(
+                {
+                    "request": {
+                        "path": "/tmp/session.jsonl",
+                        "title": "Imported Session",
+                        "source": "codex-jsonl",
+                        "max_events": 10,
+                        "dry_run": False,
+                        "repository_root_path": "/tmp/repo",
+                    }
+                }
+            )
+        finally:
+            worker.run_falkor_operation = original
+            worker.require_falkor_context = original_context
+
+        self.assertEqual(payload["imported"]["session_node"], "session-import:abc")
+        self.assertEqual(payload["workspace"]["root_path"], "/tmp/autopsy-test")
+        self.assertEqual(
+            calls,
+            [
+                {
+                    "path": "/tmp/session.jsonl",
+                    "title": "Imported Session",
+                    "source": "codex-jsonl",
+                    "max_events": 10,
+                    "dry_run": False,
+                    "repository_root_path": "/tmp/repo",
+                },
+                "refresh",
+            ],
+        )
+
+    def test_worker_feedback_records_usage_for_existing_source(self):
+        worker = load_worker_module()
+        original = worker.run_falkor_operation
+        original_context = worker.require_falkor_context
+
+        class Tool:
+            def workspace_payload(self, workspace):
+                return workspace
+
+        calls = []
+
+        class Module:
+            def lookup_node_by_stable_key(self, _graph, stable_key):
+                return {"stable_key": stable_key}
+
+            def record_memory_feedback(self, _graph, stable_key, *, rating, note, source):
+                calls.append({"stable_key": stable_key, "rating": rating, "note": note, "source": source})
+                return {
+                    "stable_key": stable_key,
+                    "feedback_score": 1.0,
+                    "last_feedback_rating": rating,
+                    "last_feedback_note": note,
+                    "last_feedback_source": source,
+                }
+
+        module = Module()
+        worker.require_falkor_context = lambda *_args, **_kwargs: (Tool(), module, {"root_path": "/tmp/autopsy-test"}, None, None, {"module": module, "graph_name": "autopsy_test"})
+        worker.run_falkor_operation = lambda _falkor, operation: operation(object())
+        try:
+            payload = worker.handle_memory_feedback(
+                {
+                    "request": {
+                        "stable_key": "graph-note:abc",
+                        "rating": "useful",
+                        "note": "used in relation recovery",
+                        "source": "unit-test",
+                    }
+                }
+            )
+        finally:
+            worker.run_falkor_operation = original
+            worker.require_falkor_context = original_context
+
+        self.assertEqual(payload["stable_key"], "graph-note:abc")
+        self.assertEqual(payload["workspace"]["root_path"], "/tmp/autopsy-test")
+        self.assertEqual(payload["workflow"]["status"], "ok")
+        self.assertEqual(payload["workflow"]["next_step"], "done")
+        self.assertEqual(payload["feedback"]["last_feedback_rating"], "useful")
+        self.assertEqual(payload["feedback"]["last_feedback_note"], "used in relation recovery")
+        self.assertEqual(payload["feedback"]["last_feedback_source"], "unit-test")
+        self.assertEqual(calls, [{"stable_key": "graph-note:abc", "rating": "useful", "note": "used in relation recovery", "source": "unit-test"}])
+
+    def test_worker_snapshot_route_preserves_stable_key_and_limit(self):
+        worker = load_worker_module()
+        original = worker.run_falkor_operation
+        original_context = worker.require_falkor_context
+
+        class Tool:
+            def workspace_payload(self, workspace):
+                return workspace
+
+        class Module:
+            def build_snapshot_payload(self, _graph, *, tool, workspace, stable_key, limit):
+                return {
+                    "workspace": tool.workspace_payload(workspace),
+                    "stable_key": stable_key,
+                    "limit": limit,
+                }
+
+        module = Module()
+        worker.require_falkor_context = lambda *_args, **_kwargs: (Tool(), module, {"root_path": "/tmp/autopsy-test"}, None, None, {"module": module, "graph_name": "autopsy_test"})
+        worker.run_falkor_operation = lambda _falkor, operation: operation(object())
+        try:
+            payload = worker.handle_memory_snapshot({"request": {"stable_key": "graph-note:abc", "limit": 7}})
+        finally:
+            worker.run_falkor_operation = original
+            worker.require_falkor_context = original_context
+
+        self.assertEqual(payload["stable_key"], "graph-note:abc")
+        self.assertEqual(payload["limit"], 7)
+        self.assertEqual(payload["workspace"]["root_path"], "/tmp/autopsy-test")
+
+    def test_worker_expire_missing_source_returns_blocked_payload_before_write(self):
+        worker = load_worker_module()
+        original = worker.run_falkor_operation
+        original_context = worker.require_falkor_context
+
+        class Tool:
+            def workspace_payload(self, workspace):
+                return workspace
+
+        calls = []
+
+        class Module:
+            def lookup_node_by_stable_key(self, *_args, **_kwargs):
+                return None
+
+            def blocked_missing_memory_item_payload_for_graph(self, _graph, *, stable_key, operation):
+                return {"blocked": True, "reason": "missing_memory_item", "stable_key": stable_key, "operation": operation}
+
+            def expire_graph_item_payload(self, *_args, **_kwargs):
+                calls.append("expire")
+                return {}
+
+            def refresh_activity_snapshot(self, *_args, **_kwargs):
+                calls.append("refresh")
+
+        module = Module()
+        worker.require_falkor_context = lambda *_args, **_kwargs: (Tool(), module, {"root_path": "/tmp/autopsy-test"}, None, None, {"module": module, "graph_name": "autopsy_test"})
+        worker.run_falkor_operation = lambda _falkor, operation: operation(object())
+        try:
+            payload = worker.handle_memory_expire({"request": {"stable_key": "graph-note:missing", "reason": "retired"}})
+        finally:
+            worker.run_falkor_operation = original
+            worker.require_falkor_context = original_context
+
+        self.assertEqual(payload["reason"], "missing_memory_item")
+        self.assertEqual(payload["operation"], "expire")
+        self.assertEqual(calls, [])
+
+    def test_worker_expire_records_lifecycle_payload_for_existing_source(self):
+        worker = load_worker_module()
+        original = worker.run_falkor_operation
+        original_context = worker.require_falkor_context
+
+        class Tool:
+            def workspace_payload(self, workspace):
+                return workspace
+
+        calls = []
+
+        class Module:
+            def lookup_node_by_stable_key(self, _graph, stable_key):
+                return {"stable_key": stable_key}
+
+            def expire_graph_item_payload(self, _graph, *, tool, workspace, stable_key, expires_at, reason, clear):
+                calls.append({"stable_key": stable_key, "expires_at": expires_at, "reason": reason, "clear": clear})
+                return {
+                    "workspace": tool.workspace_payload(workspace),
+                    "lifecycle_operation": {
+                        "operation": "clear_expiration" if clear else "expire",
+                        "stable_key": stable_key,
+                    },
+                }
+
+            def refresh_activity_snapshot(self, *_args, **_kwargs):
+                calls.append("refresh")
+
+        module = Module()
+        worker.require_falkor_context = lambda *_args, **_kwargs: (Tool(), module, {"root_path": "/tmp/autopsy-test"}, None, None, {"module": module, "graph_name": "autopsy_test"})
+        worker.run_falkor_operation = lambda _falkor, operation: operation(object())
+        try:
+            payload = worker.handle_memory_expire(
+                {
+                    "request": {
+                        "stable_key": "graph-note:abc",
+                        "expires_at": "2026-07-01T00:00:00Z",
+                        "reason": "superseded",
+                        "clear": False,
+                    }
+                }
+            )
+        finally:
+            worker.run_falkor_operation = original
+            worker.require_falkor_context = original_context
+
+        self.assertEqual(payload["lifecycle_operation"]["operation"], "expire")
+        self.assertEqual(payload["workspace"]["root_path"], "/tmp/autopsy-test")
+        self.assertEqual(
+            calls,
+            [
+                {
+                    "stable_key": "graph-note:abc",
+                    "expires_at": "2026-07-01T00:00:00Z",
+                    "reason": "superseded",
+                    "clear": False,
+                },
+                "refresh",
+            ],
+        )
+
+    def test_worker_pin_missing_source_returns_blocked_payload_before_write(self):
+        worker = load_worker_module()
+        original = worker.run_falkor_operation
+        original_context = worker.require_falkor_context
+
+        class Tool:
+            def workspace_payload(self, workspace):
+                return workspace
+
+        calls = []
+
+        class Module:
+            def lookup_node_by_stable_key(self, *_args, **_kwargs):
+                return None
+
+            def blocked_missing_memory_item_payload_for_graph(self, _graph, *, stable_key, operation):
+                return {"blocked": True, "reason": "missing_memory_item", "stable_key": stable_key, "operation": operation}
+
+            def pin_graph_item_payload(self, *_args, **_kwargs):
+                calls.append("pin")
+                return {}
+
+            def refresh_activity_snapshot(self, *_args, **_kwargs):
+                calls.append("refresh")
+
+        module = Module()
+        worker.require_falkor_context = lambda *_args, **_kwargs: (Tool(), module, {"root_path": "/tmp/autopsy-test"}, None, None, {"module": module, "graph_name": "autopsy_test"})
+        worker.run_falkor_operation = lambda _falkor, operation: operation(object())
+        try:
+            payload = worker.handle_memory_pin({"request": {"stable_key": "graph-note:missing", "label": "core"}})
+        finally:
+            worker.run_falkor_operation = original
+            worker.require_falkor_context = original_context
+
+        self.assertEqual(payload["reason"], "missing_memory_item")
+        self.assertEqual(payload["operation"], "pin")
+        self.assertEqual(calls, [])
+
+    def test_worker_pin_records_core_memory_payload_for_existing_source(self):
+        worker = load_worker_module()
+        original = worker.run_falkor_operation
+        original_context = worker.require_falkor_context
+
+        class Tool:
+            def workspace_payload(self, workspace):
+                return workspace
+
+        calls = []
+
+        class Module:
+            def lookup_node_by_stable_key(self, _graph, stable_key):
+                return {"stable_key": stable_key}
+
+            def pin_graph_item_payload(
+                self,
+                _graph,
+                *,
+                tool,
+                workspace,
+                stable_key,
+                label,
+                reason,
+                description,
+                block_limit,
+                read_only,
+                shared,
+                clear,
+            ):
+                calls.append(
+                    {
+                        "stable_key": stable_key,
+                        "label": label,
+                        "reason": reason,
+                        "description": description,
+                        "block_limit": block_limit,
+                        "read_only": read_only,
+                        "shared": shared,
+                        "clear": clear,
+                    }
+                )
+                return {
+                    "workspace": tool.workspace_payload(workspace),
+                    "core_memory_operation": {
+                        "operation": "unpin" if clear else "pin",
+                        "stable_key": stable_key,
+                    },
+                }
+
+            def refresh_activity_snapshot(self, *_args, **_kwargs):
+                calls.append("refresh")
+
+        module = Module()
+        worker.require_falkor_context = lambda *_args, **_kwargs: (Tool(), module, {"root_path": "/tmp/autopsy-test"}, None, None, {"module": module, "graph_name": "autopsy_test"})
+        worker.run_falkor_operation = lambda _falkor, operation: operation(object())
+        try:
+            payload = worker.handle_memory_pin(
+                {
+                    "request": {
+                        "stable_key": "graph-note:abc",
+                        "label": "core",
+                        "reason": "always relevant",
+                        "description": "Use when planning releases.",
+                        "block_limit": "1200",
+                        "read_only": False,
+                        "shared": True,
+                    }
+                }
+            )
+        finally:
+            worker.run_falkor_operation = original
+            worker.require_falkor_context = original_context
+
+        self.assertEqual(payload["core_memory_operation"]["operation"], "pin")
+        self.assertEqual(payload["workspace"]["root_path"], "/tmp/autopsy-test")
+        self.assertEqual(
+            calls,
+            [
+                {
+                    "stable_key": "graph-note:abc",
+                    "label": "core",
+                    "reason": "always relevant",
+                    "description": "Use when planning releases.",
+                    "block_limit": 1200,
+                    "read_only": False,
+                    "shared": True,
+                    "clear": False,
+                },
+                "refresh",
+            ],
+        )
 
     def test_worker_should_exit_when_info_file_is_replaced(self):
         worker = load_worker_module()

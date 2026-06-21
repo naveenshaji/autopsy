@@ -186,6 +186,12 @@ autopsy capture-outcome \
 
 Relation flags are ontology-checked; use them between memory items, and target `--answers` at an open question.
 
+Relation targets can be exact stable keys or unambiguous stable-key wrappers copied from Autopsy JSON, such as `sourceRef=graph-note:...` or `{"item":{"stableKey":"graph-note:..."}}`. Autopsy unwraps one clear key before lookup and fails closed when pasted text contains zero or multiple possible keys.
+
+If a write returns a blocked JSON payload with `reason: "missing_relation_target"`, do not retry with `--no-relations-ok`. Inspect the target with the suggested `item`, `history`, or `search` commands, then write a corrected relation or make an explicitly standalone write only when the memory truly has no semantic relation.
+
+If a stable-key command such as `item`, `timeline`, `neighbors --stable-key`, `snapshot`, `feedback`, `observe`, `consolidate-session`, update, delete, expire, or pin returns a blocked JSON payload with `reason: "missing_memory_item"`, do not recreate the key and do not retry as standalone. Inspect the missing key with the suggested `history` or `search` commands, then choose an existing memory or write a new explicitly related outcome. If a selector command such as `neighbors --entity-id` returns the same reason, resolve a current stable key before retrying.
+
 When a relation is time-bound, add `--relation-valid-at`, `--relation-invalid-at`, or `--relation-expires-at` so current/as-of reads can omit fact edges outside their validity window while timelines preserve the history.
 
 When a relation has known evidence quality, add `--fact-rating 0.0..1.0` on the write so later reads can filter weak relation facts with `--min-fact-rating`.
@@ -220,6 +226,12 @@ Before any restore, validate first:
 ```bash
 autopsy restore <backup.json> --dry-run
 ```
+
+If that dry run reports `offline_validation: true`, the backup file is valid but
+Autopsy could not inspect the target graph. Do not infer existing-key,
+new/update, or relation endpoint effects from an offline validation.
+Use `autopsy restore <backup.json> --dry-run --offline` when you only need file
+validation and should not touch the memory runtime.
 
 Use replace only when intentionally replacing matching restored keys:
 

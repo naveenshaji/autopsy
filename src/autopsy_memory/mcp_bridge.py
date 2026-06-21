@@ -10,7 +10,6 @@ import subprocess
 import sys
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
@@ -771,86 +770,6 @@ def request_payload(arguments: dict[str, Any], request: dict[str, Any]) -> dict[
     return payload
 
 
-def context_graph_thread_id(arguments: dict[str, Any]) -> str:
-    for name in ("thread_id", "threadId", "session_id", "sessionId"):
-        value = arguments.get(name)
-        if value:
-            return str(value).strip()
-    for name in ("AUTOPSY_CONTEXT_GRAPH_THREAD_ID", "AUTOPSY_THREAD_ID", "CODEX_THREAD_ID", "CLAUDE_THREAD_ID"):
-        value = os.environ.get(name)
-        if value:
-            return str(value).strip()
-    return ""
-
-
-def build_context_graph_event_request(
-    arguments: dict[str, Any],
-    *,
-    event_type: str,
-    title: str,
-    content: str = "",
-    status: str = "complete",
-    metadata: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    thread_id = context_graph_thread_id(arguments)
-    if not thread_id:
-        raise BridgeError("thread_id is required")
-    request = {
-        "thread_id": thread_id,
-        "event_type": event_type,
-        "title": title,
-        "content": content,
-        "status": status,
-        "agent": str(arguments.get("agent") or arguments.get("agent_id") or ""),
-        "app": str(arguments.get("app") or arguments.get("app_id") or ""),
-        "run_id": str(arguments.get("run_id") or ""),
-        "metadata": metadata or {},
-    }
-    if arguments.get("timestamp"):
-        request["timestamp"] = str(arguments["timestamp"])
-    return request
-
-
-def record_context_graph_event_if_thread(
-    arguments: dict[str, Any],
-    *,
-    event_type: str,
-    title: str,
-    content: str = "",
-    status: str = "complete",
-    metadata: dict[str, Any] | None = None,
-) -> None:
-    if not context_graph_thread_id(arguments):
-        return
-    try:
-        from .context_graph_settings import context_graph_capture_state
-        from .cli import context_event_command_title, should_capture_context_command
-
-        if not context_graph_capture_state("mcp-context-event").get("record"):
-            return
-        normalized_event_type = str(event_type or "").strip().lower()
-        if normalized_event_type not in {"command", "shell_command"}:
-            return
-        raw_metadata = metadata if isinstance(metadata, dict) else {}
-        command = str(raw_metadata.get("command") or content or title or "").strip()
-        if not should_capture_context_command(command):
-            return
-        request = build_context_graph_event_request(
-            arguments,
-            event_type="command",
-            title=context_event_command_title(command),
-            content=command,
-            status=status,
-            metadata={"command": command, "capture": "command_only"},
-        )
-        worker_request("/context-graph/events", {"request": request}, retry_on_stale_socket=False)
-    except Exception as exc:
-        log_diagnostic(f"context graph event recording failed: {exc}")
-
-
-def compact_response(payload: dict[str, Any]) -> str:
-    return json.dumps(payload, indent=2, sort_keys=True)
-
 
 def tool_status(arguments: dict[str, Any]) -> dict[str, Any]:
     request = {
@@ -863,6 +782,43 @@ def tool_status(arguments: dict[str, Any]) -> dict[str, Any]:
     if arguments.get("as_of"):
         request["as_of"] = str(arguments["as_of"])
     return worker_request("/memory/status", request_payload(arguments, request))
+
+
+def tool_health(arguments: dict[str, Any]) -> dict[str, Any]:
+    request: dict[str, Any] = {}
+    if arguments.get("repo"):
+        request["repo"] = str(arguments["repo"])
+    if arguments.get("repository_root_path"):
+        request["repository_root_path"] = str(arguments["repository_root_path"])
+    return worker_request("/memory/health", request_payload(arguments, request))
+
+
+def tool_diagnostics(arguments: dict[str, Any]) -> dict[str, Any]:
+    log = str(arguments.get("log") or "all").strip().lower().replace("_", "-")
+    if log not in {"all", "memory-guard", "memory-relations"}:
+        raise BridgeError("log must be all, memory-guard, or memory-relations")
+    request = {
+        "log": log,
+        "limit": int_argument(arguments, "limit", 10),
+    }
+    return worker_request("/memory/diagnostics", request_payload(arguments, request))
+
+
+def tool_repair_embedded_snapshot_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("restore_backup") and arguments.get("restore_latest_backup"):
+        raise BridgeError("restore_backup and restore_latest_backup are mutually exclusive")
+    request: dict[str, Any] = {
+        "backup_limit": int_argument(arguments, "backup_limit", 5),
+    }
+    if arguments.get("lite_path"):
+        request["lite_path"] = str(arguments["lite_path"])
+    if arguments.get("restore_backup"):
+        request["restore_backup"] = str(arguments["restore_backup"])
+    if arguments.get("restore_latest_backup"):
+        request["restore_latest_backup"] = bool(arguments.get("restore_latest_backup"))
+    if arguments.get("include_operational"):
+        request["include_operational"] = bool(arguments.get("include_operational"))
+    return worker_request("/memory/repair-embedded-snapshot/plan", request_payload(arguments, request))
 
 
 def tool_consult(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -973,6 +929,104 @@ def tool_observe(arguments: dict[str, Any]) -> dict[str, Any]:
     if arguments.get("title"):
         request["title"] = str(arguments["title"])
     return worker_request("/memory/observe", request_payload(arguments, request))
+
+
+def tool_consolidate_session(arguments: dict[str, Any]) -> dict[str, Any]:
+    stable_key = str(arguments.get("stable_key") or "").strip()
+    if not stable_key:
+        raise BridgeError("stable_key is required")
+    kind = str(arguments.get("kind") or "memory_note").strip()
+    if kind not in KIND_ENUM:
+        raise BridgeError(f"kind must be one of: {', '.join(KIND_ENUM)}")
+    request = {
+        "stable_key": stable_key,
+        "kind": kind,
+        "title": str(arguments.get("title") or ""),
+        "max_events": int_argument(arguments, "max_events", 80),
+        "write": bool(arguments.get("write")),
+    }
+    return worker_request("/memory/consolidate-session", request_payload(arguments, request))
+
+
+def tool_import_session(arguments: dict[str, Any]) -> dict[str, Any]:
+    path = str(arguments.get("path") or "").strip()
+    if not path:
+        raise BridgeError("path is required")
+    request = {
+        "path": path,
+        "title": str(arguments.get("title") or ""),
+        "source": str(arguments.get("source") or "agent-jsonl"),
+        "max_events": int_argument(arguments, "max_events", 200),
+        "dry_run": bool(arguments.get("dry_run", True)),
+    }
+    if arguments.get("repo"):
+        request["repo"] = str(arguments["repo"])
+    if arguments.get("repository_root_path"):
+        request["repository_root_path"] = str(arguments["repository_root_path"])
+    return worker_request("/memory/import-session", request_payload(arguments, request))
+
+
+def tool_feedback(arguments: dict[str, Any]) -> dict[str, Any]:
+    stable_key = str(arguments.get("stable_key") or "").strip()
+    if not stable_key:
+        raise BridgeError("stable_key is required")
+    rating = str(arguments.get("rating") or "").strip().lower()
+    if not rating:
+        raise BridgeError("rating is required")
+    if rating not in {"useful", "not-useful", "neutral"}:
+        raise BridgeError("rating must be useful, not-useful, or neutral")
+    request = {
+        "stable_key": stable_key,
+        "rating": rating,
+        "source": str(arguments.get("source") or "mcp"),
+    }
+    if arguments.get("note"):
+        request["note"] = str(arguments["note"])
+    return worker_request("/memory/feedback", request_payload(arguments, request))
+
+
+def tool_snapshot(arguments: dict[str, Any]) -> dict[str, Any]:
+    stable_key = str(arguments.get("stable_key") or "").strip()
+    if not stable_key:
+        raise BridgeError("stable_key is required")
+    request = {
+        "stable_key": stable_key,
+        "limit": int_argument(arguments, "limit", 20),
+    }
+    return worker_request("/memory/snapshot", request_payload(arguments, request))
+
+
+def tool_expire_item(arguments: dict[str, Any]) -> dict[str, Any]:
+    stable_key = str(arguments.get("stable_key") or "").strip()
+    if not stable_key:
+        raise BridgeError("stable_key is required")
+    request = {
+        "stable_key": stable_key,
+        "expires_at": str(arguments.get("expires_at") or ""),
+        "reason": str(arguments.get("reason") or ""),
+        "clear": bool(arguments.get("clear")),
+    }
+    return worker_request("/memory/expire", request_payload(arguments, request))
+
+
+def tool_pin_item(arguments: dict[str, Any]) -> dict[str, Any]:
+    stable_key = str(arguments.get("stable_key") or "").strip()
+    if not stable_key:
+        raise BridgeError("stable_key is required")
+    request = {
+        "stable_key": stable_key,
+        "label": str(arguments.get("label") or ""),
+        "reason": str(arguments.get("reason") or ""),
+        "description": str(arguments.get("description") or ""),
+        "clear": bool(arguments.get("clear")),
+    }
+    if "block_limit" in arguments and arguments.get("block_limit") is not None:
+        request["block_limit"] = int_argument(arguments, "block_limit", 0)
+    if "read_only" in arguments and arguments.get("read_only") is not None:
+        request["read_only"] = bool(arguments.get("read_only"))
+    if "shared" in arguments and arguments.get("shared") is not None:
+        request["shared"] = bool(arguments.get("shared"))
+    return worker_request("/memory/pin", request_payload(arguments, request))
 
 
 def tool_graph_search(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -1106,65 +1160,6 @@ def tool_delete_item(arguments: dict[str, Any]) -> dict[str, Any]:
     return worker_request("/memory/graph/item/delete", request_payload(arguments, {"stable_key": stable_key}))
 
 
-def tool_context_graph_event(arguments: dict[str, Any]) -> dict[str, Any]:
-    from .context_graph_settings import context_graph_capture_state, context_graph_skip_payload
-    from .cli import context_event_command_title, should_capture_context_command
-
-    command = str(arguments.get("command") or arguments.get("context_command") or "").strip()
-    if not command:
-        raise BridgeError("command is required")
-    capture_state = context_graph_capture_state("mcp-context-event")
-    if not capture_state.get("record"):
-        return context_graph_skip_payload("mcp-context-event", command=command, settings=capture_state)
-    if not should_capture_context_command(command):
-        return {"ok": True, "skipped": True, "reason": "command_not_allowlisted", "command": command}
-    metadata = {"command": command, "capture": "command_only"}
-    request = build_context_graph_event_request(
-        arguments,
-        event_type="command",
-        title=context_event_command_title(command),
-        content=command,
-        status=str(arguments.get("status") or "complete"),
-        metadata=metadata,
-    )
-    return worker_request("/context-graph/events", {"request": request})
-
-
-def tool_context_graph_url(arguments: dict[str, Any]) -> dict[str, Any]:
-    from .context_graph_settings import load_context_graph_settings
-
-    thread_id = context_graph_thread_id(arguments)
-    if not thread_id:
-        raise BridgeError("thread_id is required")
-    settings = load_context_graph_settings()
-    if not bool(settings.get("enabled")):
-        return {
-            "ok": True,
-            "skipped": True,
-            "reason": "context_graph_disabled",
-            "message": "Context graph is disabled in Autopsy settings. No graph URL was opened.",
-            "context_graph": {
-                "enabled": False,
-                "mode": str(settings.get("mode") or "cli"),
-            },
-            "thread_id": thread_id,
-        }
-    info = ensure_worker()
-    base_url = str(info.get("base_url") or "").rstrip("/")
-    token = str(info.get("token") or "")
-    url = (
-        f"{base_url}/context-graph/threads/"
-        f"{urllib.parse.quote(thread_id, safe='')}?token={urllib.parse.quote(token, safe='')}"
-    )
-    return {
-        "thread_id": thread_id,
-        "url": url,
-        "worker": {
-            "base_url": base_url,
-            "pid": info.get("pid"),
-        },
-    }
-
 
 def tool_worker_info(_arguments: dict[str, Any]) -> dict[str, Any]:
     info = ensure_worker()
@@ -1252,6 +1247,45 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "section_limit": {"type": "integer", "default": 4},
                 "recent_days": {"type": "integer", "default": 14},
                 "as_of": {"type": "string"},
+            },
+        },
+    },
+    "autopsy_memory_health": {
+        "description": "Inspect Autopsy memory runtime health, backup freshness, and rollback/recovery state.",
+        "handler": tool_health,
+        "schema": {
+            "type": "object",
+            "properties": {
+                **optional_workspace_properties(),
+                "repo": {"type": "string", "description": "Repository root to use when checking managed agent instructions."},
+                "repository_root_path": {"type": "string", "description": "Alias for repo."},
+            },
+        },
+    },
+    "autopsy_memory_diagnostics": {
+        "description": "Read sanitized Autopsy diagnostic logs without opening the memory graph.",
+        "handler": tool_diagnostics,
+        "schema": {
+            "type": "object",
+            "properties": {
+                **optional_workspace_properties(),
+                "log": {"type": "string", "enum": ["all", "memory-guard", "memory-relations"], "default": "all"},
+                "limit": {"type": "integer", "default": 10},
+            },
+        },
+    },
+    "autopsy_memory_repair_embedded_snapshot_plan": {
+        "description": "Preview the embedded FalkorDBLite rollback repair plan without moving files, restoring backups, exporting salvage, or cleaning up workers.",
+        "handler": tool_repair_embedded_snapshot_plan,
+        "schema": {
+            "type": "object",
+            "properties": {
+                **optional_workspace_properties(),
+                "lite_path": {"type": "string", "description": "Optional embedded FalkorDBLite database path. Defaults to the configured embedded path."},
+                "restore_backup": {"type": "string", "description": "Optional Autopsy JSON backup path to evaluate as the selected restore source."},
+                "restore_latest_backup": {"type": "boolean", "default": False, "description": "Select the newest valid default backup in the dry-run plan."},
+                "backup_limit": {"type": "integer", "default": 5, "description": "Number of recent default backups to validate and include in the plan."},
+                "include_operational": {"type": "boolean", "default": False, "description": "Include operational nodes when validating restore backup candidates."},
             },
         },
     },
@@ -1371,6 +1405,102 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "title": {"type": "string", "description": "Optional title override for the derived observation."},
                 "write": {"type": "boolean", "default": False, "description": "When true, upsert the observation and link it back to evidence memories."},
                 "write_if_stale": {"type": "boolean", "default": False, "description": "When true, upsert only if the existing observation is missing or its stored evidence fingerprint differs from current graph evidence."},
+            },
+            "required": ["stable_key"],
+        },
+    },
+    "autopsy_memory_consolidate_session": {
+        "description": "Draft or write semantic memory from an imported session timeline.",
+        "handler": tool_consolidate_session,
+        "schema": {
+            "type": "object",
+            "properties": {
+                **optional_workspace_properties(),
+                "stable_key": {"type": "string", "description": "Imported session stable key, for example session-import:<sha>."},
+                "title": {"type": "string", "description": "Optional title for the consolidated memory."},
+                "kind": {"type": "string", "enum": KIND_ENUM, "default": "memory_note"},
+                "max_events": {"type": "integer", "default": 80},
+                "write": {"type": "boolean", "default": False, "description": "When true, write the consolidation memory instead of returning a draft only."},
+            },
+            "required": ["stable_key"],
+        },
+    },
+    "autopsy_memory_import_session": {
+        "description": "Import an agent JSONL transcript as episodic timeline memory, or parse it as a dry run before writing.",
+        "handler": tool_import_session,
+        "schema": {
+            "type": "object",
+            "properties": {
+                **optional_workspace_properties(),
+                "path": {"type": "string", "description": "Path to a JSONL transcript file on this machine."},
+                "title": {"type": "string", "description": "Optional title for the imported session timeline."},
+                "source": {"type": "string", "default": "agent-jsonl", "description": "Source label such as claude-jsonl, codex-jsonl, or cursor-jsonl."},
+                "max_events": {"type": "integer", "default": 200},
+                "dry_run": {"type": "boolean", "default": True, "description": "Parse and summarize without writing. Set false to import into memory."},
+                "repo": {"type": "string", "description": "Repository root to associate with the imported session."},
+                "repository_root_path": {"type": "string", "description": "Alias for repo."},
+            },
+            "required": ["path"],
+        },
+    },
+    "autopsy_memory_feedback": {
+        "description": "Record useful, not-useful, or neutral feedback for an existing Autopsy memory item.",
+        "handler": tool_feedback,
+        "schema": {
+            "type": "object",
+            "properties": {
+                **optional_workspace_properties(),
+                "stable_key": {"type": "string"},
+                "rating": {"type": "string", "enum": ["useful", "not-useful", "neutral"]},
+                "note": {"type": "string", "description": "Optional short note explaining the feedback."},
+                "source": {"type": "string", "default": "mcp", "description": "Feedback source label."},
+            },
+            "required": ["stable_key", "rating"],
+        },
+    },
+    "autopsy_memory_snapshot": {
+        "description": "Fetch a bounded graph snapshot around one Autopsy memory item.",
+        "handler": tool_snapshot,
+        "schema": {
+            "type": "object",
+            "properties": {
+                **optional_workspace_properties(),
+                "stable_key": {"type": "string"},
+                "limit": {"type": "integer", "default": 20},
+            },
+            "required": ["stable_key"],
+        },
+    },
+    "autopsy_memory_expire_item": {
+        "description": "Soft-expire or restore one Autopsy memory item while keeping history inspectable.",
+        "handler": tool_expire_item,
+        "schema": {
+            "type": "object",
+            "properties": {
+                **optional_workspace_properties(),
+                "stable_key": {"type": "string"},
+                "expires_at": {"type": "string", "description": "ISO-8601 expiration timestamp. Defaults to now when clear is false."},
+                "reason": {"type": "string", "description": "Short reason for the lifecycle change."},
+                "clear": {"type": "boolean", "default": False, "description": "Clear an existing expiration and restore the item to current reads."},
+            },
+            "required": ["stable_key"],
+        },
+    },
+    "autopsy_memory_pin_item": {
+        "description": "Pin, update, or unpin one Autopsy memory item as core context.",
+        "handler": tool_pin_item,
+        "schema": {
+            "type": "object",
+            "properties": {
+                **optional_workspace_properties(),
+                "stable_key": {"type": "string"},
+                "label": {"type": "string", "description": "Optional short core-memory label."},
+                "reason": {"type": "string", "description": "Short reason for pinning this memory."},
+                "description": {"type": "string", "description": "Memory-block description telling agents how to use this core memory."},
+                "block_limit": {"type": "integer", "description": "Maximum characters from this block value to expose in context."},
+                "read_only": {"type": "boolean", "description": "Whether the memory block should be treated as read-only by agents."},
+                "shared": {"type": "boolean", "description": "Whether the memory block can be shared across compatible scopes."},
+                "clear": {"type": "boolean", "default": False, "description": "Unpin the memory from core context packs."},
             },
             "required": ["stable_key"],
         },
@@ -1506,34 +1636,6 @@ TOOLS: dict[str, dict[str, Any]] = {
             "type": "object",
             "properties": {**optional_workspace_properties(), "stable_key": {"type": "string"}},
             "required": ["stable_key"],
-        },
-    },
-    "autopsy_context_graph_event": {
-        "description": "Record one allowlisted shell command for the live per-thread Autopsy context graph. Only command text is persisted; command output and generic graph events are ignored.",
-        "handler": tool_context_graph_event,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "thread_id": {"type": "string"},
-                "command": {"type": "string", "description": "Shell command text that fetched useful context. Non-allowlisted commands are skipped."},
-                "status": {"type": "string", "description": "Optional state flag such as in_progress, complete, blocked, or error."},
-                "timestamp": {"type": "string"},
-                "agent": {"type": "string"},
-                "app": {"type": "string"},
-                "run_id": {"type": "string"},
-            },
-            "required": ["thread_id", "command"],
-        },
-    },
-    "autopsy_context_graph_url": {
-        "description": "Return the local browser URL for a live per-thread Autopsy context graph.",
-        "handler": tool_context_graph_url,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "thread_id": {"type": "string"},
-            },
-            "required": ["thread_id"],
         },
     },
     "autopsy_memory_worker_info": {

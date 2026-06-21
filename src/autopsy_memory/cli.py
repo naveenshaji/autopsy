@@ -16,9 +16,10 @@ import sys
 import tempfile
 import time
 import uuid
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 try:
     import fcntl
@@ -26,13 +27,6 @@ except ImportError:  # pragma: no cover - fcntl is expected on supported macOS i
     fcntl = None
 
 from .cli_parser import CommandHandlers, build_parser as build_cli_parser, normalized_cli_args
-from .context_graph_settings import (
-    context_graph_capture_state,
-    context_graph_settings_payload,
-    context_graph_skip_payload,
-    load_context_graph_settings,
-    save_context_graph_settings,
-)
 from .doctor import import_check, installed_autopsy_command_check, python_version_check
 from .init import build_init_payload, cmd_init, instruction_targets, smoke_tests, target_status
 from .metadata import PACKAGE_NAME, cmd_instructions, cmd_version, package_version
@@ -41,8 +35,6 @@ from .metadata import PACKAGE_NAME, cmd_instructions, cmd_version, package_versi
 APP_SUPPORT_DIR_DEFAULT = Path(os.environ.get("AUTOPSY_APP_SUPPORT_DIR") or Path.home() / "Library" / "Application Support" / "Autopsy")
 FALKORDB_LITE_PATH_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "FalkorDB" / "autopsy-memory.db"
 GLOBAL_MEMORY_SETTINGS_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "Config" / "memory-settings.json"
-CODEX_HOOK_STATE_PATH_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "Config" / "codex-hook-session.json"
-CODEX_HOOK_STATE_MAX_AGE_SECONDS = 300.0
 UNIFIED_MEMORY_ROOT_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "MemoryRoot"
 ACTIVITY_SNAPSHOT_PATH_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "Activity" / "activity.json"
 MODEL_WARMUP_STATUS_PATH_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "ML" / "model-warmup.json"
@@ -62,10 +54,13 @@ CORE_MEMORY_BLOCK_DEFAULT_LIMIT = 5000
 CORE_MEMORY_BLOCK_MIN_LIMIT = 80
 CORE_MEMORY_BLOCK_MAX_LIMIT = 20000
 MEMORY_HISTORY_EVENT_KIND = "memory_history_event"
+MEMORY_HISTORY_EVENT_EXPIRATION_REASON = "history event is archival; excluded from current reads"
 DERIVED_OBSERVATION_POLICY = "derived_graph_observation_v1"
 OBSERVATION_DEFAULT_EVIDENCE_LIMIT = 5
 MEMORY_DATABASE_GUARD_POLICY = "embedded_falkordb_generation_guard_v1"
 MEMORY_DATABASE_GUARD_STABLE_KEY = "autopsy:embedded-falkordb-generation"
+BACKUP_FRESH_MAX_AGE_SECONDS = 24 * 60 * 60
+BACKUP_CRITICAL_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 
 SEARCHABLE_KINDS = {
     "decision",
@@ -208,6 +203,13 @@ COMMON_QUERY_TOKENS = {
     "when",
     "where",
     "with",
+}
+BROAD_QUERY_FILLER_TOKENS = {
+    "after",
+    "priority",
+    "priorities",
+    "remaining",
+    "work",
 }
 
 OBSOLETE_MEMORY_TOKENS = {"fallback", "sql" + "ite", "legacy"}
@@ -475,6 +477,7 @@ EMBEDDINGS_CONFIG_DEFAULT = {
     "candidate_limit": 48,
     "vector_candidate_limit": 64,
     "token_overlap_scan_max_items": 2000,
+    "token_overlap_recent_scan_items": 1200,
     "fast_lexical_min_hits": 3,
     "fast_lexical_min_score": 14.0,
     "rerank_min_candidates": 3,
@@ -490,6 +493,8 @@ EMBEDDINGS_CONFIG_DEFAULT = {
         "semantic_only_min_score": 0.12,
     },
 }
+BENCHMARK_MIN_OVERALL_SCORE = 8.0
+BENCHMARK_MIN_ATTRIBUTE_SCORE = 8.0
 
 OPERATIONAL_KINDS = {
     "workspace",
@@ -562,6 +567,13 @@ STRUCTURAL_EDGE_TYPES = (
 def fail(message: str, code: int = 1) -> None:
     print(message, file=sys.stderr)
     raise SystemExit(code)
+
+
+class MissingRelationTargetsError(ValueError):
+    def __init__(self, missing_specs: list[dict[str, Any]], diagnostics: list[dict[str, Any]] | None = None):
+        self.missing_specs = missing_specs
+        self.diagnostics = diagnostics or []
+        super().__init__(format_missing_relation_targets_error(missing_specs, diagnostics=self.diagnostics))
 
 
 def workflow_step(name: str, reason: str, command: str | None = None) -> dict[str, Any]:
@@ -1302,6 +1314,50 @@ def query_signal_tokens(value: str) -> list[str]:
     return filtered or tokens
 
 
+def query_token_variants(token: str) -> set[str]:
+    normalized = str(token or "").strip().lower()
+    if len(normalized) < 3:
+        return set()
+    variants = {normalized}
+    if normalized.endswith("ies") and len(normalized) > 5:
+        variants.add(f"{normalized[:-3]}y")
+    if normalized.endswith("s") and len(normalized) > 4:
+        variants.add(normalized[:-1])
+    if normalized.endswith("ing") and len(normalized) > 6:
+        stem = normalized[:-3]
+        variants.add(stem)
+        variants.add(f"{stem}ed")
+        if stem.endswith("v"):
+            base = f"{stem}e"
+            variants.add(base)
+            variants.add(f"{base}d")
+    if normalized.endswith("ed") and len(normalized) > 5:
+        stem = normalized[:-2]
+        variants.add(stem)
+        if stem.endswith("v"):
+            variants.add(f"{stem}e")
+    return {variant for variant in variants if len(variant) >= 3}
+
+
+def query_token_variant_groups(value: str, *, limit: int | None = None) -> list[set[str]]:
+    groups: list[set[str]] = []
+    seen: set[str] = set()
+    for token in query_signal_tokens(value):
+        if token in BROAD_QUERY_FILLER_TOKENS:
+            continue
+        variants = query_token_variants(token)
+        if not variants:
+            continue
+        canonical = next(iter(sorted(variants)))
+        if canonical in seen:
+            continue
+        seen.add(canonical)
+        groups.append(variants)
+        if limit is not None and len(groups) >= limit:
+            break
+    return groups
+
+
 def entity_token_variants(raw_value: str) -> set[str]:
     raw = str(raw_value or "").strip().strip("`'\".,;:()[]{}<>")
     if not raw:
@@ -1465,19 +1521,19 @@ def item_matches_identifier_tokens(identifier_tokens: list[str], item: dict[str,
     return True
 
 def title_summary_overlap_score(query: str, *, title: str, summary: str, stable_key: str) -> float:
-    query_tokens = query_signal_tokens(query)
-    if not query_tokens:
+    query_token_groups = query_token_variant_groups(query)
+    if not query_token_groups:
         return 0.0
     title_tokens = set(normalized_tokens(title))
     summary_tokens = set(normalized_tokens(summary))
     stable_key_tokens = set(normalized_tokens(stable_key))
     overlap = 0.0
-    for token in query_tokens:
-        if token in title_tokens:
+    for token_group in query_token_groups:
+        if token_group & title_tokens:
             overlap += 8.0
-        elif token in summary_tokens:
+        elif token_group & summary_tokens:
             overlap += 3.0
-        elif token in stable_key_tokens:
+        elif token_group & stable_key_tokens:
             overlap += 2.0
     if title and query.strip().lower() in title.lower():
         overlap += 40.0
@@ -1548,7 +1604,7 @@ def lexical_minimum_token_matches(query: str) -> int:
 def filter_weak_lexical_hits(query: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     minimum = lexical_minimum_rank_score(query)
     minimum_matches = lexical_minimum_token_matches(query)
-    query_tokens = set(query_signal_tokens(query))
+    query_token_groups = query_token_variant_groups(query)
     identifier_tokens = unlikely_identifier_tokens(query)
     filtered = []
     for item in items:
@@ -1569,7 +1625,7 @@ def filter_weak_lexical_hits(query: str, items: list[dict[str, Any]]) -> list[di
                 )
             )
         )
-        matched_tokens = len(query_tokens & item_tokens)
+        matched_tokens = sum(1 for token_group in query_token_groups if token_group & item_tokens)
         entity_overlap = float(item.get("entity_overlap_score") or 0.0)
         if exact_boost >= 10.0 or entity_overlap >= 8.0 or (matched_tokens >= minimum_matches and token_overlap >= minimum and rank_score >= minimum):
             filtered.append(item)
@@ -1581,9 +1637,22 @@ def strong_lexical_hit_count(items: list[dict[str, Any]], config: dict[str, Any]
     return sum(1 for item in items if candidate_final_score(item) >= threshold)
 
 
+def has_exact_lexical_anchor(items: list[dict[str, Any]], *, limit: int, config: dict[str, Any] | None) -> bool:
+    threshold = max(
+        200.0,
+        float((config or {}).get("fast_lexical_min_score", EMBEDDINGS_CONFIG_DEFAULT["fast_lexical_min_score"])) * 10.0,
+    )
+    for item in items[: max(limit, 1)]:
+        if float(item.get("exact_match_boost") or 0.0) >= threshold:
+            return True
+    return False
+
+
 def lexical_results_are_strong(items: list[dict[str, Any]], *, limit: int, config: dict[str, Any] | None) -> bool:
     if not items:
         return False
+    if has_exact_lexical_anchor(items, limit=limit, config=config):
+        return True
     min_hits = max(1, int((config or {}).get("fast_lexical_min_hits", EMBEDDINGS_CONFIG_DEFAULT["fast_lexical_min_hits"])))
     return strong_lexical_hit_count(items[: max(limit, min_hits)], config) >= min(min_hits, max(limit, 1))
 
@@ -1662,6 +1731,10 @@ def workspace_graph_name(base_graph_name: str, workspace: dict[str, Any]) -> str
 class MemoryDatabaseRollbackError(RuntimeError):
     """Raised when the embedded DB is older than Autopsy's durable guard state."""
 
+    def __init__(self, message: str, *, state: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.state = dict(state or {})
+
 
 def memory_database_guard_enabled() -> bool:
     disabled = str(os.environ.get("AUTOPSY_MEMORY_GUARD_DISABLED") or "").strip().lower()
@@ -1683,6 +1756,59 @@ def memory_database_guard_generation(value: Any) -> int:
         return 0
 
 
+def memory_database_guard_sidecar_graphs(sidecar: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    raw_graphs = sidecar.get("graphs")
+    graphs: dict[str, dict[str, Any]] = {}
+    if isinstance(raw_graphs, dict):
+        for raw_name, raw_record in raw_graphs.items():
+            name = str(raw_name or "").strip()
+            if not name:
+                continue
+            if isinstance(raw_record, dict):
+                generation = memory_database_guard_generation(raw_record.get("generation"))
+                updated_at = str(raw_record.get("updated_at") or "")
+                process_id = raw_record.get("process_id")
+                autopsy_version = str(raw_record.get("autopsy_version") or "")
+            else:
+                generation = memory_database_guard_generation(raw_record)
+                updated_at = ""
+                process_id = None
+                autopsy_version = ""
+            graphs[name] = {
+                "generation": generation,
+                "updated_at": updated_at,
+                "process_id": process_id,
+                "autopsy_version": autopsy_version,
+            }
+    legacy_name = str(sidecar.get("graph_name") or "").strip()
+    legacy_generation = memory_database_guard_generation(sidecar.get("generation"))
+    if legacy_name and legacy_generation and legacy_name not in graphs:
+        graphs[legacy_name] = {
+            "generation": legacy_generation,
+            "updated_at": str(sidecar.get("updated_at") or ""),
+            "process_id": sidecar.get("process_id"),
+            "autopsy_version": str(sidecar.get("autopsy_version") or ""),
+        }
+    return graphs
+
+
+def memory_database_guard_sidecar_record_for_graph(
+    sidecar: dict[str, Any],
+    *,
+    graph_name: str,
+) -> tuple[dict[str, Any], str]:
+    name = str(graph_name or "").strip()
+    graphs = memory_database_guard_sidecar_graphs(sidecar)
+    if name and name in graphs:
+        return graphs[name], "graph"
+    if isinstance(sidecar.get("graphs"), dict):
+        return {"generation": 0, "updated_at": ""}, "graph_missing"
+    legacy_name = str(sidecar.get("graph_name") or "").strip()
+    if legacy_name and name and legacy_name != name:
+        return {"generation": 0, "updated_at": ""}, "legacy_other_graph_ignored"
+    return sidecar, "legacy_database"
+
+
 def read_memory_database_guard_sidecar(lite_path: str | Path) -> dict[str, Any]:
     path = memory_database_guard_sidecar_path(lite_path)
     try:
@@ -1701,15 +1827,25 @@ def write_memory_database_guard_sidecar(
     generation: int,
     updated_at: str,
 ) -> dict[str, Any]:
-    payload = {
-        "schema_version": 1,
-        "policy": MEMORY_DATABASE_GUARD_POLICY,
-        "lite_path": str(Path(lite_path).expanduser()),
-        "graph_name": graph_name,
+    existing = read_memory_database_guard_sidecar(lite_path)
+    graphs = memory_database_guard_sidecar_graphs(existing)
+    graphs[str(graph_name)] = {
         "generation": int(generation),
         "updated_at": updated_at,
         "process_id": os.getpid(),
         "autopsy_version": package_version(),
+    }
+    max_generation = max([memory_database_guard_generation(record.get("generation")) for record in graphs.values()] or [int(generation)])
+    payload = {
+        "schema_version": 2,
+        "policy": MEMORY_DATABASE_GUARD_POLICY,
+        "lite_path": str(Path(lite_path).expanduser()),
+        "graph_name": graph_name,
+        "generation": int(max_generation),
+        "updated_at": updated_at,
+        "process_id": os.getpid(),
+        "autopsy_version": package_version(),
+        "graphs": graphs,
     }
     write_json_atomic(memory_database_guard_sidecar_path(lite_path), payload)
     return payload
@@ -1730,6 +1866,30 @@ def record_memory_database_guard_diagnostic(event: str, payload: dict[str, Any])
             "timestamp": utc_now_iso(),
             "event": event,
             "policy": MEMORY_DATABASE_GUARD_POLICY,
+            "process_id": os.getpid(),
+            **payload,
+        }
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, sort_keys=True) + "\n")
+    except Exception:
+        pass
+
+
+def memory_relation_diagnostic_log_path() -> Path:
+    raw_path = str(os.environ.get("AUTOPSY_MEMORY_RELATION_LOG_PATH") or "").strip()
+    if raw_path:
+        return Path(raw_path).expanduser()
+    return APP_SUPPORT_DIR_DEFAULT / "Diagnostics" / "memory-relations.jsonl"
+
+
+def record_memory_relation_diagnostic(event: str, payload: dict[str, Any]) -> None:
+    try:
+        path = memory_relation_diagnostic_log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "timestamp": utc_now_iso(),
+            "event": event,
+            "policy": "memory_relation_diagnostics_v1",
             "process_id": os.getpid(),
             **payload,
         }
@@ -1853,34 +2013,57 @@ def persist_memory_database_guard_graph(graph) -> None:
         execute_command("SAVE")
 
 
-def memory_database_guard_state(graph, lite_path: str | Path, *, graph_name: str | None = None) -> dict[str, Any]:
+def memory_database_guard_state(
+    graph,
+    lite_path: str | Path,
+    *,
+    graph_name: str | None = None,
+    lock_held: bool = False,
+) -> dict[str, Any]:
+    if not lock_held:
+        with memory_database_guard_lock(lite_path):
+            return memory_database_guard_state(graph, lite_path, graph_name=graph_name, lock_held=True)
+    resolved_graph_name = str(graph_name or getattr(graph, "name", "") or "")
     sidecar = read_memory_database_guard_sidecar(lite_path)
     graph_generation = memory_database_guard_graph_generation(graph)
-    sidecar_generation = memory_database_guard_generation(sidecar.get("generation"))
+    sidecar_record, sidecar_generation_source = memory_database_guard_sidecar_record_for_graph(
+        sidecar,
+        graph_name=resolved_graph_name,
+    )
+    sidecar_generation = memory_database_guard_generation(sidecar_record.get("generation"))
     return {
         "policy": MEMORY_DATABASE_GUARD_POLICY,
         "ok": graph_generation >= sidecar_generation,
         "lite_path": str(Path(lite_path).expanduser()),
-        "graph_name": str(graph_name or getattr(graph, "name", "") or ""),
+        "graph_name": resolved_graph_name,
         "graph_generation": graph_generation,
         "sidecar_generation": sidecar_generation,
+        "sidecar_generation_source": sidecar_generation_source,
+        "sidecar_database_generation": memory_database_guard_generation(sidecar.get("generation")),
         "sidecar_path": str(memory_database_guard_sidecar_path(lite_path)),
-        "sidecar_updated_at": str(sidecar.get("updated_at") or ""),
+        "sidecar_updated_at": str(sidecar_record.get("updated_at") or sidecar.get("updated_at") or ""),
     }
 
 
-def assert_memory_database_guard_current(graph, lite_path: str | Path, *, graph_name: str | None = None) -> dict[str, Any]:
+def assert_memory_database_guard_current(
+    graph,
+    lite_path: str | Path,
+    *,
+    graph_name: str | None = None,
+    lock_held: bool = False,
+) -> dict[str, Any]:
     if not memory_database_guard_enabled():
         return {"policy": MEMORY_DATABASE_GUARD_POLICY, "ok": True, "disabled": True}
-    state = memory_database_guard_state(graph, lite_path, graph_name=graph_name)
+    state = memory_database_guard_state(graph, lite_path, graph_name=graph_name, lock_held=lock_held)
     if not bool(state.get("ok")):
         record_memory_database_guard_diagnostic("rollback_detected", state)
         raise MemoryDatabaseRollbackError(
             "Autopsy memory database rollback detected: "
-            f"embedded graph {state['lite_path']} is at generation {state['graph_generation']}, "
+            f"embedded graph {state.get('graph_name') or '<unknown>'} in {state['lite_path']} is at generation {state['graph_generation']}, "
             f"but guard sidecar {state['sidecar_path']} records generation {state['sidecar_generation']}. "
             "Refusing to use this stale FalkorDBLite snapshot because it may have overwritten newer memory. "
-            "Restore from a backup or repair the embedded database before retrying."
+            "Restore from a backup or repair the embedded database before retrying.",
+            state=state,
         )
     return state
 
@@ -1890,10 +2073,14 @@ def advance_memory_database_guard_generation(
     lite_path: str | Path,
     *,
     graph_name: str,
+    lock_held: bool = False,
 ) -> dict[str, Any]:
     if not memory_database_guard_enabled():
         return {"policy": MEMORY_DATABASE_GUARD_POLICY, "ok": True, "disabled": True}
-    state = assert_memory_database_guard_current(graph, lite_path, graph_name=graph_name)
+    if not lock_held:
+        with memory_database_guard_lock(lite_path):
+            return advance_memory_database_guard_generation(graph, lite_path, graph_name=graph_name, lock_held=True)
+    state = assert_memory_database_guard_current(graph, lite_path, graph_name=graph_name, lock_held=True)
     generation = max(
         memory_database_guard_generation(state.get("graph_generation")),
         memory_database_guard_generation(state.get("sidecar_generation")),
@@ -1947,12 +2134,14 @@ class GuardedFalkorGraph:
                     self._autopsy_guard_raw_graph,
                     self._autopsy_guard_lite_path,
                     graph_name=self._autopsy_guard_graph_name,
+                    lock_held=True,
                 )
                 result = self._autopsy_guard_raw_graph.query(query, *args, **kwargs)
                 advance_memory_database_guard_generation(
                     self._autopsy_guard_raw_graph,
                     self._autopsy_guard_lite_path,
                     graph_name=self._autopsy_guard_graph_name,
+                    lock_held=True,
                 )
                 return result
         assert_memory_database_guard_current(
@@ -1985,9 +2174,19 @@ def ensure_graph(host: str, port: int, graph_name: str, lite_path: str | None = 
             client = _FALKORDB_LITE_CLIENTS.get(resolved_path)
             if client is None:
                 client = FalkorDBLite(resolved_path, serverconfig=serverconfig)
-                _FALKORDB_LITE_CLIENTS[resolved_path] = client
+            _FALKORDB_LITE_CLIENTS[resolved_path] = client
             _FALKORDB_LITE_GRAPH_NAMES.setdefault(resolved_path, set()).add(graph_name)
-            return guarded_falkor_graph(client.select_graph(graph_name), lite_path=resolved_path, graph_name=graph_name)
+            graph = guarded_falkor_graph(client.select_graph(graph_name), lite_path=resolved_path, graph_name=graph_name)
+            return graph
+        except MemoryDatabaseRollbackError:
+            stale_client = _FALKORDB_LITE_CLIENTS.pop(resolved_path, None) or locals().get("client")
+            if stale_client is not None:
+                try:
+                    close_falkordb_lite_client(stale_client, save=False)
+                except Exception:
+                    disarm_falkordb_lite_cleanup(stale_client)
+            _FALKORDB_LITE_GRAPH_NAMES.pop(resolved_path, None)
+            raise
         except Exception as exc:
             if not is_stale_falkordb_lite_error(exc):
                 raise
@@ -1996,7 +2195,17 @@ def ensure_graph(host: str, port: int, graph_name: str, lite_path: str | None = 
             client = FalkorDBLite(resolved_path, serverconfig=serverconfig)
             _FALKORDB_LITE_CLIENTS[resolved_path] = client
             _FALKORDB_LITE_GRAPH_NAMES.setdefault(resolved_path, set()).add(graph_name)
-            return guarded_falkor_graph(client.select_graph(graph_name), lite_path=resolved_path, graph_name=graph_name)
+            try:
+                graph = guarded_falkor_graph(client.select_graph(graph_name), lite_path=resolved_path, graph_name=graph_name)
+            except MemoryDatabaseRollbackError:
+                try:
+                    close_falkordb_lite_client(client, save=False)
+                except Exception:
+                    disarm_falkordb_lite_cleanup(client)
+                _FALKORDB_LITE_CLIENTS.pop(resolved_path, None)
+                _FALKORDB_LITE_GRAPH_NAMES.pop(resolved_path, None)
+                raise
+            return graph
     FalkorDB = load_falkordb()
     client = FalkorDB(host=host, port=port)
     return client.select_graph(graph_name)
@@ -2067,6 +2276,8 @@ def falkordb_lite_binary_diagnostics() -> dict[str, Any]:
 
 def falkor_start_failure_payload(args: argparse.Namespace, error: Exception) -> dict[str, Any]:
     lite_path = resolved_lite_path(args)
+    rollback_state = getattr(error, "state", None)
+    is_rollback = isinstance(error, MemoryDatabaseRollbackError) or "Autopsy memory database rollback detected" in str(error)
     paths = {
         "app_support_dir": str(APP_SUPPORT_DIR_DEFAULT),
         "falkordb_lite_path": str(lite_path or ""),
@@ -2090,9 +2301,31 @@ def falkor_start_failure_payload(args: argparse.Namespace, error: Exception) -> 
             ],
         },
     }
+    if is_rollback:
+        rollback_payload = rollback_state if isinstance(rollback_state, dict) else {}
+        recovery_reference_at = str(rollback_payload.get("sidecar_updated_at") or "")
+        backup = latest_backup_status(recovery_reference_at=recovery_reference_at)
+        payload["backup"] = backup
+        payload["backup_health"] = backup_freshness_status(backup, item_count=1)
+        payload["workflow"] = {
+            "status": "rollback_detected",
+            "complete": False,
+            "next_step": "restore_or_repair_embedded_memory_snapshot",
+            "message": "Autopsy refused to open an embedded FalkorDBLite snapshot older than its guard sidecar.",
+            "suggested_next_steps": [
+                "Inspect recent guard events with autopsy diagnostics --log memory-guard --limit 5.",
+                "Preview the quarantine plan with autopsy repair-embedded-snapshot --dry-run.",
+                "If you accept the recovery risk, run autopsy repair-embedded-snapshot --yes --accept-data-loss with --restore-backup <backup.json> or --restore-latest-backup.",
+                "Do not delete or lower the guard sidecar unless you intentionally accept losing newer memory writes.",
+            ],
+        }
     if lite_path:
         log_path = falkordb_lite_log_path(lite_path)
         payload["diagnostics"] = falkordb_lite_binary_diagnostics()
+        if is_rollback:
+            payload["diagnostics"]["memory_guard_log"] = str(memory_database_guard_diagnostic_log_path())
+            if isinstance(rollback_state, dict):
+                payload["diagnostics"]["rollback_guard"] = rollback_state
         payload["log"] = {
             "path": str(log_path),
             "tail": tail_text(log_path),
@@ -2137,23 +2370,122 @@ def falkordb_lite_client_rollback_risk(client, resolved_path: str) -> dict[str, 
 
 
 def close_falkordb_lite_client(client, *, save: bool = True) -> None:
-    if save:
-        shutdown = getattr(client, "shutdown", None)
-        if callable(shutdown):
-            shutdown()
-            return
-        close = getattr(client, "close", None)
-        if callable(close):
-            close()
-            return
     inner_client = getattr(client, "client", None)
+    if save:
+        save_falkordb_lite_client(client)
+        if falkordb_lite_terminate_on_close():
+            close = getattr(client, "close", None)
+            if callable(close):
+                close()
+                return
+            cleanup = getattr(inner_client, "_cleanup", None)
+            if callable(cleanup):
+                cleanup()
+                return
+        detach_falkordb_lite_client(client)
+        return
     shutdown = getattr(inner_client, "shutdown", None)
     if callable(shutdown):
+        disarm_falkordb_lite_cleanup(client)
         shutdown(nosave=not save, save=save, now=True, force=True)
         return
     cleanup = getattr(inner_client, "_cleanup", None)
     if save and callable(cleanup):
         cleanup()
+
+
+def falkordb_lite_terminate_on_close() -> bool:
+    raw_value = os.environ.get("AUTOPSY_FALKORDB_LITE_TERMINATE_ON_CLOSE")
+    if raw_value is not None:
+        return str(raw_value).strip().lower() in {"1", "true", "yes", "on", "force"}
+    return str(os.environ.get("AUTOPSY_EMBEDDED_DB_OWNER") or "").strip().lower() == "worker"
+
+
+def save_falkordb_lite_client(client) -> None:
+    for target in (getattr(client, "client", None), client):
+        if target is None:
+            continue
+        save = getattr(target, "save", None)
+        if callable(save):
+            save()
+            return
+        execute_command = getattr(target, "execute_command", None)
+        if callable(execute_command):
+            execute_command("SAVE")
+            return
+
+
+def disarm_falkordb_lite_cleanup(client) -> None:
+    for target in (getattr(client, "client", None), client):
+        if target is None:
+            continue
+        try:
+            setattr(target, "_async_managed", True)
+        except Exception:
+            pass
+        for attribute in ("pidfile",):
+            if hasattr(target, attribute):
+                try:
+                    setattr(target, attribute, None)
+                except Exception:
+                    pass
+
+
+def detach_falkordb_lite_client(client) -> None:
+    disarm_falkordb_lite_cleanup(client)
+    for target in (getattr(client, "client", None), client):
+        if target is None:
+            continue
+        pool = getattr(target, "connection_pool", None)
+        disconnect = getattr(pool, "disconnect", None)
+        if callable(disconnect):
+            disconnect()
+            return
+        close = getattr(target, "close", None)
+        if callable(close) and target is not client:
+            close()
+            return
+
+
+def embedded_cli_shutdown_detach_probe() -> dict[str, Any]:
+    events: list[str] = []
+
+    class Pool:
+        def disconnect(self):
+            events.append("disconnect")
+
+    class InnerClient:
+        connection_pool = Pool()
+
+        def save(self):
+            events.append("save")
+
+        def shutdown(self, **_kwargs):
+            events.append("inner_shutdown")
+
+    class Client:
+        client = InnerClient()
+
+        def close(self):
+            events.append("close")
+
+        def shutdown(self):
+            events.append("shutdown")
+
+    previous_terminate = os.environ.pop("AUTOPSY_FALKORDB_LITE_TERMINATE_ON_CLOSE", None)
+    previous_owner = os.environ.pop("AUTOPSY_EMBEDDED_DB_OWNER", None)
+    try:
+        close_falkordb_lite_client(Client(), save=True)
+    finally:
+        if previous_terminate is not None:
+            os.environ["AUTOPSY_FALKORDB_LITE_TERMINATE_ON_CLOSE"] = previous_terminate
+        if previous_owner is not None:
+            os.environ["AUTOPSY_EMBEDDED_DB_OWNER"] = previous_owner
+    return {
+        "passed": events == ["save", "disconnect"],
+        "events": events,
+        "expected": ["save", "disconnect"],
+    }
 
 
 def reset_falkordb_lite_client(lite_path: str | None) -> None:
@@ -2189,6 +2521,32 @@ def reset_stale_falkordb_lite_runtime(args: argparse.Namespace) -> dict[str, Any
     }
 
 
+def run_with_stale_falkordb_lite_retries(
+    args: argparse.Namespace,
+    operation: Callable[[], Any],
+    *,
+    max_retries: int = 2,
+) -> Any:
+    attempts = 0
+    while True:
+        try:
+            return operation()
+        except Exception as exc:
+            if not is_stale_falkordb_lite_error(exc) or attempts >= max_retries:
+                raise
+            attempts += 1
+            reset_payload = reset_stale_falkordb_lite_runtime(args)
+            record_memory_database_guard_diagnostic(
+                "stale_falkordb_lite_retry",
+                {
+                    "attempt": attempts,
+                    "max_retries": max_retries,
+                    "error": str(exc),
+                    "reset": reset_payload,
+                },
+            )
+
+
 def result_rows(result) -> list[list[Any]]:
     return result.result_set or []
 
@@ -2215,9 +2573,19 @@ def token_overlap_scan_max_items(config: dict[str, Any] | None) -> int:
     return int(EMBEDDINGS_CONFIG_DEFAULT["token_overlap_scan_max_items"])
 
 
+def token_overlap_recent_scan_items(config: dict[str, Any] | None) -> int:
+    if isinstance(config, dict):
+        return max(0, int(config.get("token_overlap_recent_scan_items", EMBEDDINGS_CONFIG_DEFAULT["token_overlap_recent_scan_items"])))
+    return int(EMBEDDINGS_CONFIG_DEFAULT["token_overlap_recent_scan_items"])
+
+
 def should_use_token_overlap_scan(item_count: int, config: dict[str, Any] | None) -> bool:
     limit = token_overlap_scan_max_items(config)
     return limit > 0 and item_count <= limit
+
+
+def should_use_recent_token_overlap_scan(item_count: int, config: dict[str, Any] | None) -> bool:
+    return item_count > token_overlap_scan_max_items(config) and token_overlap_recent_scan_items(config) > 0
 
 
 def fetch_node_lexical(graph, query: str, *, limit: int) -> tuple[list[dict[str, Any]], float]:
@@ -2631,52 +2999,95 @@ def fetch_entity_overlap_candidates(graph, query: str, *, limit: int) -> tuple[l
     return filter_weak_lexical_hits(query, rerank_lexical_hits(query, items)), elapsed
 
 
-def fetch_token_overlap_candidates(graph, query: str, *, limit: int) -> tuple[list[dict[str, Any]], float]:
-    tokens = [token.lower() for token in query_signal_tokens(query) if len(token) >= 3]
-    if not tokens:
+def token_overlap_match_expression(param_names: list[str]) -> str:
+    parts = []
+    for name in param_names:
+        parts.append(
+            f"toLower(coalesce(node.label, '')) CONTAINS ${name} OR "
+            f"toLower(coalesce(node.summary, '')) CONTAINS ${name} OR "
+            f"toLower(coalesce(node.stable_key, '')) CONTAINS ${name} OR "
+            f"toLower(coalesce(node.search_text, '')) CONTAINS ${name} OR "
+            f"toLower(coalesce(node.memory_tags, '')) CONTAINS ${name}"
+        )
+    return "(" + " OR ".join(parts) + ")"
+
+
+def fetch_token_overlap_candidates(
+    graph,
+    query: str,
+    *,
+    limit: int,
+    recent_scan_limit: int | None = None,
+) -> tuple[list[dict[str, Any]], float]:
+    token_groups = query_token_variant_groups(query, limit=10)
+    if not token_groups:
         return [], 0.0
-    token_limit = min(len(tokens), 6)
-    min_token_hits = 2 if token_limit <= 3 else max(3, int(round(token_limit * 0.5)))
+    token_limit = len(token_groups)
+    min_token_hits = 2 if token_limit <= 3 else 3
     clauses = []
     score_parts = []
     params: dict[str, Any] = {"limit": max(limit * 24, 240)}
-    for index, token in enumerate(tokens[:token_limit]):
-        key = f"token_{index}"
-        params[key] = token
-        match_expression = (
-            f"toLower(coalesce(node.label, '')) CONTAINS ${key} OR "
-            f"toLower(coalesce(node.summary, '')) CONTAINS ${key} OR "
-            f"toLower(coalesce(node.stable_key, '')) CONTAINS ${key} OR "
-            f"toLower(coalesce(node.search_text, '')) CONTAINS ${key}"
-        )
+    for index, variants in enumerate(token_groups):
+        param_names = []
+        for variant_index, token in enumerate(sorted(variants)):
+            key = f"token_{index}_{variant_index}"
+            params[key] = token
+            param_names.append(key)
+        match_expression = token_overlap_match_expression(param_names)
         clauses.append(match_expression)
         score_parts.append(f"CASE WHEN {match_expression} THEN 1 ELSE 0 END")
     score_expression = " + ".join(score_parts) if score_parts else "0"
     started = time.perf_counter()
-    result = graph.query(
-        f"""
-        MATCH (node:SemanticItem)
-        WHERE {' OR '.join(f'({clause})' for clause in clauses)}
-        RETURN
-          node.entity_id,
-          node.stable_key,
-          node.kind,
-          node.label,
-          coalesce(node.summary, ''),
-          coalesce(node.updated_at, node.created_at),
-          coalesce(node.source_kind, ''),
-          coalesce(node.expired_at, ''),
-          {score_expression} AS token_hits
-        ORDER BY token_hits DESC, coalesce(node.updated_at, node.created_at) DESC
-        LIMIT $limit
-        """,
-        params=params,
-    )
+    if recent_scan_limit is not None:
+        params["scan_limit"] = max(1, int(recent_scan_limit))
+        result = graph.query(
+            f"""
+            MATCH (node:SemanticItem)
+            WITH node
+            ORDER BY coalesce(node.updated_at, node.created_at) DESC
+            LIMIT $scan_limit
+            WITH node, {score_expression} AS token_hits
+            WHERE token_hits >= $min_token_hits
+            RETURN
+              node.entity_id,
+              node.stable_key,
+              node.kind,
+              node.label,
+              coalesce(node.summary, ''),
+              coalesce(node.updated_at, node.created_at),
+              coalesce(node.source_kind, ''),
+              coalesce(node.expired_at, ''),
+              token_hits
+            ORDER BY token_hits DESC, coalesce(node.updated_at, node.created_at) DESC
+            LIMIT $limit
+            """,
+            params={**params, "min_token_hits": min_token_hits},
+        )
+    else:
+        result = graph.query(
+            f"""
+            MATCH (node:SemanticItem)
+            WHERE {' OR '.join(f'({clause})' for clause in clauses)}
+            WITH node, {score_expression} AS token_hits
+            WHERE token_hits >= $min_token_hits
+            RETURN
+              node.entity_id,
+              node.stable_key,
+              node.kind,
+              node.label,
+              coalesce(node.summary, ''),
+              coalesce(node.updated_at, node.created_at),
+              coalesce(node.source_kind, ''),
+              coalesce(node.expired_at, ''),
+              token_hits
+            ORDER BY token_hits DESC, coalesce(node.updated_at, node.created_at) DESC
+            LIMIT $limit
+            """,
+            params={**params, "min_token_hits": min_token_hits},
+        )
     elapsed = time.perf_counter() - started
     items = []
     for rank, row in enumerate(result_rows(result)):
-        if float(row[8] or 0.0) < min_token_hits:
-            continue
         kind = str(row[2] or "")
         if kind not in SEARCHABLE_KINDS:
             continue
@@ -3278,7 +3689,9 @@ def record_memory_history_event(
             event.old_memory = $old_memory,
             event.new_memory = $new_memory,
             event.changed_fields = $changed_fields,
-            event.source = $source
+            event.source = $source,
+            event.expired_at = $archived_at,
+            event.expiration_reason = $expiration_reason
         """,
         params={
             "stable_key": stable_key,
@@ -3288,6 +3701,8 @@ def record_memory_history_event(
             "new_memory": record.get("new_memory") or "",
             "changed_fields": json.dumps(record.get("changed_fields") or [], sort_keys=True),
             "source": source,
+            "archived_at": event_time,
+            "expiration_reason": MEMORY_HISTORY_EVENT_EXPIRATION_REASON,
         },
     )
     upsert_structural_edge(graph, from_stable_key=stable_key, to_stable_key=target_key, relation="history_of", timestamp=event_time, origin="falkor")
@@ -3895,55 +4310,6 @@ def fetch_activity_writes(graph, *, limit: int) -> list[dict[str, Any]]:
         )
     return writes
 
-
-def fetch_context_graph_thread_writes(graph, *, thread_id: str, since_at: str = "", limit: int = 6) -> list[dict[str, Any]]:
-    thread_key = str(thread_id or "").strip()
-    if not thread_key:
-        return []
-    bounded_limit = max(1, min(int(limit), 12))
-    result = graph.query(
-        """
-        MATCH (node:SemanticItem)-[:ABOUT]-(thread:Thread {stable_key: $thread_id})
-        WHERE coalesce(node.source_kind, '') <> 'graph_episode'
-          AND NOT coalesce(node.stable_key, '') STARTS WITH 'turn-outcome:'
-          AND (coalesce(node.expired_at, node.expires_at, '') = '')
-          AND ($since_at = '' OR coalesce(node.updated_at, node.created_at, '') >= $since_at)
-        OPTIONAL MATCH (node)-[:ABOUT]-(repo:Repository)
-        WITH node, collect(DISTINCT coalesce(repo.label, '')) AS repositories
-        RETURN
-          node.stable_key,
-          node.kind,
-          node.label,
-          coalesce(node.summary, ''),
-          coalesce(node.detail_content, ''),
-          coalesce(node.updated_at, node.created_at),
-          coalesce(node.source_kind, ''),
-          repositories
-        ORDER BY coalesce(node.updated_at, node.created_at) DESC
-        LIMIT $limit
-        """,
-        params={"thread_id": thread_key, "since_at": str(since_at or "").strip(), "limit": bounded_limit},
-    )
-    writes: list[dict[str, Any]] = []
-    for row in result_rows(result):
-        repositories = [str(value) for value in (row[7] or []) if str(value or "").strip()]
-        summary = str(row[3] or "") or str(row[4] or "")
-        kind = normalize_note_kind(str(row[1] or ""), fallback="memory_note")
-        writes.append(
-            {
-                "type": "write",
-                "stable_key": str(row[0] or ""),
-                "kind": kind,
-                "memory_type": memory_type_for_kind(kind),
-                "title": summary_snippet(str(row[2] or "Untitled memory"), 120),
-                "summary": summary_snippet(summary, 220),
-                "updated_at": str(row[5] or ""),
-                "source": str(row[6] or "memory"),
-                "repositories": repositories,
-                "severity": "info",
-            }
-        )
-    return writes
 
 
 def fetch_activity_consults(graph, *, limit: int) -> list[dict[str, Any]]:
@@ -4643,6 +5009,36 @@ def lookup_node_by_stable_key(graph, stable_key: str) -> dict[str, Any] | None:
         LIMIT 1
         """,
         params={"stable_key": stable_key},
+    )
+    rows = result_rows(result)
+    if not rows:
+        return None
+    row = rows[0]
+    return {
+        "entity_id": int(row[0]),
+        "stable_key": str(row[1] or ""),
+        "kind": str(row[2] or ""),
+        "label": str(row[3] or ""),
+        "memory_tags": str(row[4] or ""),
+        "memory_metadata": str(row[5] or "{}"),
+        "metadata": item_memory_metadata({"memory_metadata": str(row[5] or "{}")}),
+    }
+
+
+def lookup_node_by_entity_id(graph, entity_id: int) -> dict[str, Any] | None:
+    result = graph.query(
+        """
+        MATCH (node:MemoryNode {entity_id: $entity_id})
+        RETURN
+          node.entity_id,
+          node.stable_key,
+          node.kind,
+          node.label,
+          coalesce(node.memory_tags, ''),
+          coalesce(node.memory_metadata, '{}')
+        LIMIT 1
+        """,
+        params={"entity_id": int(entity_id)},
     )
     rows = result_rows(result)
     if not rows:
@@ -6013,6 +6409,11 @@ def build_consolidate_session_payload(
     max_events: int = 80,
     write: bool = False,
 ) -> dict[str, Any]:
+    if lookup_node_by_stable_key(graph, stable_key) is None:
+        payload = blocked_missing_memory_item_payload_for_graph(graph, stable_key=stable_key, operation="consolidate_session")
+        payload["workspace"] = tool.workspace_payload(workspace)
+        payload["write"] = bool(write)
+        return payload
     session_item = fetch_item(graph, stable_key)
     events = fetch_session_events(graph, str(session_item.get("stable_key") or stable_key), limit=max_events)
     draft = build_session_consolidation_draft(session_item, events, kind=kind, title=title)
@@ -6711,12 +7112,23 @@ def resolve_graph_conflict_payload(
 ) -> dict[str, Any]:
     if relation not in {"supersedes", "reverts", "answers"}:
         fail(f"Unsupported conflict resolution relation {relation}", 2)
+    if lookup_node_by_stable_key(graph, current_stable_key) is None:
+        return blocked_missing_memory_item_payload_for_graph(graph, stable_key=current_stable_key, operation="resolve_conflict")
+    relation_specs = [
+        {"relation": relation, "target": str(target_key or "").strip()}
+        for target_key in superseded_stable_keys
+        if str(target_key or "").strip()
+    ]
+    try:
+        target_records = relation_target_records(graph, relation_specs)
+    except MissingRelationTargetsError as exc:
+        return blocked_relation_write_payload(error=exc, stable_key=current_stable_key, operation="resolve_conflict")
     current = fetch_item(graph, current_stable_key)
     timestamp = utc_now_iso()
     predicate = relation.upper()
     fact_summary = summary or f"{current_stable_key} {relation} {', '.join(superseded_stable_keys)}"
-    for target_key in superseded_stable_keys:
-        target = fetch_item(graph, target_key)
+    for target_key in target_records:
+        target = target_records[target_key]
         create_fact_edge(
             graph,
             from_entity_id=current["entity_id"],
@@ -7711,6 +8123,20 @@ def normalize_metadata_key(value: Any) -> str:
     return text[:64]
 
 
+_MISSING_METADATA_VALUE = object()
+
+
+def merge_repeated_metadata_value(existing: Any, incoming: Any) -> Any:
+    if existing is _MISSING_METADATA_VALUE:
+        return incoming
+    values = list(existing) if isinstance(existing, list) else [existing]
+    incoming_values = list(incoming) if isinstance(incoming, list) else [incoming]
+    for incoming_value in incoming_values:
+        if not any(metadata_values_equal(value, incoming_value) for value in values):
+            values.append(incoming_value)
+    return values[0] if len(values) == 1 else values
+
+
 def normalize_memory_metadata(values: Any) -> dict[str, Any]:
     if not values:
         return {}
@@ -7732,7 +8158,11 @@ def normalize_memory_metadata(values: Any) -> dict[str, Any]:
         normalized_key = normalize_metadata_key(key)
         if not normalized_key:
             raise ValueError(f"metadata key is invalid: {key}")
-        metadata[normalized_key] = parse_metadata_scalar(value)
+        parsed_value = parse_metadata_scalar(value)
+        metadata[normalized_key] = merge_repeated_metadata_value(
+            metadata.get(normalized_key, _MISSING_METADATA_VALUE),
+            parsed_value,
+        )
     return metadata
 
 
@@ -9475,8 +9905,23 @@ def build_consult_payload(
     token_overlap_items: list[dict[str, Any]] = []
     token_overlap_elapsed = 0.0
     token_overlap_skipped_reason: str | None = None
+    token_overlap_mode = "skipped"
     if should_use_token_overlap_scan(item_count, config):
         token_overlap_items, token_overlap_elapsed = fetch_token_overlap_candidates(graph, query, limit=search_limit)
+        token_overlap_mode = "full"
+    elif should_use_recent_token_overlap_scan(item_count, config):
+        recent_scan_limit = token_overlap_recent_scan_items(config)
+        token_overlap_items, token_overlap_elapsed = fetch_token_overlap_candidates(
+            graph,
+            query,
+            limit=search_limit,
+            recent_scan_limit=recent_scan_limit,
+        )
+        token_overlap_mode = "recent"
+        token_overlap_skipped_reason = (
+            f"semantic item count {item_count} exceeds token-overlap scan limit "
+            f"{token_overlap_scan_max_items(config)}; scanned {recent_scan_limit} most recent items"
+        )
     else:
         token_overlap_skipped_reason = f"semantic item count {item_count} exceeds token-overlap scan limit {token_overlap_scan_max_items(config)}"
     exact_items = filter_candidates_by_metadata(graph, exact_items, filters)
@@ -9624,7 +10069,13 @@ def build_consult_payload(
     )
     usage_by_key = fetch_memory_usage(graph, [str(hit.get("stable_key") or "") for hit in hits])
     attach_usage_to_items(hits, usage_by_key)
-    expose_side_channels = bool(hits) or query_requests_relationship_context(query)
+    side_channel_candidates = (
+        lexical_side_hits
+        + entity_side_hits
+        + relationship_side_hits
+        + vector_side_hits
+    )
+    expose_side_channels = bool(hits) or bool(side_channel_candidates) or query_requests_relationship_context(query)
     inspected_items = []
     seen_inspected: set[str] = set()
     for hit in hits[:max(0, inspect_limit)]:
@@ -9655,6 +10106,7 @@ def build_consult_payload(
         },
         "routing": {
             "semantic_item_count": item_count,
+            "token_overlap_mode": token_overlap_mode,
             "token_overlap_skipped_reason": token_overlap_skipped_reason,
             "hybrid_skipped_reason": hybrid_skipped_reason,
             "filters": filters,
@@ -9966,7 +10418,7 @@ def context_stable_keys_from_payloads(status_payload: dict[str, Any], consult_pa
     return unique
 
 
-CONTEXT_GRAPH_EXPANSION_POLICY = "context_graph_neighborhood_v1"
+RELATED_MEMORY_EXPANSION_POLICY = "related_memory_neighborhood_v1"
 
 
 def relation_expansion_rank(relation: str) -> int:
@@ -9985,7 +10437,7 @@ def relation_expansion_rank(relation: str) -> int:
     return priority.get(str(relation or "").strip(), 20)
 
 
-def context_graph_seed_keys(consult_payload: dict[str, Any] | None, *, limit: int = 3) -> list[str]:
+def related_memory_seed_keys(consult_payload: dict[str, Any] | None, *, limit: int = 3) -> list[str]:
     keys: list[str] = []
     for item in list((consult_payload or {}).get("items") or []) + list((consult_payload or {}).get("hits") or []):
         stable_key = str(item.get("stable_key") or item.get("stableKey") or "")
@@ -9996,7 +10448,7 @@ def context_graph_seed_keys(consult_payload: dict[str, Any] | None, *, limit: in
     return keys
 
 
-def fetch_context_graph_neighborhood(
+def fetch_related_memory_neighborhood(
     graph,
     seed_keys: list[str],
     *,
@@ -10015,7 +10467,7 @@ def fetch_context_graph_neighborhood(
     limit = max(0, int(limit or 0))
     per_seed_limit = max(1, int(per_seed_limit or 1))
     if not seeds or limit <= 0:
-        return {"policy": CONTEXT_GRAPH_EXPANSION_POLICY, "depth": 1, "seed_keys": seeds, "items": []}
+        return {"policy": RELATED_MEMORY_EXPANSION_POLICY, "depth": 1, "seed_keys": seeds, "items": []}
     normalized_as_of = normalize_as_of_timestamp(as_of)
     read_time = lifecycle_read_timestamp(normalized_as_of)
     normalized_min_fact_rating = normalize_fact_rating(min_fact_rating)
@@ -10084,7 +10536,7 @@ def fetch_context_graph_neighborhood(
                 "updated_at": updated_at,
                 "activity_at": updated_at,
                 "retrieval_reasons": ["graph_neighbor"],
-                "graph_expansion_policy": CONTEXT_GRAPH_EXPANSION_POLICY,
+                "related_memory_expansion_policy": RELATED_MEMORY_EXPANSION_POLICY,
                 "fact_rating": fact_rating_for_read(row[12] if len(row) > 12 else None),
                 "_seed_rank": seed_rank.get(seed_key, 999),
                 "_relation_rank": relation_expansion_rank(relation),
@@ -10110,7 +10562,7 @@ def fetch_context_graph_neighborhood(
         if len(items) >= limit:
             break
     return {
-        "policy": CONTEXT_GRAPH_EXPANSION_POLICY,
+        "policy": RELATED_MEMORY_EXPANSION_POLICY,
         "depth": 1,
         "seed_keys": seeds,
         "items": items,
@@ -10426,14 +10878,14 @@ def fetch_observation_evidence_neighborhood(
 ) -> dict[str, Any]:
     evidence_limit = normalized_observation_limit(limit)
     fetch_limit = max(evidence_limit * 3, evidence_limit + 3)
-    graph_context = fetch_context_graph_neighborhood(
+    related_memory = fetch_related_memory_neighborhood(
         graph,
         [seed_key],
         limit=fetch_limit,
         per_seed_limit=fetch_limit,
         min_fact_rating=min_fact_rating,
     )
-    raw_items = list(graph_context.get("items") or [])
+    raw_items = list(related_memory.get("items") or [])
     filtered = filter_observation_evidence_items(seed_key, raw_items, limit=evidence_limit)
     excluded = [
         {
@@ -10445,11 +10897,11 @@ def fetch_observation_evidence_neighborhood(
         for item in raw_items
         if not observation_is_derived_evidence_candidate(seed_key, item)
     ]
-    graph_context["items"] = filtered
-    graph_context["evidence_limit"] = evidence_limit
+    related_memory["items"] = filtered
+    related_memory["evidence_limit"] = evidence_limit
     if excluded:
-        graph_context["excluded_items"] = excluded
-    return graph_context
+        related_memory["excluded_items"] = excluded
+    return related_memory
 
 
 def build_observation_freshness_for_item(graph, item: dict[str, Any]) -> dict[str, Any] | None:
@@ -10466,7 +10918,7 @@ def build_observation_freshness_for_item(graph, item: dict[str, Any]) -> dict[st
     seed = fetch_item(graph, seed_key)
     evidence_limit = normalized_observation_limit(metadata.get("evidence_limit") or max(int(metadata.get("evidence_count") or 1) - 1, 1))
     min_fact_rating = metadata.get("min_fact_rating")
-    graph_context = fetch_observation_evidence_neighborhood(
+    related_memory = fetch_observation_evidence_neighborhood(
         graph,
         seed_key,
         limit=evidence_limit,
@@ -10474,16 +10926,16 @@ def build_observation_freshness_for_item(graph, item: dict[str, Any]) -> dict[st
     )
     draft = build_derived_observation_draft(
         seed,
-        list(graph_context.get("items") or []),
+        list(related_memory.get("items") or []),
         title_override=str(item.get("title") or ""),
         evidence_limit=evidence_limit,
         min_fact_rating=min_fact_rating,
     )
     freshness = observation_freshness_result(item, draft)
-    freshness["graph_context"] = {
-        "policy": graph_context.get("policy"),
-        "evidence_limit": graph_context.get("evidence_limit"),
-        "excluded_count": len(list(graph_context.get("excluded_items") or [])),
+    freshness["related_memory"] = {
+        "policy": related_memory.get("policy"),
+        "evidence_limit": related_memory.get("evidence_limit"),
+        "excluded_count": len(list(related_memory.get("excluded_items") or [])),
     }
     return freshness
 
@@ -10683,15 +11135,19 @@ def build_observe_payload(
     write_if_stale: bool = False,
 ) -> dict[str, Any]:
     seed_key = str(stable_key or "").strip()
+    if lookup_node_by_stable_key(graph, seed_key) is None:
+        payload = blocked_missing_memory_item_payload_for_graph(graph, stable_key=seed_key, operation="observe")
+        payload["workspace"] = tool.workspace_payload(workspace)
+        return payload
     seed = fetch_item(graph, seed_key)
     evidence_limit = normalized_observation_limit(limit)
-    graph_context = fetch_observation_evidence_neighborhood(
+    related_memory = fetch_observation_evidence_neighborhood(
         graph,
         seed_key,
         limit=evidence_limit,
         min_fact_rating=min_fact_rating,
     )
-    related = list(graph_context.get("items") or [])
+    related = list(related_memory.get("items") or [])
     read_guard = build_memory_read_guard_payload(graph, [seed] + related)
     blocked_keys = read_guard_blocked_keys(read_guard)
     if seed_key in blocked_keys:
@@ -10702,7 +11158,7 @@ def build_observe_payload(
             evidence_limit=evidence_limit,
             min_fact_rating=min_fact_rating,
         )
-        graph_context["items"] = []
+        related_memory["items"] = []
         draft["workflow"] = {
             "status": "unsafe_memory_quarantined",
             "coverage": "blocked",
@@ -10712,7 +11168,7 @@ def build_observe_payload(
         }
     else:
         related = filter_items_by_read_guard(related, read_guard)
-        graph_context["items"] = related
+        related_memory["items"] = related
         draft = build_derived_observation_draft(
             seed,
             related,
@@ -10735,7 +11191,7 @@ def build_observe_payload(
             "kind": seed.get("kind"),
             "title": seed.get("title"),
         },
-        "graph_context": graph_context,
+        "related_memory": related_memory,
         "read_guard": read_guard,
         "draft": draft,
         "existing_observation": freshness.get("existing_observation"),
@@ -10773,7 +11229,7 @@ def build_observe_payload(
     return payload
 
 
-def build_context_graph_payload_for_consult(
+def build_related_memory_payload_for_consult(
     graph,
     consult_payload: dict[str, Any] | None,
     filters: dict[str, Any] | None,
@@ -10782,30 +11238,30 @@ def build_context_graph_payload_for_consult(
     as_of: str | None = None,
     min_fact_rating: float | None = None,
 ) -> dict[str, Any]:
-    graph_context: dict[str, Any] = {
-        "policy": CONTEXT_GRAPH_EXPANSION_POLICY,
+    related_memory: dict[str, Any] = {
+        "policy": RELATED_MEMORY_EXPANSION_POLICY,
         "depth": 1,
         "seed_keys": [],
         "items": [],
     }
     if not consult_payload or not list(consult_payload.get("hits") or []):
-        return graph_context
+        return related_memory
     normalized_as_of = normalize_as_of_timestamp(as_of)
-    graph_context = fetch_context_graph_neighborhood(
+    related_memory = fetch_related_memory_neighborhood(
         graph,
-        context_graph_seed_keys(consult_payload),
+        related_memory_seed_keys(consult_payload),
         limit=max(2, min(6, int(limit or 5))),
         per_seed_limit=2,
         as_of=normalized_as_of,
         min_fact_rating=min_fact_rating,
     )
-    graph_items = filter_candidates_by_metadata(graph, list(graph_context.get("items") or []), filters)
+    graph_items = filter_candidates_by_metadata(graph, list(related_memory.get("items") or []), filters)
     graph_items = filter_items_as_of(graph_items, normalized_as_of)
     graph_items = filter_items_for_read_lifecycle(graph_items, normalized_as_of)
     graph_read_guard = build_memory_read_guard_payload(graph, graph_items)
-    graph_context["items"] = filter_items_by_read_guard(graph_items, graph_read_guard)
-    graph_context["read_guard"] = graph_read_guard
-    return graph_context
+    related_memory["items"] = filter_items_by_read_guard(graph_items, graph_read_guard)
+    related_memory["read_guard"] = graph_read_guard
+    return related_memory
 
 
 def context_lineage_record(row: list[Any]) -> dict[str, Any]:
@@ -10996,7 +11452,7 @@ def build_context_pack_payload(
     consult_payload: dict[str, Any] | None,
     max_chars: int,
     lineage: dict[str, dict[str, Any]] | None = None,
-    graph_context: dict[str, Any] | None = None,
+    related_memory: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     max_chars = max(1000, int(max_chars or 6000))
     status = status_payload.get("status") if isinstance(status_payload, dict) else {}
@@ -11012,6 +11468,7 @@ def build_context_pack_payload(
         list((consult_payload or {}).get("relationship_candidate_hits") or [])
         + list((consult_payload or {}).get("vector_only_hits") or [])
         + list((consult_payload or {}).get("lexical_only_hits") or [])
+        + list((consult_payload or {}).get("entity_only_hits") or [])
     )
 
     core_sections = {
@@ -11056,21 +11513,21 @@ def build_context_pack_payload(
         stable_key = str(item.get("stable_key") or "")
         if stable_key in lineage:
             item["lineage"] = lineage[stable_key]
-    graph_context = graph_context if isinstance(graph_context, dict) else {}
-    related_memory: list[dict[str, Any]] = []
-    for item in list(graph_context.get("items") or []):
+    related_memory_payload = related_memory if isinstance(related_memory, dict) else {}
+    related_memory_items: list[dict[str, Any]] = []
+    for item in list(related_memory_payload.get("items") or []):
         stable_key = str(item.get("stable_key") or item.get("stableKey") or "")
         if not stable_key or stable_key in pinned_keys or stable_key in retrieved_keys:
             continue
         compacted = compact_context_item(item, max_body_chars=320)
-        for key in ("related_to", "related_to_title", "relation", "predicate", "fact_text", "direction", "depth", "graph_expansion_policy"):
+        for key in ("related_to", "related_to_title", "relation", "predicate", "fact_text", "direction", "depth", "related_memory_expansion_policy"):
             if item.get(key) not in (None, ""):
                 compacted[key] = item.get(key)
         if stable_key in lineage:
             compacted["lineage"] = lineage[stable_key]
             if not bool(compacted["lineage"].get("current", True)):
                 continue
-        related_memory.append(compacted)
+        related_memory_items.append(compacted)
 
     entries: list[dict[str, Any]] = []
     used_chars = 0
@@ -11145,7 +11602,7 @@ def build_context_pack_payload(
         )
         truncated = truncated or was_truncated
 
-    for item in related_memory[:6]:
+    for item in related_memory_items[:6]:
         stable_key = str(item.get("stable_key") or "")
         relation = str(item.get("relation") or "related").strip() or "related"
         related_to = str(item.get("related_to_title") or item.get("related_to") or "retrieved memory").strip()
@@ -11154,9 +11611,9 @@ def build_context_pack_payload(
             text = f"{text} - {item['summary']}"
         fact_text = summary_snippet(str(item.get("fact_text") or ""), limit=180)
         if fact_text:
-            text = f"{text} [graph: {relation} with {related_to}; {fact_text}]"
+            text = f"{text} [related: {relation} with {related_to}; {fact_text}]"
         else:
-            text = f"{text} [graph: {relation} with {related_to}]"
+            text = f"{text} [related: {relation} with {related_to}]"
         text = f"{text}{lineage_annotation(item.get('lineage'))}"
         used_chars, was_truncated = append_context_entry(
             entries,
@@ -11285,12 +11742,12 @@ def build_context_pack_payload(
             "hits": consult_hits,
             "items": retrieved,
             "relationship_hits": relationship_hits[:3],
-            "graph_context": {
-                "policy": graph_context.get("policy") or CONTEXT_GRAPH_EXPANSION_POLICY,
-                "depth": graph_context.get("depth") or 1,
-                "seed_keys": list(graph_context.get("seed_keys") or []),
-                "items": related_memory,
-                "read_guard": graph_context.get("read_guard") if isinstance(graph_context.get("read_guard"), dict) else {},
+            "related_memory": {
+                "policy": related_memory_payload.get("policy") or RELATED_MEMORY_EXPANSION_POLICY,
+                "depth": related_memory_payload.get("depth") or 1,
+                "seed_keys": list(related_memory_payload.get("seed_keys") or []),
+                "items": related_memory_items,
+                "read_guard": related_memory_payload.get("read_guard") if isinstance(related_memory_payload.get("read_guard"), dict) else {},
             },
             "read_guard": read_guard if isinstance(read_guard, dict) else {},
             "lineage": {key: lineage[key] for key in retrieved_keys if key in lineage},
@@ -11390,7 +11847,7 @@ def build_context_payload(
             as_of=normalized_as_of,
             min_fact_rating=min_fact_rating,
         )
-    graph_context = build_context_graph_payload_for_consult(
+    related_memory = build_related_memory_payload_for_consult(
         graph,
         consult_payload,
         filters,
@@ -11399,7 +11856,7 @@ def build_context_payload(
         min_fact_rating=min_fact_rating,
     )
     lineage_keys = context_stable_keys_from_payloads(status_payload, consult_payload)
-    lineage_keys.extend(str(item.get("stable_key") or "") for item in list(graph_context.get("items") or []))
+    lineage_keys.extend(str(item.get("stable_key") or "") for item in list(related_memory.get("items") or []))
     lineage = fetch_context_lineage(graph, lineage_keys, as_of=normalized_as_of)
     return build_context_pack_payload(
         tool=tool,
@@ -11409,7 +11866,7 @@ def build_context_payload(
         consult_payload=consult_payload,
         max_chars=max_chars,
         lineage=lineage,
-        graph_context=graph_context,
+        related_memory=related_memory,
     )
 
 
@@ -11432,6 +11889,20 @@ def build_neighbors_payload(
     all_kinds: bool,
     min_fact_rating: float | None = None,
 ) -> dict[str, Any]:
+    seed_key = str(stable_key or thread_id or "").strip()
+    if seed_key and lookup_node_by_stable_key(graph, seed_key) is None:
+        payload = blocked_missing_memory_item_payload_for_graph(graph, stable_key=seed_key, operation="neighbors")
+        payload["workspace"] = tool.workspace_payload(workspace)
+        return payload
+    if entity_id is not None and lookup_node_by_entity_id(graph, int(entity_id)) is None:
+        payload = blocked_missing_memory_selector_payload_for_graph(
+            graph,
+            selector_type="entity_id",
+            selector_value=str(entity_id),
+            operation="neighbors",
+        )
+        payload["workspace"] = tool.workspace_payload(workspace)
+        return payload
     seed = resolve_seed(graph, stable_key=stable_key, entity_id=entity_id, thread_id=thread_id)
     return {
         "workspace": tool.workspace_payload(workspace),
@@ -12622,6 +13093,10 @@ def build_audit_payload_for_args(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def build_timeline_payload(graph, *, tool, workspace: dict[str, Any], stable_key: str) -> dict[str, Any]:
+    if lookup_node_by_stable_key(graph, stable_key) is None:
+        payload = blocked_missing_memory_item_payload_for_graph(graph, stable_key=stable_key, operation="timeline")
+        payload["workspace"] = tool.workspace_payload(workspace)
+        return payload
     return {
         "workspace": tool.workspace_payload(workspace),
         "timeline": fetch_timeline(graph, stable_key),
@@ -12647,6 +13122,10 @@ def build_history_payload(graph, *, tool, workspace: dict[str, Any], stable_key:
 
 
 def build_snapshot_payload(graph, *, tool, workspace: dict[str, Any], stable_key: str, limit: int) -> dict[str, Any]:
+    if lookup_node_by_stable_key(graph, stable_key) is None:
+        payload = blocked_missing_memory_item_payload_for_graph(graph, stable_key=stable_key, operation="snapshot")
+        payload["workspace"] = tool.workspace_payload(workspace)
+        return payload
     return {
         "workspace": tool.workspace_payload(workspace),
         "snapshot": fetch_snapshot(graph, stable_key, limit=limit),
@@ -12695,17 +13174,62 @@ def benchmark_attribute(name: str, checks: list[dict[str, Any]], *, seconds: flo
     return payload
 
 
+def failed_benchmark_check_names(attribute: dict[str, Any]) -> list[str]:
+    names: list[str] = []
+    for index, check in enumerate(list(attribute.get("checks") or []), start=1):
+        if bool(check.get("passed")):
+            continue
+        names.append(str(check.get("name") or f"check_{index}"))
+    return names
+
+
+def benchmark_quality_gate(attributes: list[dict[str, Any]], *, overall_score: float) -> dict[str, Any]:
+    failed_attributes: list[dict[str, Any]] = []
+    for attribute in attributes:
+        score = float(attribute.get("score") or 0.0)
+        if score >= BENCHMARK_MIN_ATTRIBUTE_SCORE:
+            continue
+        failed_attributes.append(
+            {
+                "name": str(attribute.get("name") or ""),
+                "score": score,
+                "grade": str(attribute.get("grade") or ""),
+                "failed_checks": failed_benchmark_check_names(attribute),
+            }
+        )
+    overall_passed = float(overall_score or 0.0) >= BENCHMARK_MIN_OVERALL_SCORE
+    return {
+        "passed": overall_passed and not failed_attributes,
+        "min_overall_score": BENCHMARK_MIN_OVERALL_SCORE,
+        "min_attribute_score": BENCHMARK_MIN_ATTRIBUTE_SCORE,
+        "overall_passed": overall_passed,
+        "failed_attributes": failed_attributes,
+    }
+
+
 def sample_semantic_items(graph, limit: int) -> list[dict[str, Any]]:
+    read_time = lifecycle_read_timestamp(None)
+    row_limit = max(1, int(limit or 1))
     result = graph.query(
         """
         MATCH (node:SemanticItem)
         WHERE coalesce(node.source_kind, '') <> 'graph_episode'
           AND NOT coalesce(node.stable_key, '') STARTS WITH 'turn-outcome:'
-        RETURN node.stable_key, node.kind, node.label, coalesce(node.summary, ''), coalesce(node.updated_at, node.created_at)
+          AND (
+            coalesce(node.expired_at, node.expires_at, '') = ''
+            OR coalesce(node.expired_at, node.expires_at, '') > $read_time
+          )
+        RETURN
+          node.stable_key,
+          node.kind,
+          node.label,
+          coalesce(node.summary, ''),
+          coalesce(node.updated_at, node.created_at),
+          coalesce(node.expired_at, node.expires_at, '')
         ORDER BY coalesce(node.updated_at, node.created_at) DESC
-        LIMIT $limit
+        LIMIT $scan_limit
         """,
-        params={"limit": max(1, limit)},
+        params={"read_time": read_time, "scan_limit": row_limit * 3},
     )
     items = []
     for row in result_rows(result):
@@ -12719,9 +13243,10 @@ def sample_semantic_items(graph, limit: int) -> list[dict[str, Any]]:
                     "title": title,
                     "summary": str(row[3] or ""),
                     "updated_at": str(row[4] or ""),
+                    "expired_at": str(row[5] or ""),
                 }
             )
-    return items
+    return filter_items_for_read_lifecycle(items)[:row_limit]
 
 
 def benchmark_recall(graph, *, tool, workspace: dict[str, Any], config: dict[str, Any], samples: list[dict[str, Any]]) -> dict[str, Any]:
@@ -13005,18 +13530,18 @@ def benchmark_context_pack(
     lineage_map = retrieval.get("lineage") if isinstance(retrieval, dict) else {}
     evidence_map = retrieval.get("evidence") if isinstance(retrieval, dict) else {}
     context_block = str(payload.get("context_block") or "") if isinstance(payload, dict) else ""
-    synthetic_graph_context_pack = build_context_pack_payload(
+    synthetic_related_memory_pack = build_context_pack_payload(
         tool=tool,
         workspace=workspace,
         query="graph neighborhood benchmark",
-        status_payload={"status": {"summary": "synthetic graph context"}, "items": []},
+        status_payload={"status": {"summary": "synthetic related memory"}, "items": []},
         consult_payload={
             "route": "lexical",
             "hits": [{"stable_key": "benchmark:seed", "kind": "decision", "title": "Seed memory"}],
             "items": [{"stable_key": "benchmark:seed", "kind": "decision", "title": "Seed memory", "content": "Seed memory"}],
         },
-        graph_context={
-            "policy": CONTEXT_GRAPH_EXPANSION_POLICY,
+        related_memory={
+            "policy": RELATED_MEMORY_EXPANSION_POLICY,
             "depth": 1,
             "seed_keys": ["benchmark:seed"],
             "items": [
@@ -13037,7 +13562,7 @@ def benchmark_context_pack(
     )
     synthetic_related = [
         entry
-        for entry in list(synthetic_graph_context_pack.get("agent_context") or [])
+        for entry in list(synthetic_related_memory_pack.get("agent_context") or [])
         if str(entry.get("section") or "") == "related_memory"
     ]
     checks = [
@@ -13100,7 +13625,7 @@ def benchmark_context_pack(
             "name": "context_pack_includes_graph_neighborhood",
             "passed": bool(synthetic_related)
             and str(synthetic_related[0].get("stable_key") or "") == "benchmark:neighbor"
-            and str(synthetic_graph_context_pack.get("context_block") or "").find("Related Memory") >= 0,
+            and str(synthetic_related_memory_pack.get("context_block") or "").find("Related Memory") >= 0,
             "related_count": len(synthetic_related),
         },
     ]
@@ -13108,36 +13633,48 @@ def benchmark_context_pack(
 
 
 def repo_scoped_benchmark_sample(graph) -> dict[str, Any] | None:
+    read_time = lifecycle_read_timestamp(None)
     result = graph.query(
         """
         MATCH (node:SemanticItem)-[:ABOUT]-(repo:Repository)
         WHERE node.kind IN $semantic_kinds
           AND coalesce(node.source_kind, '') <> 'graph_episode'
           AND NOT coalesce(node.stable_key, '') STARTS WITH 'turn-outcome:'
+          AND (
+            coalesce(node.expired_at, node.expires_at, '') = ''
+            OR coalesce(node.expired_at, node.expires_at, '') > $read_time
+          )
         RETURN
           node.stable_key,
           node.kind,
           node.label,
           coalesce(node.summary, ''),
           coalesce(node.updated_at, node.created_at),
-          repo.stable_key
+          repo.stable_key,
+          coalesce(node.expired_at, node.expires_at, '')
         ORDER BY coalesce(node.updated_at, node.created_at) DESC
-        LIMIT 1
+        LIMIT 25
         """,
-        params={"semantic_kinds": sorted(SEARCHABLE_KINDS)},
+        params={"semantic_kinds": sorted(SEARCHABLE_KINDS), "read_time": read_time},
     )
     rows = result_rows(result)
     if not rows:
         return None
-    row = rows[0]
-    return {
-        "stable_key": str(row[0] or ""),
-        "kind": str(row[1] or ""),
-        "title": str(row[2] or ""),
-        "summary": str(row[3] or ""),
-        "updated_at": str(row[4] or ""),
-        "repository_stable_key": str(row[5] or ""),
-    }
+    candidates = [
+        {
+            "stable_key": str(row[0] or ""),
+            "kind": str(row[1] or ""),
+            "title": str(row[2] or ""),
+            "summary": str(row[3] or ""),
+            "updated_at": str(row[4] or ""),
+            "repository_stable_key": str(row[5] or ""),
+            "expired_at": str(row[6] or ""),
+        }
+        for row in rows
+        if str(row[0] or "") and str(row[2] or "") and str(row[5] or "")
+    ]
+    active = filter_items_for_read_lifecycle(candidates)
+    return active[0] if active else None
 
 
 def benchmark_metadata_filters(graph, *, tool, workspace: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
@@ -13879,7 +14416,14 @@ def benchmark_session_import(graph, *, tool, workspace: dict[str, Any]) -> dict[
     return benchmark_attribute("session_import", checks, seconds=elapsed)
 
 
-def benchmark_scale_readiness(graph, *, tool, workspace: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+def benchmark_scale_readiness(
+    graph,
+    *,
+    tool,
+    workspace: dict[str, Any],
+    config: dict[str, Any],
+    sample: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     threshold = token_overlap_scan_max_items(config)
     checks.append(
@@ -13889,6 +14433,14 @@ def benchmark_scale_readiness(graph, *, tool, workspace: dict[str, Any], config:
             "passed": threshold > 0 and should_use_token_overlap_scan(threshold + 1, config) is False,
         }
     )
+    recent_scan_limit = token_overlap_recent_scan_items(config)
+    checks.append(
+        {
+            "name": "recent_token_overlap_fallback",
+            "recent_scan_limit": recent_scan_limit,
+            "passed": recent_scan_limit > 0 and should_use_recent_token_overlap_scan(threshold + 1, config),
+        }
+    )
     checks.append(
         {
             "name": "expanded_vector_candidate_pool",
@@ -13896,6 +14448,7 @@ def benchmark_scale_readiness(graph, *, tool, workspace: dict[str, Any], config:
             "passed": int(config.get("vector_candidate_limit") or config.get("candidate_limit") or 0) >= 48,
         }
     )
+    sample_query = str((sample or {}).get("title") or "").strip() or "Autopsy memory Falkor benchmark retrieval"
     payload, elapsed, error = timed_call(
         lambda: build_consult_payload(
             graph,
@@ -13903,7 +14456,7 @@ def benchmark_scale_readiness(graph, *, tool, workspace: dict[str, Any], config:
             conn=None,
             workspace=workspace,
             config=config,
-            query="Autopsy memory Falkor benchmark retrieval",
+            query=sample_query,
             limit=5,
             inspect_limit=0,
             route="hybrid",
@@ -13920,6 +14473,8 @@ def benchmark_scale_readiness(graph, *, tool, workspace: dict[str, Any], config:
             and float(timings.get("rerank_s") or 0.0) == 0.0,
             "seconds": round(elapsed, 3),
             "error": error,
+            "query": sample_query,
+            "sample": (sample or {}).get("stable_key"),
             "routing": routing,
         }
     )
@@ -14029,6 +14584,75 @@ def benchmark_writes_and_relations(graph, *, tool, workspace: dict[str, Any]) ->
             }
         )
 
+        wrapped_target = json.dumps({"sourceRef": target_key})
+        wrapped_records, elapsed, error = timed_call(
+            lambda: relation_target_records(
+                graph,
+                [{"relation": "refines", "target": wrapped_target}],
+            )
+        )
+        elapsed_total += elapsed
+        checks.append(
+            {
+                "path": "wrapped_relation_target_normalization",
+                "target": wrapped_target,
+                "normalized_target": target_key,
+                "passed": error is None
+                and isinstance(wrapped_records, dict)
+                and target_key in wrapped_records,
+                "error": error,
+                "seconds": round(elapsed, 3),
+            }
+        )
+
+        missing_target = f"graph-note:missing-relation-benchmark-{probe_id}"
+        relation_log_file = tempfile.NamedTemporaryFile(prefix="autopsy-relation-benchmark-", suffix=".jsonl", delete=False)
+        relation_log_path = relation_log_file.name
+        relation_log_file.close()
+        previous_relation_log_path = os.environ.get("AUTOPSY_MEMORY_RELATION_LOG_PATH")
+        try:
+            os.environ["AUTOPSY_MEMORY_RELATION_LOG_PATH"] = relation_log_path
+            _missing_payload, elapsed, error = timed_call(
+                lambda: relation_target_records(
+                    graph,
+                    [{"relation": "refines", "target": missing_target}],
+                )
+            )
+            elapsed_total += elapsed
+            try:
+                relation_log_lines = [
+                    line
+                    for line in Path(relation_log_path).read_text(encoding="utf-8").splitlines()
+                    if line.strip()
+                ]
+                relation_log_record = json.loads(relation_log_lines[-1]) if relation_log_lines else {}
+            except Exception:
+                relation_log_record = {}
+        finally:
+            if previous_relation_log_path is None:
+                os.environ.pop("AUTOPSY_MEMORY_RELATION_LOG_PATH", None)
+            else:
+                os.environ["AUTOPSY_MEMORY_RELATION_LOG_PATH"] = previous_relation_log_path
+            try:
+                Path(relation_log_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+        relation_requests = list(relation_log_record.get("relation_requests") or []) if isinstance(relation_log_record, dict) else []
+        checks.append(
+            {
+                "path": "missing_relation_target_diagnostic_log",
+                "target": missing_target,
+                "passed": bool(error)
+                and "Memory relation target not found" in str(error)
+                and str(relation_log_record.get("event") or "") == "missing_relation_target"
+                and bool(relation_requests)
+                and str(relation_requests[0].get("target") or "") == missing_target,
+                "error": error,
+                "diagnostic_event": relation_log_record.get("event") if isinstance(relation_log_record, dict) else "",
+                "seconds": round(elapsed, 3),
+            }
+        )
+
         _, elapsed, error = timed_call(lambda: delete_graph_item_payload(graph, stable_key=stable_key, record_history=False))
         elapsed_total += elapsed
         if episode_key:
@@ -14056,6 +14680,7 @@ def benchmark_writes_and_relations(graph, *, tool, workspace: dict[str, Any]) ->
 
 
 def benchmark_falkor_native(graph, *, include_sync: bool, sync_payload: dict[str, Any] | None) -> dict[str, Any]:
+    detach_probe = embedded_cli_shutdown_detach_probe()
     checks = [
         {
             "name": "graph_reachable",
@@ -14069,6 +14694,12 @@ def benchmark_falkor_native(graph, *, include_sync: bool, sync_payload: dict[str
         {
             "name": "indexes_queryable",
             "passed": check_runtime_index_probe(graph),
+        },
+        {
+            "name": "embedded_cli_shutdown_detaches_by_default",
+            "passed": bool(detach_probe.get("passed")),
+            "events": detach_probe.get("events"),
+            "expected": detach_probe.get("expected"),
         },
     ]
     if include_sync:
@@ -14098,6 +14729,13 @@ def build_benchmark_payload(
     samples = sample_semantic_items(graph, max(1, sample_size))
     embedding_available, embedding_error = embedding_provider_available(config)
     reranker_available, reranker_error = reranker_provider_available(config)
+    diagnostics_payload = build_diagnostics_command_payload(argparse.Namespace(log="all", limit=1))
+    diagnostic_logs = diagnostics_payload.get("logs") if isinstance(diagnostics_payload, dict) else {}
+    diagnostic_events = [
+        event
+        for log_payload in list((diagnostic_logs or {}).values())
+        for event in list((log_payload or {}).get("events") or [])
+    ]
     operational_checks = [
         {
             "name": "graph_reachable",
@@ -14129,6 +14767,13 @@ def build_benchmark_payload(
             "provider": str(reranker_config(config).get("provider") or ""),
             "error": reranker_error,
         },
+        {
+            "name": "diagnostics_command_available",
+            "passed": {"memory_guard", "memory_relations"}.issubset(set((diagnostic_logs or {}).keys()))
+            and all("relation_requests" not in event for event in diagnostic_events)
+            and all("target" not in event for event in diagnostic_events),
+            "logs": sorted((diagnostic_logs or {}).keys()),
+        },
     ]
     attributes = [
         benchmark_attribute("operational_health", operational_checks, details={"stats": stats}),
@@ -14140,16 +14785,20 @@ def build_benchmark_payload(
         benchmark_metadata_filters(graph, tool=tool, workspace=workspace, config=config),
         benchmark_memory_governance(graph, tool=tool, workspace=workspace),
         benchmark_session_import(graph, tool=tool, workspace=workspace),
-        benchmark_scale_readiness(graph, tool=tool, workspace=workspace, config=config),
+        benchmark_scale_readiness(graph, tool=tool, workspace=workspace, config=config, sample=samples[0] if samples else None),
     ]
     if not skip_write_probe:
         attributes.append(benchmark_writes_and_relations(graph, tool=tool, workspace=workspace))
     attributes.append(benchmark_falkor_native(graph, include_sync=include_sync, sync_payload=sync_payload))
     overall = round(sum(float(attribute.get("score") or 0.0) for attribute in attributes) / max(len(attributes), 1), 1)
+    quality_gate = benchmark_quality_gate(attributes, overall_score=overall)
+    benchmark_passed = bool(quality_gate.get("passed"))
+    failed_names = [str(item.get("name") or "") for item in list(quality_gate.get("failed_attributes") or []) if str(item.get("name") or "")]
     return {
         "benchmark": "autopsy-memory-falkor",
         "overall_score": overall,
-        "passed": overall >= 8.0 and all(float(attribute.get("score") or 0.0) >= 6.0 for attribute in attributes),
+        "passed": benchmark_passed,
+        "quality_gate": quality_gate,
         "workspace": tool.workspace_payload(workspace),
         "graph_name": graph.name,
         "sample_size": len(samples),
@@ -14157,8 +14806,11 @@ def build_benchmark_payload(
         "attributes": attributes,
         "sync": sync_payload,
         "workflow": {
-            "complete": overall >= 8.0,
-            "next_steps": [] if overall >= 8.0 else ["Inspect failed attribute checks and rerun after fixing graph/index/query health."],
+            "complete": benchmark_passed,
+            "next_steps": [] if benchmark_passed else [
+                "Inspect failed benchmark attributes and rerun after fixing graph/index/query health.",
+                f"Attributes below {BENCHMARK_MIN_ATTRIBUTE_SCORE:.1f}: {', '.join(failed_names)}" if failed_names else f"Raise overall score to at least {BENCHMARK_MIN_OVERALL_SCORE:.1f}.",
+            ],
         },
         "timings": {"total_s": round(time.perf_counter() - started, 3)},
     }
@@ -14179,17 +14831,20 @@ def _open_workspace_graph_once(args: argparse.Namespace):
     return tool, workspace, config, graph
 
 
-def open_workspace_graph(args: argparse.Namespace):
+def open_workspace_graph_checked(args: argparse.Namespace):
     try:
         return _open_workspace_graph_once(args)
     except Exception as exc:
         if is_stale_falkordb_lite_error(exc):
             reset_stale_falkordb_lite_runtime(args)
-            try:
-                return _open_workspace_graph_once(args)
-            except Exception as retry_exc:
-                print(json.dumps(falkor_start_failure_payload(args, retry_exc), indent=2))
-                raise SystemExit(1)
+            return _open_workspace_graph_once(args)
+        raise
+
+
+def open_workspace_graph(args: argparse.Namespace):
+    try:
+        return open_workspace_graph_checked(args)
+    except Exception as exc:
         print(json.dumps(falkor_start_failure_payload(args, exc), indent=2))
         raise SystemExit(1)
 
@@ -14314,7 +14969,9 @@ def cmd_consult(args: argparse.Namespace) -> None:
     reliable_hits = list(payload.get("hits") or []) or list(payload.get("items") or [])
     weak_signal_hits = (
         list(payload.get("relationship_hits") or [])
+        + list(payload.get("relationship_candidate_hits") or [])
         + list(payload.get("lexical_only_hits") or [])
+        + list(payload.get("entity_only_hits") or [])
         + list(payload.get("vector_only_hits") or [])
     )
     read_guard = payload.get("read_guard") if isinstance(payload.get("read_guard"), dict) else {}
@@ -14338,7 +14995,7 @@ def cmd_consult(args: argparse.Namespace) -> None:
             "suggested_next_steps": [
                 workflow_step(
                     "refine-query",
-                    "Use a more specific query or inspect exact items before relying on weak relationship/vector side channels.",
+                    "Use a more specific query or inspect exact items before relying on weak side channels.",
                 )
             ],
         }
@@ -14400,6 +15057,8 @@ def build_context_command_payload(args: argparse.Namespace) -> dict[str, Any]:
     if query:
         worker_error: str | None = None
         worker_disabled_reason = consult_worker_disabled_reason(args)
+        if worker_disabled_reason is None and consult_worker_mode(args) != "required":
+            worker_disabled_reason = "context_uses_single_process_graph_snapshot"
         if worker_disabled_reason is None:
             try:
                 consult_payload = build_worker_consult_payload(args, query)
@@ -14437,7 +15096,7 @@ def build_context_command_payload(args: argparse.Namespace) -> dict[str, Any]:
                     routing["worker_disabled_reason"] = worker_disabled_reason
                 if worker_error:
                     routing["worker_fallback_reason"] = worker_error
-    graph_context = build_context_graph_payload_for_consult(
+    related_memory = build_related_memory_payload_for_consult(
         graph,
         consult_payload,
         context_filters,
@@ -14446,7 +15105,7 @@ def build_context_command_payload(args: argparse.Namespace) -> dict[str, Any]:
         min_fact_rating=getattr(args, "min_fact_rating", None),
     )
     lineage_keys = context_stable_keys_from_payloads(status_payload, consult_payload)
-    lineage_keys.extend(str(item.get("stable_key") or "") for item in list(graph_context.get("items") or []))
+    lineage_keys.extend(str(item.get("stable_key") or "") for item in list(related_memory.get("items") or []))
     lineage = fetch_context_lineage(
         graph,
         lineage_keys,
@@ -14460,7 +15119,7 @@ def build_context_command_payload(args: argparse.Namespace) -> dict[str, Any]:
         consult_payload=consult_payload,
         max_chars=int(getattr(args, "max_chars", 6000)),
         lineage=lineage,
-        graph_context=graph_context,
+        related_memory=related_memory,
     )
     if query:
         refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
@@ -14468,13 +15127,10 @@ def build_context_command_payload(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def cmd_context(args: argparse.Namespace) -> None:
-    try:
-        payload = build_context_command_payload(args)
-    except Exception as exc:
-        if not is_stale_falkordb_lite_error(exc):
-            raise
-        reset_stale_falkordb_lite_runtime(args)
-        payload = build_context_command_payload(args)
+    payload = run_with_stale_falkordb_lite_retries(
+        args,
+        lambda: build_context_command_payload(args),
+    )
     if str(getattr(args, "format", "json") or "json") == "text":
         print(str(payload.get("context_block") or render_context_block(payload)), end="")
         return
@@ -14483,12 +15139,18 @@ def cmd_context(args: argparse.Namespace) -> None:
 
 def cmd_item(args: argparse.Namespace) -> None:
     tool, workspace, _config, graph = open_workspace_graph(args)
+    if not lookup_node_by_stable_key(graph, str(args.stable_key)):
+        print(json.dumps(blocked_missing_memory_item_payload_for_graph(graph, stable_key=args.stable_key, operation="item"), indent=2))
+        raise SystemExit(2)
     payload = build_item_payload(graph, tool=tool, workspace=workspace, stable_key=args.stable_key)
     print(json.dumps(payload, indent=2))
 
 
 def cmd_feedback(args: argparse.Namespace) -> None:
     tool, workspace, _config, graph = open_workspace_graph(args)
+    if not lookup_node_by_stable_key(graph, str(args.stable_key)):
+        print(json.dumps(blocked_missing_memory_item_payload_for_graph(graph, stable_key=args.stable_key, operation="feedback"), indent=2))
+        raise SystemExit(2)
     usage = record_memory_feedback(
         graph,
         str(args.stable_key),
@@ -14510,708 +15172,10 @@ def cmd_feedback(args: argparse.Namespace) -> None:
     print(json.dumps(payload, indent=2))
 
 
-def normalize_context_event_metadata(values: Any) -> dict[str, Any]:
-    if not values:
-        return {}
-    if isinstance(values, dict):
-        return normalize_memory_metadata(values)
-    raw_values = [values] if isinstance(values, str) else list(values)
-    metadata: dict[str, Any] = {}
-    for raw_value in raw_values:
-        text = str(raw_value or "").strip()
-        if not text:
-            continue
-        if text.startswith("{"):
-            try:
-                parsed = json.loads(text)
-            except json.JSONDecodeError as exc:
-                raise ValueError(f"metadata JSON object is invalid: {text}") from exc
-            if not isinstance(parsed, dict):
-                raise ValueError(f"metadata JSON must be an object: {text}")
-            metadata.update(normalize_memory_metadata(parsed))
-            continue
-        metadata.update(normalize_memory_metadata([text]))
-    return metadata
-
-
-def context_event_command_title(command: str, *, max_length: int = 180) -> str:
-    text = re.sub(r"\s+", " ", str(command or "")).strip()
-    if len(text) <= max_length:
-        return text
-    return text[: max(0, max_length - 3)].rstrip() + "..."
-
-
-CONTEXT_EVENT_COMMAND_DENY_CONTAINS = (
-    "autopsy codex-hook",
-    "autopsy context-event",
-    "autopsy context-graph-url",
-)
-
-CONTEXT_EVENT_COMMAND_ALLOW_PREFIXES = (
-    "autopsy status",
-    "autopsy context",
-    "autopsy consult",
-    "autopsy search",
-    "autopsy item",
-    "autopsy timeline",
-    "autopsy history",
-    "autopsy neighbors",
-    "git status",
-    "git diff",
-    "git show",
-    "git log",
-    "rg",
-    "nl",
-    "sed",
-)
-
-CONTEXT_EVENT_COMMAND_ALLOW_CONTAINS: tuple[str, ...] = ()
-CONTEXT_EVENT_COMMAND_SETUP_PREFIXES = (
-    "cd",
-)
-
-
-def context_event_command_has_unsafe_shell_syntax(command: str) -> bool:
-    quote = ""
-    escaped = False
-    index = 0
-    while index < len(command):
-        char = command[index]
-        if escaped:
-            escaped = False
-            index += 1
-            continue
-        if char == "\\":
-            escaped = True
-            index += 1
-            continue
-        if quote == "'":
-            if char == "'":
-                quote = ""
-            index += 1
-            continue
-        if quote == '"':
-            if char == '"':
-                quote = ""
-                index += 1
-                continue
-            if char == "`" or (char == "$" and index + 1 < len(command) and command[index + 1] == "("):
-                return True
-            index += 1
-            continue
-        if char in {"'", '"'}:
-            quote = char
-            index += 1
-            continue
-        if char in {">", "<", "`"}:
-            return True
-        if char == "$" and index + 1 < len(command) and command[index + 1] == "(":
-            return True
-        index += 1
-    return False
-
-
-def context_event_command_matches_prefix(command: str, prefix: str) -> bool:
-    return command == prefix or command.startswith(f"{prefix} ") or command.startswith(f"{prefix}\t")
-
-
-def context_event_command_segments(command: str) -> list[str]:
-    segments: list[str] = []
-    current: list[str] = []
-    quote = ""
-    escaped = False
-    index = 0
-
-    def flush_segment() -> None:
-        segment = "".join(current).strip()
-        current.clear()
-        if segment:
-            segments.append(segment)
-
-    while index < len(command):
-        char = command[index]
-        if escaped:
-            current.append(char)
-            escaped = False
-            index += 1
-            continue
-        if char == "\\":
-            current.append(char)
-            escaped = True
-            index += 1
-            continue
-        if quote:
-            current.append(char)
-            if char == quote:
-                quote = ""
-            index += 1
-            continue
-        if char in {"'", '"'}:
-            quote = char
-            current.append(char)
-            index += 1
-            continue
-        if char == ";":
-            flush_segment()
-            index += 1
-            continue
-        if char == "&" and index + 1 < len(command) and command[index + 1] == "&":
-            flush_segment()
-            index += 2
-            continue
-        if char == "&":
-            flush_segment()
-            segments.append("&")
-            index += 1
-            continue
-        if char == "|":
-            if index + 1 < len(command) and command[index + 1] == "|":
-                flush_segment()
-                index += 2
-                continue
-            flush_segment()
-            index += 1
-            continue
-        current.append(char)
-        index += 1
-    flush_segment()
-    return segments
-
-
-def context_event_command_is_allowed_segment(segment: str) -> bool:
-    if context_event_command_has_disallowed_write_flags(segment):
-        return False
-    return (
-        any(context_event_command_matches_prefix(segment, prefix) for prefix in CONTEXT_EVENT_COMMAND_ALLOW_PREFIXES)
-        or any(fragment in segment for fragment in CONTEXT_EVENT_COMMAND_ALLOW_CONTAINS)
-    )
-
-
-def context_event_command_has_disallowed_write_flags(segment: str) -> bool:
-    try:
-        parts = shlex.split(segment)
-    except ValueError:
-        return True
-    if not parts:
-        return False
-    executable = parts[0]
-    if executable == "sed":
-        return any(part == "-i" or part.startswith("-i") or part == "--in-place" or part.startswith("--in-place=") for part in parts[1:])
-    if executable == "git" and len(parts) > 1 and parts[1] in {"diff", "show", "log", "status"}:
-        return any(part == "--output" or part.startswith("--output=") for part in parts[2:])
-    return False
-
-
-def context_event_command_is_setup_segment(segment: str) -> bool:
-    return any(context_event_command_matches_prefix(segment, prefix) for prefix in CONTEXT_EVENT_COMMAND_SETUP_PREFIXES)
-
-
-def should_capture_context_command(command: str) -> bool:
-    raw_text = str(command or "")
-    if "\n" in raw_text or "\r" in raw_text:
-        return False
-    text = re.sub(r"\s+", " ", raw_text).strip().lower()
-    if not text:
-        return False
-    if context_event_command_has_unsafe_shell_syntax(text):
-        return False
-    if any(fragment in text for fragment in CONTEXT_EVENT_COMMAND_DENY_CONTAINS):
-        return False
-    saw_allowed_segment = False
-    for segment in context_event_command_segments(text):
-        if context_event_command_is_allowed_segment(segment):
-            saw_allowed_segment = True
-            continue
-        if context_event_command_is_setup_segment(segment):
-            continue
-        return False
-    return saw_allowed_segment
-
-
-def codex_hook_string(value: Any) -> str:
-    return str(value or "").strip()
-
-
-def codex_hook_preview(value: Any, *, max_length: int = 1200) -> str:
-    if value is None:
-        text = ""
-    elif isinstance(value, str):
-        text = value
-    else:
-        try:
-            text = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        except Exception:
-            text = str(value)
-    text = re.sub(r"\s+", " ", str(text or "")).strip()
-    if len(text) <= max_length:
-        return text
-    return text[:max(0, max_length - 3)].rstrip() + "..."
-
-
-def codex_hook_thread_id(hook: dict[str, Any], override: str | None = None) -> str:
-    for value in (
-        hook.get("session_id"),
-        hook.get("sessionId"),
-    ):
-        thread_id = codex_hook_string(value)
-        if thread_id:
-            return thread_id
-    raise ValueError("Codex hook payload does not include session_id")
-
-
-def codex_hook_state_path() -> Path:
-    return Path(os.environ.get("AUTOPSY_CODEX_HOOK_STATE_PATH") or CODEX_HOOK_STATE_PATH_DEFAULT).expanduser()
-
-
-def codex_hook_state_max_age_seconds() -> float:
-    value = str(os.environ.get("AUTOPSY_CODEX_HOOK_STATE_MAX_AGE_SECONDS") or "").strip()
-    if not value:
-        return CODEX_HOOK_STATE_MAX_AGE_SECONDS
-    try:
-        return max(1.0, float(value))
-    except ValueError:
-        return CODEX_HOOK_STATE_MAX_AGE_SECONDS
-
-
-def parse_iso_datetime(value: str) -> datetime | None:
-    text = str(value or "").strip()
-    if not text:
-        return None
-    try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
-
-
-def write_codex_hook_state(hook: dict[str, Any], *, thread_id: str | None = None) -> dict[str, Any] | None:
-    try:
-        resolved_thread_id = codex_hook_thread_id(hook, thread_id)
-    except ValueError:
-        return None
-    now = datetime.now(timezone.utc).isoformat()
-    payload = {
-        "thread_id": resolved_thread_id,
-        "updated_at": now,
-        "hook_event_name": codex_hook_string(hook.get("hook_event_name")),
-        "source": "codex-hook",
-    }
-    path = codex_hook_state_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_name(path.name + ".tmp")
-    temp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    temp_path.replace(path)
-    return payload
-
-
-def read_codex_hook_state() -> dict[str, Any] | None:
-    path = codex_hook_state_path()
-    if not path.exists():
-        return None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    return payload if isinstance(payload, dict) else None
-
-
-def current_codex_hook_thread_state() -> dict[str, Any]:
-    state = read_codex_hook_state()
-    thread_id = codex_hook_string((state or {}).get("thread_id"))
-    updated_at = parse_iso_datetime(str((state or {}).get("updated_at") or ""))
-    if not state or not thread_id or updated_at is None:
-        return {
-            "ok": False,
-            "reason": "no_current_codex_hook_session",
-            "message": "No trusted Codex hook session id is available yet. Do not invent a thread id; trust hooks and run a Codex tool call first.",
-        }
-    age_seconds = max(0.0, (datetime.now(timezone.utc) - updated_at).total_seconds())
-    max_age_seconds = codex_hook_state_max_age_seconds()
-    if age_seconds > max_age_seconds:
-        return {
-            "ok": False,
-            "reason": "stale_codex_hook_session",
-            "message": "The latest Codex hook session id is stale. Do not invent a thread id; run a Codex tool call after hooks are trusted, then retry.",
-            "thread_id": thread_id,
-            "updated_at": updated_at.isoformat(),
-            "age_seconds": round(age_seconds, 3),
-            "max_age_seconds": max_age_seconds,
-        }
-    return {
-        "ok": True,
-        "thread_id": thread_id,
-        "source": str(state.get("source") or "codex-hook"),
-        "hook_event_name": str(state.get("hook_event_name") or ""),
-        "updated_at": updated_at.isoformat(),
-        "age_seconds": round(age_seconds, 3),
-        "fresh": True,
-    }
-
-
 def current_write_thread_id(explicit_thread_id: str | None = None) -> str | None:
     explicit = str(explicit_thread_id or "").strip()
-    if explicit:
-        return explicit
-    try:
-        state = current_codex_hook_thread_state()
-    except Exception:
-        return None
-    if bool(state.get("ok")):
-        thread_id = str(state.get("thread_id") or "").strip()
-        return thread_id or None
-    return None
+    return explicit or None
 
-
-def codex_hook_metadata(hook: dict[str, Any]) -> dict[str, Any]:
-    return {}
-
-
-def codex_hook_tool_command(tool_input: Any) -> str:
-    if isinstance(tool_input, dict):
-        return codex_hook_string(tool_input.get("command") or tool_input.get("cmd"))
-    return ""
-
-
-def codex_hook_event_id(hook: dict[str, Any], *, thread_id: str, event_type: str) -> str:
-    tool_use_id = codex_hook_string(hook.get("tool_use_id"))
-    seed = {
-        "thread_id": thread_id,
-        "event_type": event_type,
-        "hook_event_name": "" if event_type == "command" and tool_use_id else codex_hook_string(hook.get("hook_event_name")),
-        "turn_id": codex_hook_string(hook.get("turn_id") or hook.get("turnId")),
-        "tool_use_id": tool_use_id,
-        "agent_id": codex_hook_string(hook.get("agent_id")),
-        "trigger": codex_hook_string(hook.get("trigger")),
-        "source": codex_hook_string(hook.get("source")),
-    }
-    digest = hashlib.sha256(json.dumps(seed, sort_keys=True).encode("utf-8")).hexdigest()[:24]
-    return f"codex-hook:{digest}"
-
-
-def codex_hook_event_base(hook: dict[str, Any], *, thread_id: str, event_type: str) -> dict[str, Any]:
-    return {
-        "id": codex_hook_event_id(hook, thread_id=thread_id, event_type=event_type),
-        "thread_id": thread_id,
-        "agent": "codex",
-        "app": "codex",
-        "run_id": codex_hook_string(hook.get("turn_id") or hook.get("turnId")),
-    }
-
-
-def codex_hook_tool_metadata(hook: dict[str, Any], *, max_length: int) -> dict[str, Any]:
-    metadata: dict[str, Any] = {}
-    tool_input = hook.get("tool_input")
-    command = codex_hook_tool_command(tool_input)
-    if command:
-        metadata["command"] = codex_hook_preview(command, max_length=220)
-        metadata["capture"] = "command_only"
-    return metadata
-
-
-def build_codex_hook_context_event(
-    hook: dict[str, Any],
-    *,
-    thread_id: str | None = None,
-    max_content_length: int = 1200,
-) -> dict[str, Any] | None:
-    if not isinstance(hook, dict):
-        raise ValueError("Codex hook payload must be a JSON object")
-    hook_event = codex_hook_string(hook.get("hook_event_name"))
-
-    if hook_event == "PostToolUse":
-        tool_name = codex_hook_string(hook.get("tool_name")) or "Tool"
-        if tool_name != "Bash":
-            return None
-        tool_input = hook.get("tool_input")
-        command = codex_hook_tool_command(tool_input)
-        if not should_capture_context_command(command):
-            return None
-        graph_thread_id = codex_hook_thread_id(hook, thread_id)
-        metadata = codex_hook_tool_metadata(hook, max_length=max_content_length)
-        event_type = "command"
-        base = codex_hook_event_base(hook, thread_id=graph_thread_id, event_type=event_type)
-        return {
-            **base,
-            "event_type": event_type,
-            "title": context_event_command_title(command),
-            "content": command,
-            "status": "complete",
-            "metadata": metadata,
-        }
-
-    return None
-
-
-def codex_hook_context_event_skip(hook: dict[str, Any]) -> dict[str, Any]:
-    hook_event = codex_hook_string(hook.get("hook_event_name"))
-    if hook_event != "PostToolUse":
-        return {
-            "ok": True,
-            "skipped": True,
-            "reason": "generic_events_disabled",
-            "hook_event_name": hook_event,
-        }
-    tool_name = codex_hook_string(hook.get("tool_name")) or "Tool"
-    if tool_name != "Bash":
-        return {
-            "ok": True,
-            "skipped": True,
-            "reason": "non_bash_tool",
-            "hook_event_name": hook_event,
-            "tool_name": tool_name,
-        }
-    command = codex_hook_tool_command(hook.get("tool_input"))
-    if not command:
-        return {
-            "ok": True,
-            "skipped": True,
-            "reason": "command_required",
-            "hook_event_name": hook_event,
-        }
-    return {
-        "ok": True,
-        "skipped": True,
-        "reason": "command_not_allowlisted",
-        "hook_event_name": hook_event,
-        "command": command,
-    }
-
-
-def cmd_codex_hook(args: argparse.Namespace) -> None:
-    try:
-        capture_state = context_graph_capture_state("codex-hook")
-        if not capture_state.get("record"):
-            if bool(getattr(args, "json", False)) or bool(getattr(args, "dry_run", False)):
-                print(json.dumps(context_graph_skip_payload("codex-hook", settings=capture_state), indent=2))
-            return
-        raw_input = sys.stdin.read()
-        hook = json.loads(raw_input or "{}")
-        write_codex_hook_state(hook, thread_id=getattr(args, "thread_id", None))
-        request = build_codex_hook_context_event(
-            hook,
-            thread_id=getattr(args, "thread_id", None),
-            max_content_length=max(80, int(getattr(args, "max_content_length", 1200) or 1200)),
-        )
-        if request is None:
-            if bool(getattr(args, "json", False)) or bool(getattr(args, "dry_run", False)):
-                print(json.dumps(codex_hook_context_event_skip(hook), indent=2))
-            return
-        if bool(getattr(args, "dry_run", False)):
-            print(json.dumps({"request": request}, indent=2))
-            return
-        from . import mcp_bridge
-
-        payload = mcp_bridge.worker_request("/context-graph/events", {"request": request}, retry_on_stale_socket=False)
-        if bool(getattr(args, "json", False)):
-            print(json.dumps(payload, indent=2))
-    except Exception as exc:
-        if bool(getattr(args, "strict", False)):
-            raise
-        if bool(getattr(args, "json", False)) or bool(getattr(args, "dry_run", False)):
-            print(json.dumps({"ok": False, "error": str(exc)}, indent=2))
-
-
-def _print_context_graph_stale_skip(payload: dict[str, Any], *, json_output: bool) -> None:
-    if json_output:
-        print(json.dumps(payload, indent=2))
-        return
-    message = str(payload.get("message") or "").strip()
-    if message:
-        print(message)
-
-
-def cmd_context_event(args: argparse.Namespace) -> None:
-    from . import mcp_bridge
-
-    metadata: dict[str, Any] = {}
-    command_text = str(getattr(args, "context_command", "") or "").strip()
-    event_type = str(getattr(args, "event_type", "") or "").strip()
-    if not command_text:
-        raise ValueError("--command is required")
-    capture_state = context_graph_capture_state("context-event")
-    if not capture_state.get("record"):
-        _print_context_graph_stale_skip(
-            context_graph_skip_payload("context-event", command=command_text, settings=capture_state),
-            json_output=bool(getattr(args, "json", False)),
-        )
-        return
-    if event_type and event_type != "command":
-        if bool(getattr(args, "json", False)):
-            print(json.dumps({"ok": True, "skipped": True, "reason": "generic_events_disabled", "event_type": event_type}, indent=2))
-        return
-    event_type = "command"
-    if command_text and not should_capture_context_command(command_text):
-        if bool(getattr(args, "json", False)):
-            print(json.dumps({"ok": True, "skipped": True, "reason": "command_not_allowlisted", "command": command_text}, indent=2))
-        return
-    title = context_event_command_title(command_text)
-    content = command_text
-    metadata["command"] = command_text
-    metadata["capture"] = "command_only"
-    request = {
-        "thread_id": str(getattr(args, "thread_id", "") or ""),
-        "event_type": event_type,
-        "title": title,
-        "content": content,
-        "timestamp": str(getattr(args, "timestamp", "") or ""),
-        "status": str(getattr(args, "status", "") or "complete"),
-        "agent": str(getattr(args, "agent", "") or ""),
-        "app": str(getattr(args, "app", "") or ""),
-        "run_id": str(getattr(args, "run_id", "") or ""),
-        "metadata": metadata,
-    }
-    payload = mcp_bridge.worker_request("/context-graph/events", {"request": request})
-    if bool(getattr(args, "json", False)):
-        print(json.dumps(payload, indent=2))
-
-
-def cmd_context_graph_url(args: argparse.Namespace) -> None:
-    from urllib.parse import quote
-    import webbrowser
-
-    from . import mcp_bridge
-
-    settings = load_context_graph_settings()
-    hook_mode = str(settings.get("mode") or "").strip().lower() == "hooks"
-    codex_current = bool(getattr(args, "codex_current", False))
-    explicit_thread_id = str(getattr(args, "thread_id", "") or "").strip()
-    resolution: dict[str, Any] = {"source": "argument" if explicit_thread_id else ""}
-    if not bool(settings.get("enabled")):
-        payload = {
-            "ok": True,
-            "skipped": True,
-            "reason": "context_graph_disabled",
-            "message": "Context graph is disabled in Autopsy settings. No graph URL was opened.",
-            "context_graph": {
-                "enabled": False,
-                "mode": str(settings.get("mode") or "cli"),
-            },
-        }
-        if explicit_thread_id and not hook_mode:
-            payload["thread_id"] = explicit_thread_id
-        if bool(getattr(args, "json", False)):
-            print(json.dumps(payload, indent=2))
-        else:
-            print(payload["message"])
-        return
-    if hook_mode and explicit_thread_id:
-        payload = {
-            "ok": False,
-            "skipped": True,
-            "reason": "manual_thread_id_forbidden_in_hook_mode",
-            "message": "Context graph is in Codex hook mode. Do not pass --thread-id or invent a graph id; use autopsy context-graph-url --codex-current after a trusted Codex hook has recorded the session.",
-            "context_graph": {
-                "enabled": bool(settings.get("enabled")),
-                "mode": str(settings.get("mode") or "cli"),
-            },
-        }
-        if bool(getattr(args, "json", False)):
-            print(json.dumps(payload, indent=2))
-        else:
-            print(payload["message"])
-        raise SystemExit(1)
-    if codex_current or (hook_mode and not explicit_thread_id):
-        if explicit_thread_id:
-            raise ValueError("Do not combine --thread-id with --codex-current")
-        resolution = current_codex_hook_thread_state()
-        if not bool(resolution.get("ok")):
-            payload = {
-                "ok": False,
-                "skipped": True,
-                "reason": str(resolution.get("reason") or "no_current_codex_hook_session"),
-                "message": str(resolution.get("message") or "No current Codex hook session id is available."),
-                "context_graph": {
-                    "enabled": bool(settings.get("enabled")),
-                    "mode": str(settings.get("mode") or "cli"),
-                },
-                "codex_current": resolution,
-            }
-            if bool(getattr(args, "json", False)):
-                print(json.dumps(payload, indent=2))
-            else:
-                print(payload["message"])
-            raise SystemExit(1)
-        thread_id = str(resolution.get("thread_id") or "").strip()
-    else:
-        thread_id = explicit_thread_id
-    if not thread_id:
-        raise ValueError("thread id is required; in Codex hook mode use --codex-current")
-    info = mcp_bridge.ensure_worker()
-    base_url = str(info.get("base_url") or "").rstrip("/")
-    token = str(info.get("token") or "")
-    url = f"{base_url}/context-graph/threads/{quote(thread_id, safe='')}?token={quote(token, safe='')}"
-    if bool(getattr(args, "open", False)):
-        webbrowser.open(url)
-    if bool(getattr(args, "json", False)):
-        print(
-            json.dumps(
-                {
-                    "url": url,
-                    "thread_id": thread_id,
-                    "thread_source": resolution,
-                    "worker": {
-                        "base_url": base_url,
-                        "pid": info.get("pid"),
-                    },
-                },
-                indent=2,
-            )
-        )
-        return
-    print(url)
-
-
-def cmd_context_graph_settings(args: argparse.Namespace) -> None:
-    current = load_context_graph_settings()
-    next_settings = dict(current)
-    changed = False
-    if getattr(args, "mode", None):
-        next_settings["mode"] = str(getattr(args, "mode"))
-        changed = True
-    if bool(getattr(args, "enabled", False)):
-        next_settings["enabled"] = True
-        changed = True
-    if bool(getattr(args, "disabled", False)):
-        next_settings["enabled"] = False
-        changed = True
-    if bool(getattr(args, "multi_turn", False)):
-        next_settings["multi_turn"] = True
-        changed = True
-    if bool(getattr(args, "current_turn", False)):
-        next_settings["multi_turn"] = False
-        changed = True
-
-    if changed:
-        next_settings = save_context_graph_settings(next_settings)
-
-    payload = {
-        **context_graph_settings_payload(next_settings),
-        "changed": changed,
-    }
-
-    if bool(getattr(args, "update_codex_instructions", False)):
-        init_args = argparse.Namespace(
-            global_scope=True,
-            repo_path=None,
-            agent="codex",
-            print_instructions=False,
-            check=False,
-            dry_run=False,
-            yes=True,
-            smoke_test=False,
-            skip_write_smoke=True,
-            mcp=False,
-            autopsy_command_path=str(shutil.which("autopsy") or ""),
-        )
-        payload["codex_instructions"] = build_init_payload(init_args)
-
-    if bool(getattr(args, "json", False)):
-        print(json.dumps(payload, indent=2))
-        return
-
-    print(payload["message"])
 
 
 def cmd_import_session(args: argparse.Namespace) -> None:
@@ -15227,6 +15191,8 @@ def cmd_import_session(args: argparse.Namespace) -> None:
         dry_run=bool(getattr(args, "dry_run", False)),
         repository_root_path=repository_scope_path_from_args(args),
     )
+    if not bool(getattr(args, "dry_run", False)) and str((payload.get("workflow") or {}).get("status") or "") == "ok":
+        attach_auto_backup_after_write(payload, graph, workspace, reason="import_session")
     print(json.dumps(payload, indent=2))
 
 
@@ -15242,6 +15208,11 @@ def cmd_consolidate_session(args: argparse.Namespace) -> None:
         max_events=int(getattr(args, "max_events", 80) or 80),
         write=bool(getattr(args, "write", False)),
     )
+    if payload.get("blocked"):
+        print(json.dumps(payload, indent=2))
+        raise SystemExit(2)
+    if bool(getattr(args, "write", False)) and str((payload.get("workflow") or {}).get("status") or "") == "ok":
+        attach_auto_backup_after_write(payload, graph, workspace, reason="consolidate_session")
     print(json.dumps(payload, indent=2))
 
 
@@ -15258,6 +15229,11 @@ def cmd_observe(args: argparse.Namespace) -> None:
         write=bool(getattr(args, "write", False)),
         write_if_stale=bool(getattr(args, "write_if_stale", False)),
     )
+    if payload.get("blocked"):
+        print(json.dumps(payload, indent=2))
+        raise SystemExit(2)
+    if bool(payload.get("written")):
+        attach_auto_backup_after_write(payload, graph, workspace, reason="observe")
     print(json.dumps(payload, indent=2))
     workflow = payload.get("workflow") if isinstance(payload.get("workflow"), dict) else {}
     if (bool(getattr(args, "write", False)) or bool(getattr(args, "write_if_stale", False))) and not bool(workflow.get("complete")):
@@ -15277,12 +15253,18 @@ def cmd_neighbors(args: argparse.Namespace) -> None:
         all_kinds=args.all_kinds,
         min_fact_rating=getattr(args, "min_fact_rating", None),
     )
+    if payload.get("blocked"):
+        print(json.dumps(payload, indent=2))
+        raise SystemExit(2)
     print(json.dumps(payload, indent=2))
 
 
 def cmd_timeline(args: argparse.Namespace) -> None:
     tool, workspace, _config, graph = open_workspace_graph(args)
     payload = build_timeline_payload(graph, tool=tool, workspace=workspace, stable_key=args.stable_key)
+    if payload.get("blocked"):
+        print(json.dumps(payload, indent=2))
+        raise SystemExit(2)
     print(json.dumps(payload, indent=2))
 
 
@@ -15301,6 +15283,9 @@ def cmd_history(args: argparse.Namespace) -> None:
 def cmd_snapshot(args: argparse.Namespace) -> None:
     tool, workspace, _config, graph = open_workspace_graph(args)
     payload = build_snapshot_payload(graph, tool=tool, workspace=workspace, stable_key=args.stable_key, limit=args.limit)
+    if payload.get("blocked"):
+        print(json.dumps(payload, indent=2))
+        raise SystemExit(2)
     print(json.dumps(payload, indent=2))
 
 
@@ -15370,23 +15355,9 @@ def cmd_audit(args: argparse.Namespace) -> None:
 
 
 def cmd_benchmark(args: argparse.Namespace) -> None:
-    tool, workspace, config, graph = open_workspace_graph(args)
-    try:
-        payload = build_benchmark_payload(
-            graph,
-            tool=tool,
-            workspace=workspace,
-            config=config,
-            sample_size=args.sample_size,
-            include_sync=args.include_sync,
-            skip_write_probe=args.skip_write_probe,
-        )
-    except Exception as exc:
-        if not is_stale_falkordb_lite_error(exc):
-            raise
-        reset_stale_falkordb_lite_runtime(args)
+    def operation() -> dict[str, Any]:
         tool, workspace, config, graph = open_workspace_graph(args)
-        payload = build_benchmark_payload(
+        return build_benchmark_payload(
             graph,
             tool=tool,
             workspace=workspace,
@@ -15395,6 +15366,8 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
             include_sync=args.include_sync,
             skip_write_probe=args.skip_write_probe,
         )
+
+    payload = run_with_stale_falkordb_lite_retries(args, operation)
     print(json.dumps(payload, indent=2))
 
 
@@ -15433,6 +15406,27 @@ SEMANTIC_RELATION_TARGET_KINDS = frozenset(SEARCHABLE_KINDS)
 SEMANTIC_RELATION_TARGET_KIND_RULES = {
     "answers": frozenset({"open_question"}),
 }
+RELATION_TARGET_JSON_KEYS = frozenset(
+    {
+        "stable_key",
+        "stableKey",
+        "source_ref",
+        "sourceRef",
+        "source_stable_key",
+        "sourceStableKey",
+        "target",
+        "target_stable_key",
+        "targetStableKey",
+        "entity_stable_key",
+        "entityStableKey",
+    }
+)
+RELATION_TARGET_JSON_CONTAINERS = frozenset({"item", "items", "hit", "hits", "source", "target", "entity", "node", "memory"})
+RELATION_TARGET_TOKEN_PATTERN = r"[A-Za-z][A-Za-z0-9_-]{1,64}:[A-Za-z0-9][A-Za-z0-9_.:-]{0,190}"
+RELATION_TARGET_TOKEN_RE = re.compile(rf"(?<![A-Za-z0-9_./-])({RELATION_TARGET_TOKEN_PATTERN})(?![A-Za-z0-9_.:-])")
+RELATION_TARGET_FIELD_RE = re.compile(
+    rf"(?i)\b(?:stable_key|stableKey|source_ref|sourceRef|source_stable_key|sourceStableKey|target_stable_key|targetStableKey|entity_stable_key|entityStableKey)\b\s*[:=]\s*[\"'`]?({RELATION_TARGET_TOKEN_PATTERN})"
+)
 
 
 def normalize_note_kind(value: str | None, *, fallback: str = "memory_note") -> str:
@@ -15442,6 +15436,80 @@ def normalize_note_kind(value: str | None, *, fallback: str = "memory_note") -> 
 
 def canonical_relation_name(value: str | None) -> str:
     return str(value or "").strip().lower().replace("-", "_")
+
+
+def relation_target_token(value: str | None) -> str:
+    return str(value or "").strip().strip("\"'`<>()[]{}.,;")
+
+
+def looks_like_stable_key_token(value: str | None) -> bool:
+    token = relation_target_token(value)
+    return bool(token and RELATION_TARGET_TOKEN_RE.fullmatch(token))
+
+
+def collect_relation_target_tokens_from_json(value: Any, *, depth: int = 0) -> set[str]:
+    if depth > 4:
+        return set()
+    if isinstance(value, str):
+        token = relation_target_stable_key_from_text(value)
+        return {token} if looks_like_stable_key_token(token) else set()
+    if isinstance(value, dict):
+        tokens: set[str] = set()
+        for key, raw in value.items():
+            key_text = str(key or "")
+            if key_text in RELATION_TARGET_JSON_KEYS:
+                tokens.update(collect_relation_target_tokens_from_json(raw, depth=depth + 1))
+            elif key_text in RELATION_TARGET_JSON_CONTAINERS:
+                tokens.update(collect_relation_target_tokens_from_json(raw, depth=depth + 1))
+        return tokens
+    if isinstance(value, list):
+        tokens: set[str] = set()
+        for raw in value:
+            tokens.update(collect_relation_target_tokens_from_json(raw, depth=depth + 1))
+        return tokens
+    return set()
+
+
+def relation_target_stable_key_from_text(value: str | None) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    direct = relation_target_token(raw)
+    if looks_like_stable_key_token(direct):
+        return direct
+    field_matches = {relation_target_token(match.group(1)) for match in RELATION_TARGET_FIELD_RE.finditer(raw)}
+    field_matches = {token for token in field_matches if looks_like_stable_key_token(token)}
+    if len(field_matches) == 1:
+        return next(iter(field_matches))
+    token_matches = {relation_target_token(match.group(1)) for match in RELATION_TARGET_TOKEN_RE.finditer(raw)}
+    token_matches = {token for token in token_matches if looks_like_stable_key_token(token)}
+    if len(token_matches) == 1:
+        return next(iter(token_matches))
+    return raw
+
+
+def normalize_relation_target_stable_key(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if raw[:1] in {"{", "[", "\""}:
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            parsed = None
+        if parsed is not None:
+            tokens = collect_relation_target_tokens_from_json(parsed)
+            if len(tokens) == 1:
+                return next(iter(tokens))
+    return relation_target_stable_key_from_text(raw)
+
+
+def normalize_relation_specs(specs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for spec in specs:
+        target = normalize_relation_target_stable_key(spec.get("target"))
+        normalized.append({**spec, "target": target})
+    return normalized
 
 
 def relation_node_kind(node: dict[str, Any] | None, *, fallback: str = "") -> str:
@@ -15499,7 +15567,7 @@ def semantic_relation_ontology_result(*, source_kind: str, relation: str, target
 def relation_ontology_error_message(result: dict[str, Any], *, source_stable_key: str, target_stable_key: str) -> str:
     messages = [str(error.get("message") or "") for error in list(result.get("errors") or []) if str(error.get("message") or "")]
     detail = "; ".join(messages) or "relation is not allowed by semantic relation ontology"
-    return f"Graph relation ontology rejected {source_stable_key} --{result.get('relation')} {target_stable_key}: {detail}"
+    return f"Memory relation ontology rejected {source_stable_key} --{result.get('relation')} {target_stable_key}: {detail}"
 
 
 def validate_relation_ontology(
@@ -15531,14 +15599,14 @@ def validate_relation_ontology_for_specs(
     targets: dict[str, dict[str, Any]],
 ) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
-    for spec in specs:
+    for spec in normalize_relation_specs(specs):
         canonical_relation = canonical_relation_name(str(spec.get("relation") or ""))
         target_stable_key = str(spec.get("target") or "").strip()
         if not canonical_relation or not target_stable_key:
             continue
         target = targets.get(target_stable_key)
         if not target:
-            raise ValueError(f"Graph relation target not found: {target_stable_key}")
+            raise MissingRelationTargetsError([spec])
         results.append(validate_relation_ontology(source=source, target=target, relation=canonical_relation))
     return results
 
@@ -15611,7 +15679,7 @@ def relation_specs_from_mapping(values: dict[str, Any]) -> list[dict[str, Any]]:
         else:
             relation_values = list(raw_values or [])
         for raw_target in relation_values:
-            target_stable_key = str(raw_target or "").strip()
+            target_stable_key = normalize_relation_target_stable_key(raw_target)
             if not target_stable_key:
                 continue
             canonical_relation = relation.replace("-", "_")
@@ -15636,10 +15704,242 @@ def relation_specs_from_args(args: argparse.Namespace) -> list[dict[str, Any]]:
     return relation_specs_from_mapping(values)
 
 
+def relation_flag_for_name(value: str | None) -> str:
+    canonical_relation = canonical_relation_name(value)
+    return f"--{canonical_relation.replace('_', '-')}" if canonical_relation else "--relation"
+
+
+def relation_target_history_diagnostics(graph, stable_key: str) -> list[dict[str, str]]:
+    try:
+        history = fetch_memory_history(graph, stable_key, limit=3)
+    except Exception:
+        return []
+    diagnostics: list[dict[str, str]] = []
+    for event in history:
+        diagnostics.append(
+            {
+                "event": str(event.get("event") or ""),
+                "created_at": str(event.get("created_at") or ""),
+                "source": str(event.get("source") or ""),
+            }
+        )
+    return diagnostics
+
+
+def relation_target_candidate_diagnostics(graph, stable_key: str, *, limit: int = 3) -> list[dict[str, str]]:
+    key = str(stable_key or "").strip()
+    if not key:
+        return []
+    needle = key.lower()
+    if ":" in needle:
+        needle = needle.split(":", 1)[1]
+    needle = needle[:16]
+    if not needle:
+        return []
+    try:
+        result = graph.query(
+            """
+            MATCH (node:MemoryNode)
+            WHERE toLower(node.stable_key) CONTAINS $needle
+               OR toLower(coalesce(node.label, '')) CONTAINS $needle
+            RETURN
+              node.stable_key,
+              node.kind,
+              node.label,
+              coalesce(node.expired_at, ''),
+              coalesce(node.updated_at, '')
+            ORDER BY node.updated_at DESC
+            LIMIT $limit
+            """,
+            params={"needle": needle, "limit": max(1, int(limit or 3))},
+        )
+    except Exception:
+        return []
+    candidates: list[dict[str, str]] = []
+    for row in result_rows(result):
+        candidate_key = str(row[0] or "")
+        if not candidate_key or candidate_key == stable_key:
+            continue
+        candidates.append(
+            {
+                "stable_key": candidate_key,
+                "kind": str(row[1] or ""),
+                "title": str(row[2] or ""),
+                "expired_at": str(row[3] or ""),
+                "updated_at": str(row[4] or ""),
+            }
+        )
+    return candidates
+
+
+def missing_relation_target_diagnostics(
+    graph,
+    missing_specs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    diagnostics: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for spec in missing_specs:
+        relation = canonical_relation_name(str(spec.get("relation") or ""))
+        target = str(spec.get("target") or "").strip()
+        if not target:
+            continue
+        key = (relation, target)
+        if key in seen:
+            continue
+        seen.add(key)
+        history = relation_target_history_diagnostics(graph, target)
+        candidates = relation_target_candidate_diagnostics(graph, target)
+        diagnostics.append(
+            {
+                "relation": relation,
+                "flag": relation_flag_for_name(relation),
+                "target": target,
+                "history_events": history,
+                "candidate_matches": candidates,
+            }
+        )
+    return diagnostics
+
+
+def missing_memory_item_diagnostics(graph, stable_key: str) -> dict[str, Any]:
+    key = str(stable_key or "").strip()
+    return {
+        "stable_key": key,
+        "history_events": relation_target_history_diagnostics(graph, key),
+        "candidate_matches": relation_target_candidate_diagnostics(graph, key),
+    }
+
+
+def record_missing_relation_target_diagnostic(
+    graph,
+    missing_specs: list[dict[str, Any]],
+    diagnostics: list[dict[str, Any]],
+) -> None:
+    relation_requests = []
+    seen: set[tuple[str, str]] = set()
+    for spec in missing_specs:
+        relation = canonical_relation_name(str(spec.get("relation") or ""))
+        target = str(spec.get("target") or "").strip()
+        if not target:
+            continue
+        key = (relation, target)
+        if key in seen:
+            continue
+        seen.add(key)
+        relation_requests.append(
+            {
+                "relation": relation,
+                "flag": relation_flag_for_name(relation),
+                "target": target,
+                "valid_at": str(spec.get("valid_at") or ""),
+                "invalid_at": str(spec.get("invalid_at") or ""),
+                "expired_at": str(spec.get("expired_at") or ""),
+                "fact_rating": normalize_fact_rating(spec.get("fact_rating")),
+            }
+        )
+    record_memory_relation_diagnostic(
+        "missing_relation_target",
+        {
+            "graph_name": str(getattr(graph, "name", "") or ""),
+            "missing_count": len(relation_requests),
+            "relation_requests": relation_requests,
+            "diagnostics": diagnostics,
+        },
+    )
+
+
+def record_missing_memory_item_diagnostic(
+    graph,
+    *,
+    stable_key: str,
+    operation: str,
+    diagnostics: dict[str, Any],
+) -> None:
+    record_memory_relation_diagnostic(
+        "missing_memory_item",
+        {
+            "graph_name": str(getattr(graph, "name", "") or ""),
+            "operation": str(operation or ""),
+            "stable_key": str(stable_key or "").strip(),
+            "missing_count": 1,
+            "history_count": len(list(diagnostics.get("history_events") or [])),
+            "candidate_count": len(list(diagnostics.get("candidate_matches") or [])),
+            "diagnostics": diagnostics,
+        },
+    )
+
+
+def record_missing_memory_selector_diagnostic(
+    graph,
+    *,
+    selector_type: str,
+    selector_value: str,
+    operation: str,
+) -> None:
+    record_memory_relation_diagnostic(
+        "missing_memory_item",
+        {
+            "graph_name": str(getattr(graph, "name", "") or ""),
+            "operation": str(operation or ""),
+            "selector_type": str(selector_type or ""),
+            "selector_value": str(selector_value or ""),
+            "missing_count": 1,
+            "history_count": 0,
+            "candidate_count": 0,
+        },
+    )
+
+
+def format_missing_relation_targets_error(
+    missing_specs: list[dict[str, Any]],
+    *,
+    diagnostics: list[dict[str, Any]] | None = None,
+) -> str:
+    specs = [spec for spec in missing_specs if str(spec.get("target") or "").strip()]
+    missing_targets = sorted({str(spec.get("target") or "").strip() for spec in specs})
+    lines = [f"Memory relation target not found: {', '.join(missing_targets)}"]
+    lines.append("The write was not recorded because every semantic relation must point at an existing memory item.")
+    lines.append("Missing relation request(s):")
+    for spec in specs:
+        target = str(spec.get("target") or "").strip()
+        lines.append(f"- {relation_flag_for_name(str(spec.get('relation') or ''))} {target}")
+    diagnostic_items = diagnostics or []
+    if diagnostic_items:
+        lines.append("Diagnostics:")
+        for item in diagnostic_items:
+            target = str(item.get("target") or "")
+            flag = str(item.get("flag") or "--relation")
+            history = list(item.get("history_events") or [])
+            candidates = list(item.get("candidate_matches") or [])
+            if history:
+                latest = history[-1]
+                event = str(latest.get("event") or "history").strip()
+                created_at = str(latest.get("created_at") or "").strip()
+                suffix = f" at {created_at}" if created_at else ""
+                lines.append(f"- {flag} {target}: history exists; latest event is {event}{suffix}.")
+            else:
+                lines.append(f"- {flag} {target}: no current item or local history was found for this key.")
+            for candidate in candidates[:3]:
+                title = str(candidate.get("title") or "").strip()
+                candidate_key = str(candidate.get("stable_key") or "").strip()
+                kind = str(candidate.get("kind") or "").strip()
+                label = f" ({kind})" if kind else ""
+                suffix = f" - {title}" if title else ""
+                lines.append(f"  candidate: {candidate_key}{label}{suffix}")
+    lines.append("Recovery:")
+    for target in missing_targets:
+        quoted = cli_quote(target)
+        lines.append(f"- Verify the key: autopsy item {quoted}")
+        lines.append(f"- Check deletion/update history: autopsy history {quoted}")
+        lines.append(f"- Search for the intended target: autopsy search {quoted} --current-only")
+    lines.append("Do not retry with --no-relations-ok just to bypass this error; use it only when the memory is intentionally standalone.")
+    return "\n".join(lines)
+
+
 def relation_target_records(graph, specs: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     records: dict[str, dict[str, Any]] = {}
-    missing: list[str] = []
-    for spec in specs:
+    missing: list[dict[str, Any]] = []
+    for spec in normalize_relation_specs(specs):
         target_stable_key = str(spec.get("target") or "").strip()
         if not target_stable_key or target_stable_key in records:
             continue
@@ -15647,9 +15947,11 @@ def relation_target_records(graph, specs: list[dict[str, Any]]) -> dict[str, dic
         if target:
             records[target_stable_key] = target
         else:
-            missing.append(target_stable_key)
+            missing.append(spec)
     if missing:
-        raise ValueError(f"Graph relation target not found: {', '.join(missing)}")
+        diagnostics = missing_relation_target_diagnostics(graph, missing)
+        record_missing_relation_target_diagnostic(graph, missing, diagnostics)
+        raise MissingRelationTargetsError(missing, diagnostics)
     return records
 
 
@@ -15841,6 +16143,159 @@ def blocked_memory_write_payload(*, write_quality: dict[str, Any], stable_key: s
     return payload
 
 
+def blocked_relation_write_payload(*, error: MissingRelationTargetsError, stable_key: str = "", operation: str = "create") -> dict[str, Any]:
+    specs = [spec for spec in error.missing_specs if str(spec.get("target") or "").strip()]
+    missing_targets = sorted({str(spec.get("target") or "").strip() for spec in specs})
+    payload: dict[str, Any] = {
+        "blocked": True,
+        "operation": operation,
+        "reason": "missing_relation_target",
+        "message": str(error),
+        "missing_relation_targets": missing_targets,
+        "missing_relation_requests": [
+            {
+                "relation": canonical_relation_name(str(spec.get("relation") or "")),
+                "flag": relation_flag_for_name(str(spec.get("relation") or "")),
+                "target": str(spec.get("target") or "").strip(),
+                "valid_at": str(spec.get("valid_at") or "") or None,
+                "invalid_at": str(spec.get("invalid_at") or "") or None,
+                "expired_at": str(spec.get("expired_at") or "") or None,
+                "fact_rating": normalize_fact_rating(spec.get("fact_rating")),
+            }
+            for spec in specs
+        ],
+        "diagnostics": error.diagnostics,
+        "retry_policy": {
+            "retry_with_no_relations_ok": False,
+            "reason": "A missing relation target means the memory lineage would be false or incomplete; inspect or repair the target before writing.",
+        },
+        "workflow": {
+            "status": "blocked_missing_relation_target",
+            "complete": False,
+            "next_step": "inspect_missing_relation_target",
+            "message": "The memory write was rejected before mutation because a requested semantic relation target does not exist.",
+            "suggested_next_steps": [
+                workflow_step("inspect-target", f"Run autopsy item {cli_quote(target)} for the missing target.", f"autopsy item {cli_quote(target)}")
+                for target in missing_targets[:3]
+            ]
+            + [
+                workflow_step("inspect-history", f"Run autopsy history {cli_quote(target)} to check whether the target was deleted or superseded.", f"autopsy history {cli_quote(target)}")
+                for target in missing_targets[:3]
+            ]
+            + [
+                workflow_step("search-memory", "Search for the intended relation target before deciding whether to write a standalone memory.", f"autopsy search {cli_quote(target)} --current-only")
+                for target in missing_targets[:3]
+            ],
+        },
+    }
+    if stable_key:
+        payload["stable_key"] = stable_key
+    return payload
+
+
+def blocked_missing_memory_item_payload(*, stable_key: str, operation: str) -> dict[str, Any]:
+    key = str(stable_key or "").strip()
+    quoted = cli_quote(key)
+    mutating = operation in {"update", "delete", "expire", "pin", "feedback", "resolve_conflict"}
+    suggested_steps = []
+    if mutating:
+        suggested_steps.append(workflow_step("inspect-item", f"Run autopsy item {quoted} to confirm the key is absent.", f"autopsy item {quoted}"))
+    suggested_steps.extend([
+        workflow_step("inspect-history", f"Run autopsy history {quoted} to check whether the item was deleted, expired, or superseded.", f"autopsy history {quoted}"),
+        workflow_step("search-memory", "Search for the intended memory before creating a replacement.", f"autopsy search {quoted} --current-only"),
+    ])
+    return {
+        "blocked": True,
+        "operation": operation,
+        "stable_key": key,
+        "reason": "missing_memory_item",
+        "message": (
+            f"Memory item not found: {key}. The {operation} was not recorded."
+            if mutating
+            else f"Memory item not found: {key}. The {operation} request could not be completed."
+        ),
+        "retry_policy": {
+            "retry_as_create": False,
+            "retry_with_no_relations_ok": False,
+            "reason": (
+                "A missing mutating-operation source means the requested lineage or lifecycle operation has no target. Inspect history or search before deciding whether to create a new standalone memory."
+                if mutating
+                else "A missing item read means the stable key is absent from current memory. Inspect history or search before choosing a replacement key."
+            ),
+        },
+        "workflow": {
+            "status": "blocked_missing_memory_item",
+            "complete": False,
+            "next_step": "inspect_missing_memory_item",
+            "message": (
+                "The memory operation was rejected before mutation because the requested stable key does not exist."
+                if mutating
+                else "The memory item request could not be completed because the requested stable key does not exist."
+            ),
+            "suggested_next_steps": suggested_steps,
+        },
+    }
+
+
+def blocked_missing_memory_item_payload_for_graph(graph, *, stable_key: str, operation: str) -> dict[str, Any]:
+    diagnostics = missing_memory_item_diagnostics(graph, stable_key)
+    record_missing_memory_item_diagnostic(
+        graph,
+        stable_key=stable_key,
+        operation=operation,
+        diagnostics=diagnostics,
+    )
+    payload = blocked_missing_memory_item_payload(stable_key=stable_key, operation=operation)
+    payload["diagnostics"] = diagnostics
+    return payload
+
+
+def blocked_missing_memory_selector_payload(*, selector_type: str, selector_value: str, operation: str) -> dict[str, Any]:
+    selector = {"type": str(selector_type or ""), "value": str(selector_value or "")}
+    return {
+        "blocked": True,
+        "operation": operation,
+        "selector": selector,
+        "reason": "missing_memory_item",
+        "message": f"No current memory item matched {selector['type']}={selector['value']}. The {operation} request could not be completed.",
+        "retry_policy": {
+            "retry_as_create": False,
+            "retry_with_no_relations_ok": False,
+            "reason": "A missing graph selector means no current memory item matched the requested identifier. Resolve the current stable key before retrying.",
+        },
+        "workflow": {
+            "status": "blocked_missing_memory_item",
+            "complete": False,
+            "next_step": "inspect_missing_memory_selector",
+            "message": "The memory item request could not be completed because the requested graph selector does not resolve to a current memory item.",
+            "suggested_next_steps": [
+                workflow_step("search-memory", "Search by known title, tag, repository, or content to find the intended current stable key."),
+                workflow_step("retry-with-stable-key", "Retry the read with a stable key from current memory instead of the missing selector."),
+            ],
+        },
+    }
+
+
+def blocked_missing_memory_selector_payload_for_graph(
+    graph,
+    *,
+    selector_type: str,
+    selector_value: str,
+    operation: str,
+) -> dict[str, Any]:
+    record_missing_memory_selector_diagnostic(
+        graph,
+        selector_type=selector_type,
+        selector_value=selector_value,
+        operation=operation,
+    )
+    return blocked_missing_memory_selector_payload(
+        selector_type=selector_type,
+        selector_value=selector_value,
+        operation=operation,
+    )
+
+
 def unsafe_memory_read_findings(*, title: str, content: str) -> list[dict[str, Any]]:
     text = f"{title}\n{content}"
     findings: list[dict[str, Any]] = []
@@ -15965,12 +16420,17 @@ def create_requested_fact_relations_from_specs(
     specs: list[dict[str, Any]],
     targets: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
+    specs = normalize_relation_specs(specs)
     if not specs:
         return []
     source = lookup_node_by_stable_key(graph, source_stable_key)
     if not source:
-        raise ValueError(f"Graph relation source not found: {source_stable_key}")
-    target_records = targets if targets is not None else relation_target_records(graph, specs)
+        raise ValueError(f"Memory relation source not found: {source_stable_key}")
+    target_records = (
+        {normalize_relation_target_stable_key(key): value for key, value in targets.items()}
+        if targets is not None
+        else relation_target_records(graph, specs)
+    )
     created = []
     timestamp = utc_now_iso()
     for spec in specs:
@@ -15980,7 +16440,7 @@ def create_requested_fact_relations_from_specs(
             continue
         target = target_records.get(target_stable_key)
         if not target:
-            raise ValueError(f"Graph relation target not found: {target_stable_key}")
+            raise MissingRelationTargetsError([spec])
         ontology = validate_relation_ontology(source=source, target=target, relation=canonical_relation)
         create_fact_edge(
             graph,
@@ -16036,6 +16496,9 @@ def cmd_create_note(args: argparse.Namespace) -> None:
                 specs=relation_specs,
                 targets=targets,
             )
+    except MissingRelationTargetsError as exc:
+        print(json.dumps(blocked_relation_write_payload(error=exc, operation="create"), indent=2))
+        raise SystemExit(2)
     except ValueError as exc:
         fail(str(exc), 2)
     write_quality = build_write_quality_payload(
@@ -16077,6 +16540,7 @@ def cmd_create_note(args: argparse.Namespace) -> None:
             payload["created_relations"] = relations
     payload["write_quality"] = write_quality
     refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
+    attach_auto_backup_after_write(payload, graph, workspace, reason="create_note")
     print(json.dumps(payload, indent=2))
 
 
@@ -16084,14 +16548,18 @@ def cmd_update_item(args: argparse.Namespace) -> None:
     tool, workspace, _config, graph = open_workspace_graph(args)
     title, content = note_text_from_args(args)
     kind = normalize_note_kind(getattr(args, "kind", None), fallback="memory_note")
+    source = lookup_node_by_stable_key(graph, str(args.stable_key))
+    if not source:
+        print(json.dumps(blocked_missing_memory_item_payload_for_graph(graph, stable_key=args.stable_key, operation="update"), indent=2))
+        raise SystemExit(2)
     try:
         relation_specs = relation_specs_from_args(args)
         targets = relation_target_records(graph, relation_specs)
         if relation_specs:
-            source = lookup_node_by_stable_key(graph, str(args.stable_key))
-            if not source:
-                raise ValueError(f"Graph relation source not found: {args.stable_key}")
             validate_relation_ontology_for_specs(source=source, specs=relation_specs, targets=targets)
+    except MissingRelationTargetsError as exc:
+        print(json.dumps(blocked_relation_write_payload(error=exc, stable_key=args.stable_key, operation="update"), indent=2))
+        raise SystemExit(2)
     except ValueError as exc:
         fail(str(exc), 2)
     write_quality = build_write_quality_payload(
@@ -16136,18 +16604,27 @@ def cmd_update_item(args: argparse.Namespace) -> None:
         }
     payload["write_quality"] = write_quality
     refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
+    attach_auto_backup_after_write(payload, graph, workspace, reason="update_item")
     print(json.dumps(payload, indent=2))
 
 
 def cmd_delete_item(args: argparse.Namespace) -> None:
     tool, workspace, _config, graph = open_workspace_graph(args)
+    if not lookup_node_by_stable_key(graph, str(args.stable_key)):
+        print(json.dumps(blocked_missing_memory_item_payload_for_graph(graph, stable_key=args.stable_key, operation="delete"), indent=2))
+        raise SystemExit(2)
     delete_graph_item_payload(graph, stable_key=args.stable_key)
     refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
-    print(json.dumps({"deleted": True, "stable_key": args.stable_key}, indent=2))
+    payload = {"deleted": True, "stable_key": args.stable_key}
+    attach_auto_backup_after_write(payload, graph, workspace, reason="delete_item")
+    print(json.dumps(payload, indent=2))
 
 
 def cmd_expire_item(args: argparse.Namespace) -> None:
     tool, workspace, _config, graph = open_workspace_graph(args)
+    if not lookup_node_by_stable_key(graph, str(args.stable_key)):
+        print(json.dumps(blocked_missing_memory_item_payload_for_graph(graph, stable_key=args.stable_key, operation="expire"), indent=2))
+        raise SystemExit(2)
     payload = expire_graph_item_payload(
         graph,
         tool=tool,
@@ -16158,11 +16635,15 @@ def cmd_expire_item(args: argparse.Namespace) -> None:
         clear=bool(getattr(args, "clear", False)),
     )
     refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
+    attach_auto_backup_after_write(payload, graph, workspace, reason="expire_item")
     print(json.dumps(payload, indent=2))
 
 
 def cmd_pin_item(args: argparse.Namespace) -> None:
     tool, workspace, _config, graph = open_workspace_graph(args)
+    if not lookup_node_by_stable_key(graph, str(args.stable_key)):
+        print(json.dumps(blocked_missing_memory_item_payload_for_graph(graph, stable_key=args.stable_key, operation="pin"), indent=2))
+        raise SystemExit(2)
     payload = pin_graph_item_payload(
         graph,
         tool=tool,
@@ -16177,6 +16658,7 @@ def cmd_pin_item(args: argparse.Namespace) -> None:
         clear=bool(getattr(args, "clear", False)),
     )
     refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
+    attach_auto_backup_after_write(payload, graph, workspace, reason="pin_item")
     print(json.dumps(payload, indent=2))
 
 
@@ -16346,6 +16828,91 @@ def cmd_backup(args: argparse.Namespace) -> None:
         output = str(APP_SUPPORT_DIR_DEFAULT / "Backups" / f"autopsy-memory-{timestamp}.json")
     args.output = output
     cmd_export(args)
+
+
+def auto_backup_after_write_enabled() -> bool:
+    raw = str(os.environ.get("AUTOPSY_AUTO_BACKUP_AFTER_WRITE") or "").strip().lower()
+    return raw not in {"0", "false", "no", "off", "disabled"}
+
+
+def default_backup_output_path(*, timestamp: str | None = None) -> Path:
+    stamp = timestamp or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    base = APP_SUPPORT_DIR_DEFAULT / "Backups" / f"autopsy-memory-{stamp}.json"
+    if not base.exists():
+        return base
+    return base.with_name(base.stem + "-" + uuid.uuid4().hex[:8] + base.suffix)
+
+
+def semantic_backup_item_count(graph) -> int:
+    try:
+        return int(
+            scalar_query(
+                graph,
+                "MATCH (node:MemoryNode) WHERE node.kind IN $semantic_kinds RETURN count(node)",
+                params={"semantic_kinds": sorted(SEARCHABLE_KINDS)},
+            )
+            or 0
+        )
+    except Exception:
+        return 1
+
+
+def maybe_auto_backup_after_write(graph, workspace: dict[str, Any], *, reason: str) -> dict[str, Any]:
+    if not auto_backup_after_write_enabled():
+        return {
+            "enabled": False,
+            "status": "disabled",
+            "reason": "AUTOPSY_AUTO_BACKUP_AFTER_WRITE disables opportunistic backups",
+        }
+    latest = latest_backup_status()
+    item_count = semantic_backup_item_count(graph)
+    health = backup_freshness_status(latest, item_count=item_count)
+    if bool(health.get("ok")):
+        return {
+            "enabled": True,
+            "status": "skipped",
+            "reason": "latest_backup_fresh",
+            "latest": latest.get("latest"),
+            "backup_health": health,
+        }
+    output = default_backup_output_path()
+    try:
+        payload = export_memory_payload(
+            graph,
+            workspace=workspace,
+            include_operational=False,
+        )
+        write_json_atomic(output, payload)
+        summary = restore_input_summary_or_error(str(output), include_operational=False)
+        return {
+            "enabled": True,
+            "status": "created",
+            "reason": reason,
+            "written": str(output),
+            "bytes": output.stat().st_size,
+            "previous_latest": latest.get("latest"),
+            "previous_backup_health": health,
+            "validation": {
+                "valid": bool(summary.get("valid")),
+                "error": summary.get("error"),
+                "counts": summary.get("counts"),
+            },
+        }
+    except Exception as exc:
+        return {
+            "enabled": True,
+            "status": "error",
+            "reason": reason,
+            "output": str(output),
+            "error": str(exc),
+            "previous_latest": latest.get("latest"),
+            "previous_backup_health": health,
+        }
+
+
+def attach_auto_backup_after_write(payload: dict[str, Any], graph, workspace: dict[str, Any], *, reason: str) -> dict[str, Any]:
+    payload["auto_backup"] = maybe_auto_backup_after_write(graph, workspace, reason=reason)
+    return payload
 
 
 def chunked_values(values: list[str], size: int = 500) -> list[list[str]]:
@@ -16675,13 +17242,134 @@ def restore_memory_payload(
     return report
 
 
+def offline_restore_dry_run_payload(
+    *,
+    input_path: str,
+    payload: dict[str, Any],
+    include_operational: bool,
+    replace: bool,
+    runtime_error_payload: dict[str, Any] | None = None,
+    offline_requested: bool = False,
+) -> dict[str, Any]:
+    schema_version = payload.get("schema_version")
+    if schema_version != 1:
+        fail(f"unsupported restore schema_version: {schema_version!r}", 2)
+    items, skipped_items = normalized_restore_items(payload, include_operational=include_operational)
+    fact_edges = normalized_restore_fact_edges(payload)
+    structural_edges = normalized_restore_structural_edges(payload)
+    item_keys = {item["stable_key"] for item in items}
+    fact_edges_with_endpoint_not_in_input = [
+        edge for edge in fact_edges
+        if edge["from"] not in item_keys or edge["to"] not in item_keys
+    ]
+    structural_edges_with_endpoint_not_in_input = [
+        edge for edge in structural_edges
+        if edge["from"] not in item_keys or edge["to"] not in item_keys
+    ]
+    runtime_workflow = (
+        runtime_error_payload.get("workflow")
+        if isinstance(runtime_error_payload, dict) and isinstance(runtime_error_payload.get("workflow"), dict)
+        else {}
+    )
+    runtime_status = str(runtime_workflow.get("status") or "runtime_unavailable")
+    if offline_requested:
+        workflow_status = "dry_run_offline"
+    elif runtime_status == "rollback_detected":
+        workflow_status = "dry_run_rollback_detected"
+    else:
+        workflow_status = "dry_run_runtime_unavailable"
+    suggested_next_steps = list(runtime_workflow.get("suggested_next_steps") or [])
+    report: dict[str, Any] = {
+        "restored": False,
+        "dry_run": True,
+        "offline_validation": True,
+        "mode": "replace" if replace else "merge",
+        "replace_scope": "restored_keys" if replace else None,
+        "input": str(Path(input_path).expanduser()),
+        "schema_version": schema_version,
+        "source": {
+            "exported_at": payload.get("exported_at"),
+            "autopsy_version": payload.get("autopsy_version"),
+            "graph_name": payload.get("graph_name"),
+        },
+        "counts": {
+            "input_items": len(payload.get("items") or []),
+            "restorable_items": len(items),
+            "skipped_items": len(skipped_items),
+            "existing_items": None,
+            "new_items": None,
+            "input_relations": len(fact_edges),
+            "input_structural_edges": len(structural_edges),
+            "relations_with_endpoint_not_in_input": len(fact_edges_with_endpoint_not_in_input),
+            "structural_edges_with_endpoint_not_in_input": len(structural_edges_with_endpoint_not_in_input),
+            "would_create_items": None,
+            "would_update_items": None,
+            "would_upsert_relations": None,
+            "would_upsert_structural_edges": None,
+        },
+        "skipped_items": skipped_items[:50],
+        "warnings": [
+            "Restore input is valid, but graph-dependent dry-run counts are unavailable because Autopsy did not inspect the memory runtime." if offline_requested else "Restore input is valid, but graph-dependent dry-run counts are unavailable because Autopsy could not open the memory runtime.",
+            "Relations with endpoints not present in the backup may still restore if those endpoint memories already exist in the target graph.",
+        ],
+        "runtime": runtime_error_payload,
+        "workflow": {
+            "status": workflow_status,
+            "complete": bool(offline_requested),
+            "next_step": "done" if offline_requested else str(runtime_workflow.get("next_step") or "restore_runtime_then_rerun_dry_run"),
+            "message": "Restore input validated offline without writing. Runtime-dependent effects could not be computed.",
+            "suggested_next_steps": suggested_next_steps or [
+                "Rerun without --offline when you need graph-dependent restore counts." if offline_requested else "Restore memory runtime health, then rerun autopsy restore <backup.json> --dry-run.",
+            ],
+        },
+    }
+    if replace:
+        report["warnings"].append("Replace mode could not estimate matching existing keys during offline validation.")
+    return report
+
+
 def cmd_restore(args: argparse.Namespace) -> None:
+    if bool(getattr(args, "offline", False)) and not bool(getattr(args, "dry_run", False)):
+        fail("restore --offline requires --dry-run because offline mode validates files only and never writes to Falkor", 2)
     if bool(getattr(args, "replace", False)) and not bool(getattr(args, "dry_run", False)) and not bool(getattr(args, "yes", False)):
         fail("restore --replace is destructive for matching keys and requires --yes unless --dry-run is used", 2)
-    _tool, workspace, _config, graph = open_workspace_graph(args)
-    ensure_runtime_indexes(graph)
     input_path = str(getattr(args, "input", "") or "").strip()
     payload = load_restore_json(input_path)
+    if bool(getattr(args, "dry_run", False)):
+        summary = restore_input_summary_or_error(input_path, include_operational=bool(getattr(args, "include_operational", False)))
+        if not bool(summary.get("valid")):
+            fail(f"restore input is not a valid Autopsy backup: {summary.get('error') or 'unknown error'} ({summary.get('path')})", 2)
+    if bool(getattr(args, "offline", False)):
+        print(json.dumps(
+            offline_restore_dry_run_payload(
+                input_path=input_path,
+                payload=payload,
+                include_operational=bool(getattr(args, "include_operational", False)),
+                replace=bool(getattr(args, "replace", False)),
+                offline_requested=True,
+            ),
+            indent=2,
+        ))
+        return
+    try:
+        _tool, workspace, _config, graph = open_workspace_graph_checked(args)
+    except Exception as exc:
+        if bool(getattr(args, "dry_run", False)):
+            print(json.dumps(
+                offline_restore_dry_run_payload(
+                    input_path=input_path,
+                    payload=payload,
+                    include_operational=bool(getattr(args, "include_operational", False)),
+                    replace=bool(getattr(args, "replace", False)),
+                    runtime_error_payload=falkor_start_failure_payload(args, exc),
+                    offline_requested=False,
+                ),
+                indent=2,
+            ))
+            return
+        print(json.dumps(falkor_start_failure_payload(args, exc), indent=2))
+        raise SystemExit(1)
+    ensure_runtime_indexes(graph)
     report = restore_memory_payload(
         graph,
         workspace=workspace,
@@ -16691,25 +17379,1035 @@ def cmd_restore(args: argparse.Namespace) -> None:
         replace=bool(getattr(args, "replace", False)),
         include_operational=bool(getattr(args, "include_operational", False)),
     )
+    if not bool(getattr(args, "dry_run", False)) and str((report.get("workflow") or {}).get("status") or "") == "ok":
+        attach_auto_backup_after_write(report, graph, workspace, reason="restore")
     print(json.dumps(report, indent=2))
 
 
-def latest_backup_status() -> dict[str, Any]:
+def embedded_snapshot_repair_graph_name(args: argparse.Namespace) -> tuple[str, dict[str, Any]]:
+    _tool, workspace, _config = load_workspace_and_config(args)
+    return workspace_graph_name(str(getattr(args, "graph_name", "") or "autopsy_memory"), workspace), workspace
+
+
+def embedded_snapshot_repair_bundle_path(*, timestamp: str | None = None) -> Path:
+    stamp = timestamp or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    base = APP_SUPPORT_DIR_DEFAULT / "Backups" / f"embedded-rollback-{stamp}"
+    if not base.exists():
+        return base
+    return base.with_name(base.name + "-" + uuid.uuid4().hex[:8])
+
+
+def embedded_snapshot_salvage_path(*, timestamp: str | None = None) -> Path:
+    stamp = timestamp or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    base = APP_SUPPORT_DIR_DEFAULT / "Backups" / f"stale-embedded-snapshot-{stamp}.json"
+    if not base.exists():
+        return base
+    return base.with_name(base.stem + "-" + uuid.uuid4().hex[:8] + base.suffix)
+
+
+def embedded_snapshot_file_records(lite_path: str | Path, *, bundle_dir: Path | None = None) -> list[dict[str, Any]]:
+    expanded = Path(lite_path).expanduser()
+    candidates = [
+        ("database", expanded),
+        ("settings", Path(str(expanded) + ".settings")),
+        ("guard_sidecar", memory_database_guard_sidecar_path(expanded)),
+    ]
+    records: list[dict[str, Any]] = []
+    for role, path in candidates:
+        exists = path.exists()
+        record: dict[str, Any] = {
+            "role": role,
+            "path": str(path),
+            "exists": exists,
+        }
+        if exists:
+            try:
+                record["bytes"] = path.stat().st_size
+            except OSError:
+                record["bytes"] = None
+        if bundle_dir is not None:
+            record["target"] = str(bundle_dir / path.name)
+        records.append(record)
+    return records
+
+
+def latest_memory_guard_rollback_event(*, lite_path: str, graph_name: str) -> dict[str, Any] | None:
+    for event in reversed(diagnostic_log_recent_events(memory_database_guard_diagnostic_log_path(), limit=200)):
+        if event.get("event") != "rollback_detected":
+            continue
+        if str(event.get("lite_path") or "") != str(Path(lite_path).expanduser()):
+            continue
+        if graph_name and str(event.get("graph_name") or "") != graph_name:
+            continue
+        return event
+    return None
+
+
+def restore_input_summary_or_error(path_value: str, *, include_operational: bool) -> dict[str, Any]:
+    path = Path(path_value).expanduser()
+    base: dict[str, Any] = {
+        "path": str(path),
+        "valid": False,
+        "include_operational": bool(include_operational),
+    }
+    if not path.exists():
+        return {**base, "error": "not_found"}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return {**base, "error": f"invalid_json: {exc}"}
+    if not isinstance(payload, dict):
+        return {**base, "error": "input_must_be_json_object"}
+    schema_version = payload.get("schema_version")
+    if schema_version != 1:
+        return {**base, "schema_version": schema_version, "error": f"unsupported_schema_version: {schema_version!r}"}
+    if not isinstance(payload.get("items"), list):
+        return {**base, "schema_version": schema_version, "error": "items_must_be_array"}
+    if "relations" in payload and not isinstance(payload.get("relations"), list):
+        return {**base, "schema_version": schema_version, "error": "relations_must_be_array"}
+    structural_edges = payload.get("structural_edges") or payload.get("structuralEdges") or []
+    if not isinstance(structural_edges, list):
+        return {**base, "schema_version": schema_version, "error": "structural_edges_must_be_array"}
+    try:
+        items, skipped_items = normalized_restore_items(payload, include_operational=include_operational)
+        fact_edges = normalized_restore_fact_edges(payload)
+        normalized_structural_edges = normalized_restore_structural_edges(payload)
+    except SystemExit as exc:
+        return {**base, "schema_version": schema_version, "error": f"restore_validation_failed: {exc.code}"}
+    return {
+        **base,
+        "valid": True,
+        "schema_version": schema_version,
+        "exported_at": payload.get("exported_at"),
+        "autopsy_version": payload.get("autopsy_version"),
+        "graph_name": payload.get("graph_name"),
+        "counts": {
+            "input_items": len(payload.get("items") or []),
+            "restorable_items": len(items),
+            "skipped_items": len(skipped_items),
+            "input_relations": len(fact_edges),
+            "input_structural_edges": len(normalized_structural_edges),
+        },
+        "skipped_items": skipped_items[:20],
+    }
+
+
+def restore_input_summary(path_value: str, *, include_operational: bool) -> dict[str, Any]:
+    summary = restore_input_summary_or_error(path_value, include_operational=include_operational)
+    if not bool(summary.get("valid")):
+        fail(f"restore input is not a valid Autopsy backup: {summary.get('error') or 'unknown error'} ({summary.get('path')})", 2)
+    return summary
+
+
+def restore_input_summary_with_salvage(path_value: str, payload: dict[str, Any], *, include_operational: bool) -> dict[str, Any]:
+    summary = restore_input_summary(path_value, include_operational=include_operational)
+    salvage = payload.get("salvage")
+    if isinstance(salvage, dict):
+        guard_state = salvage.get("guard_state") if isinstance(salvage.get("guard_state"), dict) else {}
+        summary["salvage"] = {
+            "policy": salvage.get("policy"),
+            "created_at": salvage.get("created_at"),
+            "lite_path": salvage.get("lite_path"),
+            "graph_name": salvage.get("graph_name"),
+            "guard_state": {
+                key: guard_state.get(key)
+                for key in (
+                    "ok",
+                    "graph_name",
+                    "graph_generation",
+                    "sidecar_generation",
+                    "sidecar_generation_source",
+                    "sidecar_updated_at",
+                )
+                if key in guard_state
+            },
+        }
+    return summary
+
+
+def restore_input_item_fingerprint(item: dict[str, Any]) -> str:
+    comparable = {
+        "kind": item.get("kind"),
+        "title": item.get("title"),
+        "summary": item.get("summary"),
+        "content": item.get("content"),
+        "source_kind": item.get("source_kind"),
+        "confidence": item.get("confidence"),
+        "timestamp": item.get("timestamp"),
+        "expired_at": item.get("expired_at"),
+        "expiration_reason": item.get("expiration_reason"),
+        "pinned_at": item.get("pinned_at"),
+        "pin_label": item.get("pin_label"),
+        "pin_reason": item.get("pin_reason"),
+        "tags": sorted(str(tag) for tag in list(item.get("tags") or [])),
+        "metadata": item.get("metadata") or {},
+    }
+    encoded = json.dumps(comparable, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def restore_fact_edge_signature(edge: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        str(edge.get("from") or ""),
+        str(edge.get("to") or ""),
+        str(edge.get("relation") or ""),
+        str(edge.get("predicate") or ""),
+        str(edge.get("fact_text") or ""),
+        str(edge.get("valid_at") or ""),
+        str(edge.get("invalid_at") or ""),
+        str(edge.get("expired_at") or ""),
+        edge.get("fact_rating"),
+    )
+
+
+def restore_structural_edge_signature(edge: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        str(edge.get("from") or ""),
+        str(edge.get("to") or ""),
+        str(edge.get("relation") or ""),
+    )
+
+
+def restore_fact_edge_sample(signatures: set[tuple[Any, ...]], *, limit: int) -> list[dict[str, Any]]:
+    samples = []
+    for signature in sorted(signatures)[: max(0, int(limit or 0))]:
+        samples.append({
+            "from": signature[0],
+            "to": signature[1],
+            "relation": signature[2],
+            "predicate": signature[3],
+            "fact_text": summary_snippet(str(signature[4] or ""), limit=160),
+            "valid_at": signature[5],
+            "invalid_at": signature[6],
+            "expired_at": signature[7],
+            "fact_rating": signature[8],
+        })
+    return samples
+
+
+def restore_structural_edge_sample(signatures: set[tuple[Any, ...]], *, limit: int) -> list[dict[str, str]]:
+    return [
+        {"from": signature[0], "to": signature[1], "relation": signature[2]}
+        for signature in sorted(signatures)[: max(0, int(limit or 0))]
+    ]
+
+
+def restore_input_comparison_index(payload: dict[str, Any], *, include_operational: bool) -> dict[str, Any]:
+    items, skipped_items = normalized_restore_items(payload, include_operational=include_operational)
+    fact_edges = normalized_restore_fact_edges(payload)
+    structural_edges = normalized_restore_structural_edges(payload)
+    items_by_key = {item["stable_key"]: item for item in items}
+    return {
+        "items": items,
+        "items_by_key": items_by_key,
+        "item_fingerprints": {
+            key: restore_input_item_fingerprint(item)
+            for key, item in items_by_key.items()
+        },
+        "skipped_items": skipped_items,
+        "fact_edges": fact_edges,
+        "fact_edge_signatures": {restore_fact_edge_signature(edge) for edge in fact_edges},
+        "structural_edges": structural_edges,
+        "structural_edge_signatures": {restore_structural_edge_signature(edge) for edge in structural_edges},
+    }
+
+
+def restore_input_changed_item_sample(
+    changed_keys: set[str],
+    *,
+    base_items: dict[str, dict[str, Any]],
+    candidate_items: dict[str, dict[str, Any]],
+    limit: int,
+) -> list[dict[str, Any]]:
+    samples = []
+    for key in sorted(changed_keys)[: max(0, int(limit or 0))]:
+        base_item = base_items.get(key) or {}
+        candidate_item = candidate_items.get(key) or {}
+        samples.append({
+            "stable_key": key,
+            "base": {
+                "kind": base_item.get("kind"),
+                "title": base_item.get("title"),
+                "timestamp": base_item.get("timestamp"),
+            },
+            "candidate": {
+                "kind": candidate_item.get("kind"),
+                "title": candidate_item.get("title"),
+                "timestamp": candidate_item.get("timestamp"),
+            },
+        })
+    return samples
+
+
+def restore_input_comparison_guidance(
+    *,
+    only_in_base_count: int,
+    only_in_candidate_count: int,
+    changed_count: int,
+    candidate_is_salvage: bool,
+) -> dict[str, Any]:
+    if only_in_base_count == 0 and only_in_candidate_count == 0 and changed_count == 0:
+        return {
+            "status": "equivalent_items",
+            "message": "Both inputs contain the same restorable item keys and item payloads.",
+            "suggested_next_steps": ["Compare relation differences if present, then dry-run the chosen restore input."],
+        }
+    steps = ["Inspect the difference samples before choosing a recovery input."]
+    if only_in_candidate_count or changed_count:
+        steps.append("If the candidate contains memory not present in the base, preserve it as a separate reviewed merge input instead of discarding it.")
+    if only_in_base_count:
+        steps.append("If the base contains memory missing from the candidate, restore or merge the base first unless those keys are intentionally obsolete.")
+    if candidate_is_salvage:
+        steps.append("Because the candidate is stale-snapshot salvage, treat its salvage-only or changed keys as incident recovery evidence before merging.")
+    return {
+        "status": "differences_found",
+        "message": f"Inputs differ: {only_in_candidate_count} item key(s) only in candidate, {only_in_base_count} only in base, {changed_count} shared key(s) changed.",
+        "suggested_next_steps": steps,
+    }
+
+
+def compare_restore_input_payloads(
+    *,
+    base_path: str,
+    base_payload: dict[str, Any],
+    candidate_path: str,
+    candidate_payload: dict[str, Any],
+    include_operational: bool,
+    sample_limit: int,
+) -> dict[str, Any]:
+    limit = max(0, int(sample_limit or 0))
+    base_summary = restore_input_summary_with_salvage(base_path, base_payload, include_operational=include_operational)
+    candidate_summary = restore_input_summary_with_salvage(candidate_path, candidate_payload, include_operational=include_operational)
+    base_index = restore_input_comparison_index(base_payload, include_operational=include_operational)
+    candidate_index = restore_input_comparison_index(candidate_payload, include_operational=include_operational)
+    base_keys = set(base_index["items_by_key"])
+    candidate_keys = set(candidate_index["items_by_key"])
+    shared_keys = base_keys & candidate_keys
+    changed_keys = {
+        key for key in shared_keys
+        if base_index["item_fingerprints"].get(key) != candidate_index["item_fingerprints"].get(key)
+    }
+    only_in_base = base_keys - candidate_keys
+    only_in_candidate = candidate_keys - base_keys
+    base_fact_edges = set(base_index["fact_edge_signatures"])
+    candidate_fact_edges = set(candidate_index["fact_edge_signatures"])
+    base_structural_edges = set(base_index["structural_edge_signatures"])
+    candidate_structural_edges = set(candidate_index["structural_edge_signatures"])
+    candidate_is_salvage = isinstance(candidate_summary.get("salvage"), dict)
+    payload = {
+        "command": "compare-backups",
+        "include_operational": bool(include_operational),
+        "sample_limit": limit,
+        "base": base_summary,
+        "candidate": candidate_summary,
+        "items": {
+            "base_count": len(base_keys),
+            "candidate_count": len(candidate_keys),
+            "shared_count": len(shared_keys),
+            "same_count": len(shared_keys - changed_keys),
+            "changed_count": len(changed_keys),
+            "only_in_base_count": len(only_in_base),
+            "only_in_candidate_count": len(only_in_candidate),
+            "only_in_base": sorted(only_in_base)[:limit],
+            "only_in_candidate": sorted(only_in_candidate)[:limit],
+            "changed": restore_input_changed_item_sample(
+                changed_keys,
+                base_items=base_index["items_by_key"],
+                candidate_items=candidate_index["items_by_key"],
+                limit=limit,
+            ),
+        },
+        "relations": {
+            "fact_edges": {
+                "base_count": len(base_fact_edges),
+                "candidate_count": len(candidate_fact_edges),
+                "shared_count": len(base_fact_edges & candidate_fact_edges),
+                "only_in_base_count": len(base_fact_edges - candidate_fact_edges),
+                "only_in_candidate_count": len(candidate_fact_edges - base_fact_edges),
+                "only_in_base": restore_fact_edge_sample(base_fact_edges - candidate_fact_edges, limit=limit),
+                "only_in_candidate": restore_fact_edge_sample(candidate_fact_edges - base_fact_edges, limit=limit),
+            },
+            "structural_edges": {
+                "base_count": len(base_structural_edges),
+                "candidate_count": len(candidate_structural_edges),
+                "shared_count": len(base_structural_edges & candidate_structural_edges),
+                "only_in_base_count": len(base_structural_edges - candidate_structural_edges),
+                "only_in_candidate_count": len(candidate_structural_edges - base_structural_edges),
+                "only_in_base": restore_structural_edge_sample(base_structural_edges - candidate_structural_edges, limit=limit),
+                "only_in_candidate": restore_structural_edge_sample(candidate_structural_edges - base_structural_edges, limit=limit),
+            },
+        },
+    }
+    payload["recovery_guidance"] = restore_input_comparison_guidance(
+        only_in_base_count=len(only_in_base),
+        only_in_candidate_count=len(only_in_candidate),
+        changed_count=len(changed_keys),
+        candidate_is_salvage=candidate_is_salvage,
+    )
+    relation_diff_count = (
+        len(base_fact_edges - candidate_fact_edges)
+        + len(candidate_fact_edges - base_fact_edges)
+        + len(base_structural_edges - candidate_structural_edges)
+        + len(candidate_structural_edges - base_structural_edges)
+    )
+    item_diff_count = len(only_in_base) + len(only_in_candidate) + len(changed_keys)
+    payload["workflow"] = {
+        "status": "differences_found" if item_diff_count or relation_diff_count else "equivalent",
+        "complete": True,
+        "next_step": "inspect_difference_samples" if item_diff_count or relation_diff_count else "dry_run_restore",
+        "message": (
+            f"Compared restore inputs: {item_diff_count} item difference(s), {relation_diff_count} relation difference(s)."
+            if item_diff_count or relation_diff_count
+            else "Compared restore inputs with no item or relation differences."
+        ),
+    }
+    return payload
+
+
+def cmd_compare_backups(args: argparse.Namespace) -> None:
+    base_path = str(getattr(args, "base", "") or "").strip()
+    candidate_path = str(getattr(args, "candidate", "") or "").strip()
+    base_payload = load_restore_json(base_path)
+    candidate_payload = load_restore_json(candidate_path)
+    payload = compare_restore_input_payloads(
+        base_path=base_path,
+        base_payload=base_payload,
+        candidate_path=candidate_path,
+        candidate_payload=candidate_payload,
+        include_operational=bool(getattr(args, "include_operational", False)),
+        sample_limit=int(getattr(args, "sample_limit", 20) or 0),
+    )
+    print(json.dumps(payload, indent=2))
+
+
+def backup_recovery_risk(record: dict[str, Any], *, reference_at: str) -> dict[str, Any]:
+    reference_dt = parse_iso_datetime(reference_at)
+    backup_at = str(record.get("exported_at") or record.get("modified_at") or "").strip()
+    backup_dt = parse_iso_datetime(backup_at)
+    if reference_dt is None or backup_dt is None:
+        return {
+            "status": "unknown",
+            "reference_at": reference_at,
+            "backup_at": backup_at,
+            "message": "Backup staleness could not be computed from available timestamps.",
+        }
+    staleness_seconds = int((reference_dt - backup_dt).total_seconds())
+    if staleness_seconds <= 0:
+        return {
+            "status": "fresh_or_newer",
+            "reference_at": reference_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "backup_at": backup_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "stale": False,
+            "staleness_seconds": 0,
+            "staleness_hours": 0.0,
+            "staleness_days": 0.0,
+            "message": "Backup timestamp is at or newer than the guard reference timestamp.",
+        }
+    staleness_hours = round(staleness_seconds / 3600.0, 2)
+    staleness_days = round(staleness_seconds / 86400.0, 2)
+    level = "high" if staleness_seconds > 7 * 86400 else "medium" if staleness_seconds > 86400 else "low"
+    return {
+        "status": "stale",
+        "level": level,
+        "reference_at": reference_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "backup_at": backup_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "stale": True,
+        "staleness_seconds": staleness_seconds,
+        "staleness_hours": staleness_hours,
+        "staleness_days": staleness_days,
+        "message": f"Backup is {staleness_days} day(s) older than the guard reference timestamp.",
+    }
+
+
+def attach_backup_recovery_risk(record: dict[str, Any], *, reference_at: str) -> dict[str, Any]:
+    if not bool(record.get("valid")):
+        return record
+    annotated = dict(record)
+    annotated["recovery_risk"] = backup_recovery_risk(annotated, reference_at=reference_at)
+    return annotated
+
+
+def backup_candidate_by_path(backup_candidates: dict[str, Any], path_value: str) -> dict[str, Any] | None:
+    target = str(Path(path_value).expanduser())
+    for candidate in list(backup_candidates.get("candidates") or []):
+        if str(candidate.get("path") or "") == target:
+            return candidate
+    return None
+
+
+def embedded_snapshot_backup_candidates(*, limit: int, include_operational: bool, recovery_reference_at: str = "") -> dict[str, Any]:
+    backup_dir = APP_SUPPORT_DIR_DEFAULT / "Backups"
+    max_candidates = max(0, int(limit or 0))
+    backups = sorted(
+        backup_dir.glob("autopsy-memory-*.json") if backup_dir.exists() else [],
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    candidates: list[dict[str, Any]] = []
+    for backup_path in backups[:max_candidates]:
+        record = restore_input_summary_or_error(str(backup_path), include_operational=include_operational)
+        try:
+            stat = backup_path.stat()
+            age_seconds = max(0, int(time.time() - stat.st_mtime))
+            record.update({
+                "bytes": stat.st_size,
+                "modified_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "age_seconds": age_seconds,
+                "age_hours": round(age_seconds / 3600.0, 2),
+            })
+        except OSError as exc:
+            record["stat_error"] = str(exc)
+        if recovery_reference_at:
+            record = attach_backup_recovery_risk(record, reference_at=recovery_reference_at)
+        candidates.append(record)
+    return {
+        "directory": str(backup_dir),
+        "count": len(backups),
+        "limit": max_candidates,
+        "recovery_reference_at": recovery_reference_at,
+        "candidates": candidates,
+    }
+
+
+def embedded_snapshot_selected_restore_backup(args: argparse.Namespace, backup_candidates: dict[str, Any]) -> tuple[str, str]:
+    explicit = str(getattr(args, "restore_backup", "") or "").strip()
+    use_latest = bool(getattr(args, "restore_latest_backup", False))
+    if explicit and use_latest:
+        fail("repair-embedded-snapshot accepts either --restore-backup or --restore-latest-backup, not both", 2)
+    if explicit:
+        return explicit, "explicit"
+    if not use_latest:
+        return "", "none"
+    for candidate in list(backup_candidates.get("candidates") or []):
+        if bool(candidate.get("valid")) and str(candidate.get("path") or ""):
+            return str(candidate["path"]), "latest_valid_backup"
+    fail("repair-embedded-snapshot --restore-latest-backup found no valid default Autopsy backups", 2)
+    return "", "none"
+
+
+def salvage_embedded_snapshot_export(
+    *,
+    lite_path: str,
+    graph_name: str,
+    workspace: dict[str, Any],
+    output_path: str,
+    include_operational: bool,
+    limit: int,
+) -> dict[str, Any]:
+    resolved_path = str(Path(lite_path).expanduser())
+    output = Path(output_path).expanduser()
+    FalkorDBLite = load_falkordblite()
+    configure_falkordblite_runtime()
+    log_path = falkordb_lite_log_path(resolved_path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    client = None
+    result: dict[str, Any] | None = None
+    closed_with_nosave = False
+    close_error = ""
+    try:
+        client = FalkorDBLite(resolved_path, serverconfig={"logfile": str(log_path)})
+        graph = client.select_graph(graph_name)
+        guard_state = memory_database_guard_state(graph, resolved_path, graph_name=graph_name)
+        export_payload = export_memory_payload(
+            graph,
+            workspace=workspace,
+            include_operational=include_operational,
+            limit=limit,
+        )
+        export_payload["salvage"] = {
+            "policy": "stale_embedded_snapshot_salvage_v1",
+            "created_at": utc_now_iso(),
+            "lite_path": resolved_path,
+            "graph_name": graph_name,
+            "guard_state": guard_state,
+            "safety": {
+                "opened_guarded": False,
+                "mutations_allowed": False,
+                "close_mode": "nosave",
+                "message": "This export was read from an embedded snapshot that may be stale relative to the guard sidecar. Inspect before restoring.",
+            },
+        }
+        output.parent.mkdir(parents=True, exist_ok=True)
+        write_json_atomic(output, export_payload)
+        result = {
+            "written": str(output),
+            "bytes": output.stat().st_size,
+            "counts": export_payload.get("counts", {}),
+            "guard_state": guard_state,
+        }
+    finally:
+        if client is not None:
+            try:
+                close_falkordb_lite_client(client, save=False)
+                closed_with_nosave = True
+            except Exception as exc:
+                close_error = str(exc)
+                disarm_falkordb_lite_cleanup(client)
+        if close_error:
+            record_memory_database_guard_diagnostic(
+                "stale_snapshot_salvage_close_error",
+                {
+                    "lite_path": resolved_path,
+                    "graph_name": graph_name,
+                    "output": str(output),
+                    "error": close_error,
+                    "closed_with_nosave": closed_with_nosave,
+                },
+            )
+    if result is None:
+        fail("stale embedded snapshot salvage did not produce an export", 1)
+    result["closed_with_nosave"] = closed_with_nosave
+    if close_error:
+        result["close_error"] = close_error
+    return result
+
+
+def embedded_snapshot_repair_cleanup_payload(*, enabled: bool) -> dict[str, Any]:
+    if not enabled:
+        return {"enabled": False, "skipped": True, "reason": "skip_cleanup_workers"}
+    return {
+        "enabled": True,
+        "worker": worker_lifecycle_check(cleanup=True),
+        "redislite": redislite_lifecycle_check(cleanup=True),
+    }
+
+
+def build_embedded_snapshot_repair_payload(args: argparse.Namespace) -> dict[str, Any]:
+    lite_path = resolved_lite_path(args)
+    if not lite_path:
+        fail("repair-embedded-snapshot requires the embedded FalkorDBLite backend; remove custom host/port overrides or pass --lite-path", 2)
+    resolved_path = str(Path(lite_path).expanduser())
+    graph_name, workspace = embedded_snapshot_repair_graph_name(args)
+    sidecar = read_memory_database_guard_sidecar(resolved_path)
+    sidecar_record, sidecar_source = memory_database_guard_sidecar_record_for_graph(sidecar, graph_name=graph_name)
+    sidecar_generation = memory_database_guard_generation(sidecar_record.get("generation"))
+    sidecar_updated_at = str(sidecar_record.get("updated_at") or sidecar.get("updated_at") or "")
+    bundle_dir = embedded_snapshot_repair_bundle_path()
+    file_records = embedded_snapshot_file_records(resolved_path, bundle_dir=bundle_dir)
+    database_exists = any(record.get("role") == "database" and bool(record.get("exists")) for record in file_records)
+    explicit_salvage_output = str(getattr(args, "salvage_output", "") or "").strip()
+    skip_salvage = bool(getattr(args, "skip_salvage", False))
+    if explicit_salvage_output and skip_salvage:
+        fail("repair-embedded-snapshot accepts either --salvage-output or --skip-salvage, not both", 2)
+    suggested_salvage_output = str(embedded_snapshot_salvage_path())
+    latest_rollback_event = latest_memory_guard_rollback_event(lite_path=resolved_path, graph_name=graph_name)
+    recovery_reference_at = sidecar_updated_at or str((latest_rollback_event or {}).get("timestamp") or "")
+    backup_candidates = embedded_snapshot_backup_candidates(
+        limit=int(getattr(args, "backup_limit", 5) or 0),
+        include_operational=bool(getattr(args, "include_operational", False)),
+        recovery_reference_at=recovery_reference_at,
+    )
+    restore_backup, restore_backup_source = embedded_snapshot_selected_restore_backup(args, backup_candidates)
+    restore_summary = restore_input_summary(restore_backup, include_operational=bool(getattr(args, "include_operational", False))) if restore_backup else None
+    if restore_summary is not None:
+        selected_candidate = backup_candidate_by_path(backup_candidates, restore_backup)
+        if isinstance(selected_candidate, dict) and isinstance(selected_candidate.get("recovery_risk"), dict):
+            restore_summary["recovery_risk"] = selected_candidate["recovery_risk"]
+        elif recovery_reference_at:
+            restore_summary["recovery_risk"] = backup_recovery_risk(restore_summary, reference_at=recovery_reference_at)
+    explicit_repair = bool(getattr(args, "yes", False)) and bool(getattr(args, "accept_data_loss", False))
+    dry_run = bool(getattr(args, "dry_run", False)) or not explicit_repair
+    any_files = any(bool(record.get("exists")) for record in file_records)
+    automatic_salvage_output = ""
+    if not dry_run and database_exists and not explicit_salvage_output and not skip_salvage:
+        automatic_salvage_output = suggested_salvage_output
+    salvage_output = explicit_salvage_output or automatic_salvage_output
+    salvage_source = "explicit" if explicit_salvage_output else "automatic" if automatic_salvage_output else "skipped" if skip_salvage else "none"
+    payload: dict[str, Any] = {
+        "ok": True,
+        "command": "repair-embedded-snapshot",
+        "mode": "embedded",
+        "dry_run": dry_run,
+        "requires_confirmation": not explicit_repair,
+        "lite_path": resolved_path,
+        "workspace": workspace_payload(workspace),
+        "graph_name": graph_name,
+        "guard": {
+            "policy": MEMORY_DATABASE_GUARD_POLICY,
+            "sidecar_path": str(memory_database_guard_sidecar_path(resolved_path)),
+            "sidecar_exists": bool(sidecar),
+            "sidecar_generation": sidecar_generation,
+            "sidecar_generation_source": sidecar_source,
+            "sidecar_database_generation": memory_database_guard_generation(sidecar.get("generation")),
+            "sidecar_updated_at": sidecar_updated_at,
+        },
+        "latest_rollback_event": latest_rollback_event,
+        "recovery_reference_at": recovery_reference_at,
+        "bundle": {
+            "path": str(bundle_dir),
+            "created": False,
+            "manifest": str(bundle_dir / "manifest.json"),
+        },
+        "files": file_records,
+        "salvage": {
+            "available": database_exists,
+            "policy": "stale_embedded_snapshot_salvage_v1",
+            "source": salvage_source,
+            "output": str(Path(salvage_output).expanduser()) if salvage_output else None,
+            "requested_output": str(Path(explicit_salvage_output).expanduser()) if explicit_salvage_output else None,
+            "suggested_output": suggested_salvage_output,
+            "limit": int(getattr(args, "salvage_limit", 0) or 0),
+            "automatic_on_confirmed_repair": bool(database_exists and not skip_salvage),
+            "skipped": bool(skip_salvage),
+            "safety": {
+                "opened_guarded": False,
+                "mutations_allowed": False,
+                "close_mode": "nosave",
+                "message": "Confirmed repair writes this stale-snapshot salvage before quarantine unless --skip-salvage is supplied. Use --salvage-output during dry-run to export immediately without lowering the guard or saving the loaded RDB.",
+            },
+        },
+        "backup_candidates": backup_candidates,
+        "restore_backup_source": restore_backup_source,
+        "restore_backup": restore_summary,
+        "workflow": {
+            "status": "dry_run" if dry_run else "ready",
+            "complete": False,
+            "next_step": "rerun_with_yes_accept_data_loss_and_optional_restore" if dry_run else "quarantine_stale_snapshot",
+            "message": (
+                "Repair plan generated without moving files. Review backup_candidates, then re-run with --yes --accept-data-loss and optionally --restore-backup or --restore-latest-backup."
+                if dry_run
+                else "Repair confirmed; stale embedded files will be moved into a timestamped backup bundle before any restore."
+            ),
+        },
+    }
+    if salvage_output:
+        if not database_exists:
+            fail("repair-embedded-snapshot --salvage-output requires an embedded database file to exist", 2)
+        payload["salvage"]["export"] = salvage_embedded_snapshot_export(
+            lite_path=resolved_path,
+            graph_name=graph_name,
+            workspace=workspace,
+            output_path=salvage_output,
+            include_operational=bool(getattr(args, "include_operational", False)),
+            limit=int(getattr(args, "salvage_limit", 0) or 0),
+        )
+    if not any_files:
+        payload["workflow"] = {
+            "status": "nothing_to_repair",
+            "complete": True,
+            "next_step": "done",
+            "message": "No embedded database, settings, or guard sidecar files exist at this lite path.",
+        }
+        return payload
+    if dry_run:
+        return payload
+
+    cleanup = embedded_snapshot_repair_cleanup_payload(enabled=not bool(getattr(args, "skip_cleanup_workers", False)))
+    moved_files: list[dict[str, Any]] = []
+    manifest: dict[str, Any] = {
+        "created_at": utc_now_iso(),
+        "policy": "embedded_snapshot_rollback_repair_v1",
+        "lite_path": resolved_path,
+        "graph_name": graph_name,
+        "workspace": workspace_payload(workspace),
+        "guard": payload["guard"],
+        "latest_rollback_event": payload["latest_rollback_event"],
+        "backup_candidates": backup_candidates,
+        "restore_backup_source": restore_backup_source,
+        "restore_backup": restore_summary,
+        "salvage": payload["salvage"],
+        "cleanup": cleanup,
+        "moved_files": moved_files,
+    }
+    with memory_database_guard_lock(resolved_path):
+        bundle_dir.mkdir(parents=True, exist_ok=False)
+        for record in embedded_snapshot_file_records(resolved_path, bundle_dir=bundle_dir):
+            if not bool(record.get("exists")):
+                moved_files.append(record)
+                continue
+            source = Path(str(record["path"]))
+            target = Path(str(record["target"]))
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(source), str(target))
+            moved = dict(record)
+            moved["moved"] = True
+            moved["target"] = str(target)
+            moved_files.append(moved)
+        write_json_atomic(bundle_dir / "manifest.json", manifest)
+    payload["bundle"]["created"] = True
+    payload["files"] = moved_files
+    payload["cleanup"] = cleanup
+    payload["workflow"] = {
+        "status": "quarantined",
+        "complete": not bool(restore_backup),
+        "next_step": "restore_backup" if restore_backup else "run_health_or_restore_backup",
+        "message": "Stale embedded snapshot files were moved into a repair bundle. The original guard was not lowered in place.",
+    }
+    if restore_backup:
+        _tool, restore_workspace, _config, graph = _open_workspace_graph_once(args)
+        ensure_runtime_indexes(graph)
+        restore_payload = load_restore_json(restore_backup)
+        restore_report = restore_memory_payload(
+            graph,
+            workspace=restore_workspace,
+            input_path=restore_backup,
+            payload=restore_payload,
+            dry_run=False,
+            replace=False,
+            include_operational=bool(getattr(args, "include_operational", False)),
+        )
+        payload["restore"] = restore_report
+        payload["workflow"] = {
+            "status": "restored" if restore_report.get("workflow", {}).get("status") == "ok" else "restore_attempted",
+            "complete": bool(restore_report.get("workflow", {}).get("status") == "ok"),
+            "next_step": "run_health_and_benchmark",
+            "message": "Stale embedded snapshot files were quarantined and the selected backup was restored into a fresh embedded graph.",
+        }
+    return payload
+
+
+def cmd_repair_embedded_snapshot(args: argparse.Namespace) -> None:
+    payload = build_embedded_snapshot_repair_payload(args)
+    print(json.dumps(payload, indent=2))
+
+
+def latest_backup_status(*, recovery_reference_at: str = "") -> dict[str, Any]:
     backup_dir = APP_SUPPORT_DIR_DEFAULT / "Backups"
     if not backup_dir.exists():
-        return {"directory": str(backup_dir), "latest": None, "count": 0}
+        return {"directory": str(backup_dir), "latest": None, "count": 0, "valid": False}
     backups = sorted(backup_dir.glob("autopsy-memory-*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
     if not backups:
-        return {"directory": str(backup_dir), "latest": None, "count": 0}
+        return {"directory": str(backup_dir), "latest": None, "count": 0, "valid": False}
     latest = backups[0]
     age_seconds = max(0, int(time.time() - latest.stat().st_mtime))
-    return {
+    payload = {
         "directory": str(backup_dir),
         "latest": str(latest),
         "count": len(backups),
         "age_seconds": age_seconds,
         "age_hours": round(age_seconds / 3600.0, 2),
         "bytes": latest.stat().st_size,
+    }
+    summary = restore_input_summary_or_error(str(latest), include_operational=False)
+    payload.update({
+        "valid": bool(summary.get("valid")),
+        "schema_version": summary.get("schema_version"),
+        "exported_at": summary.get("exported_at"),
+        "autopsy_version": summary.get("autopsy_version"),
+        "graph_name": summary.get("graph_name"),
+        "counts": summary.get("counts"),
+        "validation_error": summary.get("error"),
+    })
+    if recovery_reference_at and bool(summary.get("valid")):
+        payload["recovery_risk"] = backup_recovery_risk(summary, reference_at=recovery_reference_at)
+    return payload
+
+
+def backup_freshness_status(
+    backup: dict[str, Any],
+    *,
+    item_count: int,
+    fresh_max_age_seconds: int = BACKUP_FRESH_MAX_AGE_SECONDS,
+    critical_max_age_seconds: int = BACKUP_CRITICAL_MAX_AGE_SECONDS,
+) -> dict[str, Any]:
+    count = int(backup.get("count") or 0)
+    latest = str(backup.get("latest") or "")
+    item_total = max(0, int(item_count or 0))
+    thresholds = {
+        "fresh_max_age_seconds": int(fresh_max_age_seconds),
+        "critical_max_age_seconds": int(critical_max_age_seconds),
+    }
+    if count <= 0 or not latest:
+        if item_total <= 0:
+            return {
+                "ok": True,
+                "status": "not_needed_empty_graph",
+                "severity": "info",
+                "thresholds": thresholds,
+                "message": "No backup exists yet, but the graph has no restorable memory items.",
+            }
+        return {
+            "ok": False,
+            "status": "missing",
+            "severity": "critical",
+            "thresholds": thresholds,
+            "message": "No default backup exists for a non-empty memory graph.",
+            "suggested_next_step": "Run autopsy backup after memory health is restored.",
+        }
+    if not bool(backup.get("valid")):
+        return {
+            "ok": False,
+            "status": "invalid",
+            "severity": "critical",
+            "thresholds": thresholds,
+            "latest": latest,
+            "validation_error": backup.get("validation_error"),
+            "message": "The newest default backup is not a valid Autopsy backup.",
+            "suggested_next_step": "Create a fresh backup after memory health is restored and inspect older backups before recovery.",
+        }
+    age_seconds = int(backup.get("age_seconds") or 0)
+    if age_seconds <= int(fresh_max_age_seconds):
+        return {
+            "ok": True,
+            "status": "fresh",
+            "severity": "ok",
+            "thresholds": thresholds,
+            "age_seconds": age_seconds,
+            "message": "The newest default backup is within the freshness window.",
+        }
+    if age_seconds <= int(critical_max_age_seconds):
+        return {
+            "ok": False,
+            "status": "stale",
+            "severity": "warning",
+            "thresholds": thresholds,
+            "age_seconds": age_seconds,
+            "age_hours": round(age_seconds / 3600.0, 2),
+            "message": "The newest default backup is older than the freshness window.",
+            "suggested_next_step": "Run autopsy backup after confirming memory health.",
+        }
+    return {
+        "ok": False,
+        "status": "critical_stale",
+        "severity": "critical",
+        "thresholds": thresholds,
+        "age_seconds": age_seconds,
+        "age_hours": round(age_seconds / 3600.0, 2),
+        "age_days": round(age_seconds / 86400.0, 2),
+        "message": "The newest default backup is older than the critical recovery window.",
+        "suggested_next_step": "Run autopsy repair-embedded-snapshot --dry-run and compare backups/salvage before accepting data loss.",
+    }
+
+
+DIAGNOSTIC_LATEST_EVENT_FIELDS = {
+    "timestamp",
+    "event",
+    "policy",
+    "process_id",
+    "graph_name",
+    "graph_generation",
+    "sidecar_generation",
+    "sidecar_generation_source",
+    "sidecar_database_generation",
+    "sidecar_path",
+    "lite_path",
+    "missing_count",
+    "operation",
+    "selector_type",
+    "selector_value",
+    "history_count",
+    "candidate_count",
+    "attempt",
+    "max_retries",
+}
+
+
+def sanitize_diagnostic_record(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: record.get(key)
+        for key in DIAGNOSTIC_LATEST_EVENT_FIELDS
+        if key in record
+    }
+
+
+def diagnostic_log_status(path: Path) -> dict[str, Any]:
+    expanded = Path(path).expanduser()
+    payload: dict[str, Any] = {
+        "path": str(expanded),
+        "exists": expanded.exists(),
+        "bytes": 0,
+        "event_count": 0,
+        "malformed_count": 0,
+        "latest_event": None,
+    }
+    if not expanded.exists():
+        return payload
+    try:
+        stat = expanded.stat()
+        payload["bytes"] = stat.st_size
+        latest: dict[str, Any] | None = None
+        event_count = 0
+        malformed_count = 0
+        with expanded.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    record = json.loads(stripped)
+                except json.JSONDecodeError:
+                    malformed_count += 1
+                    continue
+                if not isinstance(record, dict):
+                    malformed_count += 1
+                    continue
+                event_count += 1
+                latest = sanitize_diagnostic_record(record)
+        payload["event_count"] = event_count
+        payload["malformed_count"] = malformed_count
+        payload["latest_event"] = latest
+    except OSError as exc:
+        payload["error"] = str(exc)
+    return payload
+
+
+def diagnostic_log_recent_events(path: Path, *, limit: int) -> list[dict[str, Any]]:
+    expanded = Path(path).expanduser()
+    max_events = max(0, int(limit or 0))
+    if max_events <= 0 or not expanded.exists():
+        return []
+    events: deque[dict[str, Any]] = deque(maxlen=max_events)
+    try:
+        with expanded.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    record = json.loads(stripped)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(record, dict):
+                    events.append(sanitize_diagnostic_record(record))
+    except OSError:
+        return []
+    return list(events)
+
+
+def build_diagnostics_payload() -> dict[str, Any]:
+    return {
+        "directory": str(APP_SUPPORT_DIR_DEFAULT / "Diagnostics"),
+        "logs": {
+            "memory_guard": diagnostic_log_status(memory_database_guard_diagnostic_log_path()),
+            "memory_relations": diagnostic_log_status(memory_relation_diagnostic_log_path()),
+        },
+    }
+
+
+def selected_diagnostic_logs(selection: str | None) -> dict[str, Path]:
+    selected = str(selection or "all").strip().lower().replace("_", "-")
+    logs = {
+        "memory_guard": memory_database_guard_diagnostic_log_path(),
+        "memory_relations": memory_relation_diagnostic_log_path(),
+    }
+    if selected in {"memory-guard", "guard"}:
+        return {"memory_guard": logs["memory_guard"]}
+    if selected in {"memory-relations", "relations"}:
+        return {"memory_relations": logs["memory_relations"]}
+    return logs
+
+
+def build_diagnostics_command_payload(args: argparse.Namespace) -> dict[str, Any]:
+    limit = max(0, int(getattr(args, "limit", 10) or 0))
+    logs = {}
+    for name, path in selected_diagnostic_logs(getattr(args, "log", "all")).items():
+        logs[name] = {
+            **diagnostic_log_status(path),
+            "events": diagnostic_log_recent_events(path, limit=limit),
+        }
+    total_events = sum(int((payload or {}).get("event_count") or 0) for payload in logs.values())
+    malformed_count = sum(int((payload or {}).get("malformed_count") or 0) for payload in logs.values())
+    return {
+        "directory": str(APP_SUPPORT_DIR_DEFAULT / "Diagnostics"),
+        "selected_log": str(getattr(args, "log", "all") or "all"),
+        "limit": limit,
+        "logs": logs,
+        "workflow": {
+            "status": "ok",
+            "complete": True,
+            "next_step": "done",
+            "message": f"{total_events} diagnostic event(s), {malformed_count} malformed line(s).",
+        },
     }
 
 
@@ -16739,10 +18437,11 @@ def build_health_payload(args: argparse.Namespace) -> dict[str, Any]:
     init_targets = [target_status(target) for target in targets]
     managed_targets = sum(1 for target in init_targets if target.get("state") == "managed")
     backup = latest_backup_status()
-    latest_backup_age = backup.get("age_seconds")
-    backup_fresh = latest_backup_age is not None and int(latest_backup_age) <= 7 * 24 * 60 * 60
+    item_count = int(stats.get("itemCount") or 0)
+    backup_health = backup_freshness_status(backup, item_count=item_count)
     graph_ok = scalar_query(graph, "MATCH (node) RETURN count(node) LIMIT 1") is not None and index_ok
-    ok = required_ok and graph_ok
+    ok = required_ok and graph_ok and bool(backup_health.get("ok"))
+    diagnostics = build_diagnostics_payload()
     return {
         "ok": ok,
         "workspace": tool.workspace_payload(workspace),
@@ -16751,7 +18450,7 @@ def build_health_payload(args: argparse.Namespace) -> dict[str, Any]:
         "mode": "native",
         "counts": {
             "entities": int(stats.get("entityCount") or 0),
-            "items": int(stats.get("itemCount") or 0),
+            "items": item_count,
             "edges": int(stats.get("edgeCount") or 0),
             "vectors": vector_count,
         },
@@ -16765,21 +18464,26 @@ def build_health_payload(args: argparse.Namespace) -> dict[str, Any]:
             "reranker_configured": bool(reranker_config(config).get("enabled", False)),
             "init_managed_targets": managed_targets,
             "init_target_count": len(init_targets),
-            "backup_fresh": backup_fresh,
+            "backup_fresh": bool(backup_health.get("ok")),
+            "backup_status": backup_health.get("status"),
+            "backup_severity": backup_health.get("severity"),
         },
         "init_targets": init_targets,
         "backup": backup,
+        "backup_health": backup_health,
+        "diagnostics": diagnostics,
         "paths": {
             "app_support_dir": str(APP_SUPPORT_DIR_DEFAULT),
             "falkordb_lite_path": str(resolved_lite_path(args) or ""),
             "memory_settings": str(GLOBAL_MEMORY_SETTINGS_DEFAULT),
             "unified_memory_root": str(unified_memory_root_path()),
+            "diagnostics_dir": str(APP_SUPPORT_DIR_DEFAULT / "Diagnostics"),
         },
         "workflow": {
             "status": "ok" if ok else "needs_attention",
             "complete": ok,
-            "next_step": "done" if ok else "inspect_failed_checks",
-            "message": "Autopsy memory health checks passed." if ok else "Autopsy memory health found required checks that need attention.",
+            "next_step": "done" if ok else "inspect_failed_checks_or_backup",
+            "message": "Autopsy memory health checks passed." if ok else "Autopsy memory health found required checks or backup freshness issues that need attention.",
         },
         "timings": {"health_s": round(time.perf_counter() - started, 3)},
     }
@@ -16787,13 +18491,10 @@ def build_health_payload(args: argparse.Namespace) -> dict[str, Any]:
 
 def cmd_health(args: argparse.Namespace) -> None:
     try:
-        try:
-            payload = build_health_payload(args)
-        except Exception as exc:
-            if not is_stale_falkordb_lite_error(exc):
-                raise
-            reset_stale_falkordb_lite_runtime(args)
-            payload = build_health_payload(args)
+        payload = run_with_stale_falkordb_lite_retries(
+            args,
+            lambda: build_health_payload(args),
+        )
     except Exception as exc:
         print(json.dumps({
             "ok": False,
@@ -16811,6 +18512,10 @@ def cmd_health(args: argparse.Namespace) -> None:
     print(json.dumps(payload, indent=2))
     if not payload.get("ok"):
         raise SystemExit(1)
+
+
+def cmd_diagnostics(args: argparse.Namespace) -> None:
+    print(json.dumps(build_diagnostics_command_payload(args), indent=2))
 
 
 def existing_menubar_dir(path: Path | None) -> Path | None:
@@ -17715,7 +19420,10 @@ def build_parser() -> argparse.ArgumentParser:
             export=cmd_export,
             backup=cmd_backup,
             restore=cmd_restore,
+            compare_backups=cmd_compare_backups,
             health=cmd_health,
+            diagnostics=cmd_diagnostics,
+            repair_embedded_snapshot=cmd_repair_embedded_snapshot,
             activity=cmd_activity,
             menubar=cmd_menubar,
             model_warmup=cmd_model_warmup,
@@ -17725,10 +19433,6 @@ def build_parser() -> argparse.ArgumentParser:
             expire_item=cmd_expire_item,
             pin_item=cmd_pin_item,
             feedback=cmd_feedback,
-            codex_hook=cmd_codex_hook,
-            context_event=cmd_context_event,
-            context_graph_settings=cmd_context_graph_settings,
-            context_graph_url=cmd_context_graph_url,
             import_session=cmd_import_session,
             consolidate_session=cmd_consolidate_session,
             observe=cmd_observe,

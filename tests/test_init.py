@@ -65,118 +65,6 @@ Old memory instructions.
         self.assertEqual(agents_by_scope["global"], {"codex", "claude", "gemini", "opencode"})
         self.assertEqual(agents_by_scope["repo"], {"codex", "claude", "gemini", "opencode", "cursor", "copilot", "windsurf"})
         self.assertEqual(len(targets), 11)
-        hook_targets = init_module.codex_hook_targets(
-            home=root / "home",
-            repo_path=root / "repo",
-            install_global=True,
-            agent="all",
-        )
-        self.assertEqual([target.scope for target in hook_targets], ["global", "repo"])
-        self.assertEqual(hook_targets[0].path, root / "home" / ".codex" / "hooks.json")
-        self.assertEqual(hook_targets[1].path, root / "repo" / ".codex" / "hooks.json")
-
-    def test_codex_hook_json_patch_preserves_other_hooks(self):
-        existing = """{
-  "hooks": {
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python other.py"
-          },
-          {
-            "type": "command",
-            "command": "autopsy codex-hook"
-          }
-        ]
-      }
-    ]
-  }
-}
-"""
-        new_text, action = init_module.patch_codex_hooks_json(existing, autopsy_command="/opt/homebrew/bin/autopsy")
-        self.assertEqual(action, "updated")
-        payload = json.loads(new_text)
-        stop_handlers = [
-            handler
-            for group in payload["hooks"]["Stop"]
-            for handler in group["hooks"]
-        ]
-        self.assertIn("python other.py", {handler["command"] for handler in stop_handlers})
-        self.assertEqual(
-            sum(1 for handler in stop_handlers if handler["command"] == "/opt/homebrew/bin/autopsy codex-hook"),
-            0,
-        )
-        self.assertNotIn("UserPromptSubmit", payload["hooks"])
-        self.assertNotIn("PreCompact", payload["hooks"])
-        self.assertIn("PreToolUse", payload["hooks"])
-        self.assertNotIn("PermissionRequest", payload["hooks"])
-        self.assertIn("PostToolUse", payload["hooks"])
-        self.assertIn("Stop", payload["hooks"])
-
-    def test_codex_hook_json_patch_can_remove_autopsy_hooks(self):
-        existing = """{
-  "hooks": {
-    "PostToolUse": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "autopsy codex-hook"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python other.py"
-          }
-        ]
-      }
-    ]
-  }
-}
-"""
-        new_text, action = init_module.patch_codex_hooks_json(existing, enabled=False)
-        self.assertEqual(action, "removed")
-        payload = json.loads(new_text)
-        self.assertNotIn("PostToolUse", payload["hooks"])
-        self.assertIn("Stop", payload["hooks"])
-
-    def test_codex_managed_block_uses_in_app_browser_instruction_in_cli_mode(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            settings_path = Path(tmp_dir) / "context-graph-settings.json"
-            settings_path.write_text(json.dumps({"enabled": True, "mode": "cli"}), encoding="utf-8")
-            with mock.patch.dict(os.environ, {"AUTOPSY_CONTEXT_GRAPH_SETTINGS_PATH": str(settings_path)}):
-                block = init_module.managed_instruction_block("codex")
-        self.assertIn("Codex in-app Browser", block)
-        self.assertIn("not `web.run` and not macOS `open`", block)
-        self.assertIn("connect to the `iab` browser", block)
-        self.assertIn("tab.goto(URL)", block)
-        self.assertIn("Do not pass `--open`", block)
-        self.assertIn("after resume or compaction", block)
-        self.assertIn("If it is missing or stale, reopen it", block)
-        self.assertIn("menu bar LaunchAgent keeps the local graph worker warm", block)
-        self.assertNotIn('context-graph-url --thread-id "<thread-id>" --open', block)
-
-    def test_codex_managed_block_suppresses_context_event_in_hook_mode(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            settings_path = Path(tmp_dir) / "context-graph-settings.json"
-            settings_path.write_text(json.dumps({"enabled": True, "mode": "hooks"}), encoding="utf-8")
-            with mock.patch.dict(os.environ, {"AUTOPSY_CONTEXT_GRAPH_SETTINGS_PATH": str(settings_path)}):
-                block = init_module.managed_instruction_block("codex")
-        self.assertIn("Do not call `autopsy context-event`", block)
-        self.assertIn("Codex hooks", block)
-        self.assertIn("context-graph-url --codex-current", block)
-        self.assertIn("Do not choose, invent, derive, or manually pass", block)
-        self.assertIn("after resume or compaction", block)
-        self.assertIn("If it is missing or stale, reopen it", block)
-        self.assertIn("menu bar LaunchAgent keeps the local graph worker warm", block)
-        self.assertNotIn('context-graph-url --thread-id "<thread-id>"', block)
 
     def test_global_cursor_has_no_file_target(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -192,8 +80,6 @@ Old memory instructions.
     def test_build_init_payload_writes_all_global_agent_targets(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             home = Path(tmp_dir) / "home"
-            settings_path = Path(tmp_dir) / "context-graph-settings.json"
-            settings_path.write_text(json.dumps({"enabled": True, "mode": "hooks"}), encoding="utf-8")
             args = argparse.Namespace(
                 global_scope=True,
                 repo_path=None,
@@ -207,39 +93,23 @@ Old memory instructions.
                 skip_write_smoke=True,
                 autopsy_command_path="/opt/homebrew/bin/autopsy",
             )
-            with (
-                mock.patch.object(init_module.Path, "home", return_value=home),
-                mock.patch.dict(os.environ, {"AUTOPSY_CONTEXT_GRAPH_SETTINGS_PATH": str(settings_path)}),
-            ):
+            with mock.patch.object(init_module.Path, "home", return_value=home):
                 payload = init_module.build_init_payload(args)
 
             targets = payload["targets"]
-            hooks = payload["hooks"]
             self.assertEqual({target["agent"] for target in targets}, {"codex", "claude", "gemini", "opencode"})
             self.assertTrue(all(target["scope"] == "global" for target in targets))
             self.assertTrue(all(target["state"] == "managed" for target in targets))
             self.assertTrue(all(target["action"] == "added" for target in targets))
-            self.assertEqual(len(hooks), 1)
-            self.assertEqual(hooks[0]["agent"], "codex")
-            self.assertEqual(hooks[0]["scope"], "global")
-            self.assertEqual(hooks[0]["state"], "managed")
             for target in targets:
                 path = Path(target["path"])
                 self.assertTrue(path.exists(), target)
                 self.assertIn(init_module.MANAGED_START, path.read_text(encoding="utf-8"))
-            hook_path = home / ".codex" / "hooks.json"
-            self.assertTrue(hook_path.exists())
-            hook_payload = json.loads(hook_path.read_text(encoding="utf-8"))
-            self.assertNotIn("UserPromptSubmit", hook_payload["hooks"])
-            self.assertNotIn("PreCompact", hook_payload["hooks"])
-            self.assertEqual(set(hook_payload["hooks"]), {"PreToolUse", "PostToolUse"})
 
     def test_dry_run_does_not_write_files(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             repo = Path(tmp_dir) / "repo"
             repo.mkdir()
-            settings_path = Path(tmp_dir) / "context-graph-settings.json"
-            settings_path.write_text(json.dumps({"enabled": True, "mode": "hooks"}), encoding="utf-8")
             args = argparse.Namespace(
                 global_scope=False,
                 repo_path=str(repo),
@@ -252,16 +122,11 @@ Old memory instructions.
                 smoke_test=False,
                 skip_write_smoke=True,
             )
-            with mock.patch.dict(os.environ, {"AUTOPSY_CONTEXT_GRAPH_SETTINGS_PATH": str(settings_path)}):
-                payload = init_module.build_init_payload(args)
+            payload = init_module.build_init_payload(args)
             target_path = repo / "AGENTS.md"
-            hook_path = repo / ".codex" / "hooks.json"
             self.assertFalse(target_path.exists())
-            self.assertFalse(hook_path.exists())
             self.assertEqual(payload["targets"][0]["action"], "added")
             self.assertTrue(payload["targets"][0]["dry_run"])
-            self.assertEqual(payload["hooks"][0]["action"], "added")
-            self.assertTrue(payload["hooks"][0]["dry_run"])
 
     def test_smoke_tests_use_explicit_autopsy_command(self):
         with (

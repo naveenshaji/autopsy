@@ -17,14 +17,6 @@ from autopsy_memory import mcp_bridge
 from autopsy_memory import worker
 
 
-@contextlib.contextmanager
-def temporary_context_graph_settings(settings: dict):
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        settings_path = Path(tmp_dir) / "context-graph-settings.json"
-        settings_path.write_text(json.dumps(settings), encoding="utf-8")
-        with mock.patch.dict(os.environ, {"AUTOPSY_CONTEXT_GRAPH_SETTINGS_PATH": str(settings_path)}):
-            yield settings_path
-
 
 class AutopsyCLIContractTests(unittest.TestCase):
     def test_memory_prefix_is_compatibility_alias(self):
@@ -61,28 +53,16 @@ class AutopsyCLIContractTests(unittest.TestCase):
             self.assertNotIn("github/codex", resolved)
 
     def test_instructions_include_required_commands(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            settings_path = Path(tmp_dir) / "context-graph-settings.json"
-            settings_path.write_text(json.dumps({"enabled": True, "mode": "cli"}), encoding="utf-8")
-            parser = cli.build_parser()
-            args = parser.parse_args(["instructions"])
-            stream = io.StringIO()
-            with (
-                mock.patch.dict(os.environ, {"AUTOPSY_CONTEXT_GRAPH_SETTINGS_PATH": str(settings_path)}),
-                contextlib.redirect_stdout(stream),
-            ):
-                args.func(args)
+        parser = cli.build_parser()
+        args = parser.parse_args(["instructions"])
+        stream = io.StringIO()
+        with contextlib.redirect_stdout(stream):
+            args.func(args)
         output = stream.getvalue()
         self.assertIn("autopsy status --current-only", output)
         self.assertIn("autopsy consult --current-only", output)
-        self.assertIn("autopsy context-graph-url --thread-id", output)
-        self.assertIn("autopsy codex-hook", output)
-        self.assertIn("autopsy context-event --thread-id", output)
-        self.assertIn("--command \"<command text>\"", output)
-        self.assertIn("Never write generic graph events", output)
-        self.assertIn("never synthesize separate nodes", output)
-        self.assertIn("Ignore build, test, lint, package, write, shell redirection, command substitution, background operators, multiline commands, and other action commands", output)
         self.assertIn("autopsy benchmark --sample-size 5 --include-sync", output)
+        self.assertNotIn("browser", output.lower())
 
     def test_export_parser_accepts_release_options(self):
         parser = cli.build_parser()
@@ -94,21 +74,695 @@ class AutopsyCLIContractTests(unittest.TestCase):
 
     def test_restore_parser_accepts_safe_modes(self):
         parser = cli.build_parser()
-        args = parser.parse_args(["restore", "/tmp/export.json", "--dry-run", "--replace", "--include-operational"])
+        args = parser.parse_args(["restore", "/tmp/export.json", "--dry-run", "--replace", "--include-operational", "--offline"])
         self.assertEqual(args.command, "restore")
         self.assertEqual(args.input, "/tmp/export.json")
         self.assertTrue(args.dry_run)
         self.assertTrue(args.replace)
         self.assertTrue(args.include_operational)
+        self.assertTrue(args.offline)
 
         alias_args = parser.parse_args(["import", "/tmp/export.json", "--merge"])
         self.assertEqual(alias_args.command, "import")
         self.assertFalse(alias_args.replace)
 
+    def test_restore_offline_requires_dry_run(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["restore", "/tmp/export.json", "--offline"])
+        stream = io.StringIO()
+        with contextlib.redirect_stderr(stream), self.assertRaises(SystemExit) as raised:
+            cli.cmd_restore(args)
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("restore --offline requires --dry-run", stream.getvalue())
+
+    def test_offline_restore_dry_run_payload_validates_without_graph_counts(self):
+        payload = {
+            "schema_version": 1,
+            "exported_at": "2026-06-21T00:00:00Z",
+            "autopsy_version": "0.0-test",
+            "graph_name": "unit",
+            "items": [
+                {
+                    "stable_key": "graph-note:one",
+                    "kind": "decision",
+                    "title": "One",
+                    "content": "One restore item with enough content for validation.",
+                }
+            ],
+            "relations": [
+                {"from": "graph-note:one", "to": "graph-note:missing-from-input", "relation": "refines"}
+            ],
+            "structural_edges": [],
+        }
+
+        report = cli.offline_restore_dry_run_payload(
+            input_path="/tmp/backup.json",
+            payload=payload,
+            include_operational=False,
+            replace=False,
+            runtime_error_payload={"workflow": {"status": "rollback_detected", "suggested_next_steps": ["repair"]}},
+        )
+
+        self.assertTrue(report["dry_run"])
+        self.assertTrue(report["offline_validation"])
+        self.assertEqual(report["workflow"]["status"], "dry_run_rollback_detected")
+        self.assertEqual(report["counts"]["restorable_items"], 1)
+        self.assertIsNone(report["counts"]["existing_items"])
+        self.assertEqual(report["counts"]["relations_with_endpoint_not_in_input"], 1)
+        self.assertIn("repair", report["workflow"]["suggested_next_steps"])
+
+    def test_restore_dry_run_falls_back_to_offline_validation_when_runtime_rolls_back(self):
+        parser = cli.build_parser()
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json", delete=False) as handle:
+            path = Path(handle.name)
+            json.dump(
+                {
+                    "schema_version": 1,
+                    "exported_at": "2026-06-21T00:00:00Z",
+                    "autopsy_version": "0.0-test",
+                    "graph_name": "unit",
+                    "items": [
+                        {
+                            "stable_key": "graph-note:backup",
+                            "kind": "decision",
+                            "title": "Backup",
+                            "content": "Backup restore item.",
+                        }
+                    ],
+                    "relations": [],
+                    "structural_edges": [],
+                },
+                handle,
+            )
+        args = parser.parse_args(["restore", str(path), "--dry-run"])
+        rollback_error = cli.MemoryDatabaseRollbackError(
+            "Autopsy memory database rollback detected",
+            state={"graph_name": "unit", "graph_generation": 1, "sidecar_generation": 2},
+        )
+        originals = {
+            "open_workspace_graph_checked": cli.open_workspace_graph_checked,
+            "falkor_start_failure_payload": cli.falkor_start_failure_payload,
+        }
+        try:
+            cli.open_workspace_graph_checked = lambda _args: (_ for _ in ()).throw(rollback_error)
+            cli.falkor_start_failure_payload = lambda _args, _exc: {
+                "workflow": {
+                    "status": "rollback_detected",
+                    "next_step": "restore_or_repair_embedded_memory_snapshot",
+                    "suggested_next_steps": ["autopsy repair-embedded-snapshot --dry-run"],
+                }
+            }
+            stream = io.StringIO()
+            with contextlib.redirect_stdout(stream):
+                cli.cmd_restore(args)
+        finally:
+            for name, value in originals.items():
+                setattr(cli, name, value)
+            path.unlink(missing_ok=True)
+
+        report = json.loads(stream.getvalue())
+        self.assertTrue(report["dry_run"])
+        self.assertTrue(report["offline_validation"])
+        self.assertEqual(report["workflow"]["status"], "dry_run_rollback_detected")
+        self.assertEqual(report["runtime"]["workflow"]["status"], "rollback_detected")
+        self.assertEqual(report["counts"]["restorable_items"], 1)
+
+    def test_restore_offline_dry_run_does_not_open_runtime(self):
+        parser = cli.build_parser()
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json", delete=False) as handle:
+            path = Path(handle.name)
+            json.dump(
+                {
+                    "schema_version": 1,
+                    "exported_at": "2026-06-21T00:00:00Z",
+                    "autopsy_version": "0.0-test",
+                    "graph_name": "unit",
+                    "items": [
+                        {
+                            "stable_key": "graph-note:backup",
+                            "kind": "decision",
+                            "title": "Backup",
+                            "content": "Backup restore item.",
+                        }
+                    ],
+                    "relations": [],
+                    "structural_edges": [],
+                },
+                handle,
+            )
+        args = parser.parse_args(["restore", str(path), "--dry-run", "--offline"])
+        original_open = cli.open_workspace_graph_checked
+        open_mock = mock.Mock(side_effect=AssertionError("runtime should not open"))
+        try:
+            cli.open_workspace_graph_checked = open_mock
+            stream = io.StringIO()
+            with contextlib.redirect_stdout(stream):
+                cli.cmd_restore(args)
+        finally:
+            cli.open_workspace_graph_checked = original_open
+            path.unlink(missing_ok=True)
+
+        report = json.loads(stream.getvalue())
+        self.assertTrue(report["offline_validation"])
+        self.assertEqual(report["workflow"]["status"], "dry_run_offline")
+        self.assertTrue(report["workflow"]["complete"])
+        self.assertIsNone(report["runtime"])
+        open_mock.assert_not_called()
+
+    def test_compare_backups_parser_accepts_alias_and_sample_limit(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["compare-backups", "/tmp/base.json", "/tmp/candidate.json", "--sample-limit", "7", "--include-operational"])
+        self.assertEqual(args.command, "compare-backups")
+        self.assertEqual(args.base, "/tmp/base.json")
+        self.assertEqual(args.candidate, "/tmp/candidate.json")
+        self.assertEqual(args.sample_limit, 7)
+        self.assertTrue(args.include_operational)
+
+        alias_args = parser.parse_args(["compare-exports", "/tmp/base.json", "/tmp/candidate.json"])
+        self.assertEqual(alias_args.base, "/tmp/base.json")
+        self.assertEqual(alias_args.candidate, "/tmp/candidate.json")
+
     def test_health_parser_is_available(self):
         parser = cli.build_parser()
         args = parser.parse_args(["health"])
         self.assertEqual(args.command, "health")
+
+    def test_diagnostics_parser_accepts_log_and_limit(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["diagnostics", "--log", "memory-relations", "--limit", "3"])
+        self.assertEqual(args.command, "diagnostics")
+        self.assertEqual(args.log, "memory-relations")
+        self.assertEqual(args.limit, 3)
+
+    def test_backup_freshness_status_classifies_missing_stale_and_critical(self):
+        self.assertEqual(
+            cli.backup_freshness_status({"count": 0}, item_count=0)["status"],
+            "not_needed_empty_graph",
+        )
+        missing = cli.backup_freshness_status({"count": 0}, item_count=3)
+        invalid = cli.backup_freshness_status({"count": 1, "latest": "/tmp/bad.json", "valid": False, "validation_error": "invalid_json"}, item_count=3)
+        fresh = cli.backup_freshness_status({"count": 1, "latest": "/tmp/ok.json", "valid": True, "age_seconds": 60}, item_count=3)
+        stale = cli.backup_freshness_status({"count": 1, "latest": "/tmp/old.json", "valid": True, "age_seconds": 2 * 86400}, item_count=3)
+        critical = cli.backup_freshness_status({"count": 1, "latest": "/tmp/very-old.json", "valid": True, "age_seconds": 8 * 86400}, item_count=3)
+
+        self.assertFalse(missing["ok"])
+        self.assertEqual(missing["status"], "missing")
+        self.assertFalse(invalid["ok"])
+        self.assertEqual(invalid["status"], "invalid")
+        self.assertTrue(fresh["ok"])
+        self.assertEqual(fresh["status"], "fresh")
+        self.assertFalse(stale["ok"])
+        self.assertEqual(stale["status"], "stale")
+        self.assertEqual(stale["severity"], "warning")
+        self.assertFalse(critical["ok"])
+        self.assertEqual(critical["status"], "critical_stale")
+        self.assertEqual(critical["severity"], "critical")
+
+    def test_latest_backup_status_validates_latest_backup_and_recovery_risk(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            support_dir = Path(temp_dir) / "Support"
+            backup_dir = support_dir / "Backups"
+            backup_dir.mkdir(parents=True)
+            backup_path = backup_dir / "autopsy-memory-20260620T000000Z.json"
+            backup_path.write_text(
+                json.dumps({
+                    "schema_version": 1,
+                    "exported_at": "2026-06-20T00:00:00Z",
+                    "autopsy_version": "0.0-test",
+                    "graph_name": "unit",
+                    "items": [{"stable_key": "graph-note:backup", "kind": "decision", "title": "Backup", "content": "Backup."}],
+                    "relations": [],
+                }),
+                encoding="utf-8",
+            )
+            os.utime(backup_path, (1_800_000_000, 1_800_000_000))
+            with (
+                mock.patch.object(cli, "APP_SUPPORT_DIR_DEFAULT", support_dir),
+                mock.patch.object(cli.time, "time", return_value=1_800_003_600),
+            ):
+                status = cli.latest_backup_status(recovery_reference_at="2026-06-21T00:00:00Z")
+
+        self.assertTrue(status["valid"])
+        self.assertEqual(status["latest"], str(backup_path))
+        self.assertEqual(status["age_seconds"], 3600)
+        self.assertEqual(status["counts"]["restorable_items"], 1)
+        self.assertEqual(status["recovery_risk"]["status"], "stale")
+        self.assertEqual(status["recovery_risk"]["staleness_seconds"], 86400)
+
+    def test_health_payload_requires_recent_valid_backup_for_nonempty_graph(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["health"])
+
+        class Tool:
+            workspace_payload = staticmethod(cli.workspace_payload)
+
+        class Graph:
+            name = "unit"
+
+        runtime_check = {"ok": True, "required": True}
+        with (
+            mock.patch.object(cli, "open_workspace_graph", return_value=(Tool, {"root_path": "/tmp/workspace"}, {"enabled": True}, Graph())),
+            mock.patch.object(cli, "ensure_runtime_indexes", return_value=None),
+            mock.patch.object(cli, "build_graph_stats_payload", return_value={"entityCount": 10, "itemCount": 5, "edgeCount": 4}),
+            mock.patch.object(cli, "scalar_query", return_value=1),
+            mock.patch.object(cli, "check_runtime_index_probe", return_value=True),
+            mock.patch.object(cli, "python_version_check", return_value=runtime_check),
+            mock.patch.object(cli, "installed_autopsy_command_check", return_value=runtime_check),
+            mock.patch.object(cli, "import_check", return_value=runtime_check),
+            mock.patch.object(cli, "instruction_targets", return_value=[]),
+            mock.patch.object(cli, "latest_backup_status", return_value={"count": 1, "latest": "/tmp/stale.json", "valid": True, "age_seconds": 2 * 86400}),
+            mock.patch.object(cli, "build_diagnostics_payload", return_value={"logs": {}}),
+        ):
+            payload = cli.build_health_payload(args)
+
+        self.assertFalse(payload["ok"])
+        self.assertFalse(payload["checks"]["backup_fresh"])
+        self.assertEqual(payload["checks"]["backup_status"], "stale")
+        self.assertEqual(payload["backup_health"]["severity"], "warning")
+        self.assertEqual(payload["workflow"]["next_step"], "inspect_failed_checks_or_backup")
+
+    def test_auto_backup_after_write_skips_when_latest_backup_is_fresh(self):
+        with (
+            mock.patch.object(cli, "latest_backup_status", return_value={"count": 1, "latest": "/tmp/fresh.json", "valid": True, "age_seconds": 60}),
+            mock.patch.object(cli, "semantic_backup_item_count", return_value=2),
+            mock.patch.object(cli, "export_memory_payload") as export_memory,
+        ):
+            payload = cli.maybe_auto_backup_after_write(object(), {"root_path": "/tmp/workspace"}, reason="unit")
+
+        self.assertEqual(payload["status"], "skipped")
+        self.assertEqual(payload["reason"], "latest_backup_fresh")
+        export_memory.assert_not_called()
+
+    def test_auto_backup_after_write_creates_valid_backup_when_stale(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            support_dir = Path(temp_dir) / "Support"
+            export_payload = {
+                "schema_version": 1,
+                "exported_at": "2026-06-21T00:00:00Z",
+                "autopsy_version": "0.0-test",
+                "graph_name": "unit",
+                "items": [
+                    {
+                        "stable_key": "graph-note:auto-backup",
+                        "kind": "decision",
+                        "title": "Auto backup",
+                        "content": "Auto backup content.",
+                    }
+                ],
+                "relations": [],
+                "structural_edges": [],
+            }
+
+            with (
+                mock.patch.object(cli, "APP_SUPPORT_DIR_DEFAULT", support_dir),
+                mock.patch.object(cli, "latest_backup_status", return_value={"count": 1, "latest": "/tmp/stale.json", "valid": True, "age_seconds": 2 * 86400}),
+                mock.patch.object(cli, "semantic_backup_item_count", return_value=1),
+                mock.patch.object(cli, "export_memory_payload", return_value=export_payload),
+            ):
+                payload = cli.maybe_auto_backup_after_write(object(), {"root_path": "/tmp/workspace"}, reason="unit")
+
+            written = Path(payload["written"])
+            saved = json.loads(written.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["status"], "created")
+        self.assertEqual(payload["reason"], "unit")
+        self.assertTrue(payload["validation"]["valid"])
+        self.assertEqual(payload["validation"]["counts"]["restorable_items"], 1)
+        self.assertEqual(saved["items"][0]["stable_key"], "graph-note:auto-backup")
+
+    def test_exported_write_commands_attach_auto_backup_only_after_real_writes(self):
+        class Tool:
+            workspace_payload = staticmethod(cli.workspace_payload)
+
+        workspace = {
+            "id": "/tmp/workspace",
+            "workspace_key": "/tmp/workspace",
+            "slug": "workspace",
+            "title": "workspace",
+            "root_path": "/tmp/workspace",
+        }
+        parser = cli.build_parser()
+        backup_payload = {"status": "skipped", "reason": "unit"}
+        originals = {
+            "open_workspace_graph": cli.open_workspace_graph,
+            "maybe_auto_backup_after_write": cli.maybe_auto_backup_after_write,
+            "lookup_node_by_stable_key": cli.lookup_node_by_stable_key,
+            "record_memory_feedback": cli.record_memory_feedback,
+            "build_import_session_payload": cli.build_import_session_payload,
+            "build_consolidate_session_payload": cli.build_consolidate_session_payload,
+            "build_observe_payload": cli.build_observe_payload,
+        }
+        try:
+            cli.open_workspace_graph = lambda _args: (Tool, workspace, {}, object())
+            cli.maybe_auto_backup_after_write = lambda *_args, **_kwargs: dict(backup_payload)
+            cli.lookup_node_by_stable_key = lambda *_args, **_kwargs: {"stable_key": "graph-note:abc"}
+            cli.record_memory_feedback = lambda *_args, **_kwargs: {"stable_key": "graph-note:abc", "last_feedback_rating": "useful"}
+            cli.build_import_session_payload = lambda *_args, **kwargs: {
+                "dry_run": bool(kwargs.get("dry_run")),
+                "workflow": {
+                    "status": "dry_run" if kwargs.get("dry_run") else "ok",
+                    "complete": True,
+                },
+            }
+            cli.build_consolidate_session_payload = lambda *_args, **kwargs: {
+                "write": bool(kwargs.get("write")),
+                "written": {"stable_key": "session-consolidation:abc"} if kwargs.get("write") else None,
+                "workflow": {
+                    "status": "ok" if kwargs.get("write") else "draft",
+                    "complete": True,
+                },
+            }
+            cli.build_observe_payload = lambda *_args, **kwargs: {
+                "written": bool(kwargs.get("write") or kwargs.get("write_if_stale")),
+                "workflow": {"status": "written", "complete": True},
+            }
+
+            feedback_stream = io.StringIO()
+            with contextlib.redirect_stdout(feedback_stream):
+                cli.cmd_feedback(parser.parse_args(["feedback", "graph-note:abc", "--rating", "useful"]))
+            feedback_payload = json.loads(feedback_stream.getvalue())
+
+            import_dry_run_stream = io.StringIO()
+            with contextlib.redirect_stdout(import_dry_run_stream):
+                cli.cmd_import_session(parser.parse_args(["import-session", "/tmp/session.jsonl", "--dry-run"]))
+            import_dry_run_payload = json.loads(import_dry_run_stream.getvalue())
+
+            import_write_stream = io.StringIO()
+            with contextlib.redirect_stdout(import_write_stream):
+                cli.cmd_import_session(parser.parse_args(["import-session", "/tmp/session.jsonl"]))
+            import_write_payload = json.loads(import_write_stream.getvalue())
+
+            consolidate_draft_stream = io.StringIO()
+            with contextlib.redirect_stdout(consolidate_draft_stream):
+                cli.cmd_consolidate_session(parser.parse_args(["consolidate-session", "session-import:abc"]))
+            consolidate_draft_payload = json.loads(consolidate_draft_stream.getvalue())
+
+            consolidate_write_stream = io.StringIO()
+            with contextlib.redirect_stdout(consolidate_write_stream):
+                cli.cmd_consolidate_session(parser.parse_args(["consolidate-session", "session-import:abc", "--write"]))
+            consolidate_write_payload = json.loads(consolidate_write_stream.getvalue())
+
+            observe_stream = io.StringIO()
+            with contextlib.redirect_stdout(observe_stream):
+                cli.cmd_observe(parser.parse_args(["observe", "--stable-key", "graph-note:seed", "--write"]))
+            observe_payload = json.loads(observe_stream.getvalue())
+        finally:
+            for name, value in originals.items():
+                setattr(cli, name, value)
+
+        self.assertNotIn("auto_backup", feedback_payload)
+        self.assertNotIn("auto_backup", import_dry_run_payload)
+        self.assertEqual(import_write_payload["auto_backup"], backup_payload)
+        self.assertNotIn("auto_backup", consolidate_draft_payload)
+        self.assertEqual(consolidate_write_payload["auto_backup"], backup_payload)
+        self.assertEqual(observe_payload["auto_backup"], backup_payload)
+
+    def test_compare_backups_reports_item_relation_and_salvage_differences(self):
+        parser = cli.build_parser()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base_path = Path(temp_dir) / "base.json"
+            candidate_path = Path(temp_dir) / "candidate-salvage.json"
+            base_path.write_text(
+                json.dumps({
+                    "schema_version": 1,
+                    "exported_at": "2026-06-20T00:00:00Z",
+                    "autopsy_version": "0.0-test",
+                    "graph_name": "unit",
+                    "items": [
+                        {
+                            "stable_key": "graph-note:shared",
+                            "kind": "decision",
+                            "title": "Shared base title",
+                            "content": "Shared base content.",
+                            "updated_at": "2026-06-20T00:00:00Z",
+                        },
+                        {
+                            "stable_key": "graph-note:base-only",
+                            "kind": "attempt",
+                            "title": "Base only",
+                            "content": "Base only content.",
+                        },
+                    ],
+                    "relations": [
+                        {
+                            "from": "graph-note:shared",
+                            "to": "graph-note:base-only",
+                            "relation": "refines",
+                            "predicate": "REFINES",
+                            "fact_text": "Shared refines base-only.",
+                        }
+                    ],
+                    "structural_edges": [],
+                }),
+                encoding="utf-8",
+            )
+            candidate_path.write_text(
+                json.dumps({
+                    "schema_version": 1,
+                    "exported_at": "2026-06-21T00:00:00Z",
+                    "autopsy_version": "0.0-test",
+                    "graph_name": "unit",
+                    "items": [
+                        {
+                            "stable_key": "graph-note:shared",
+                            "kind": "decision",
+                            "title": "Shared candidate title",
+                            "content": "Shared candidate content.",
+                            "updated_at": "2026-06-21T00:00:00Z",
+                        },
+                        {
+                            "stable_key": "graph-note:candidate-only",
+                            "kind": "observation",
+                            "title": "Candidate only",
+                            "content": "Candidate only content.",
+                        },
+                    ],
+                    "relations": [
+                        {
+                            "from": "graph-note:shared",
+                            "to": "graph-note:candidate-only",
+                            "relation": "implements",
+                            "predicate": "IMPLEMENTS",
+                            "fact_text": "Shared implements candidate-only.",
+                        }
+                    ],
+                    "structural_edges": [
+                        {
+                            "from": "graph-note:candidate-only",
+                            "to": "graph-note:shared",
+                            "relation": "about",
+                        }
+                    ],
+                    "salvage": {
+                        "policy": "stale_embedded_snapshot_salvage_v1",
+                        "created_at": "2026-06-21T00:00:01Z",
+                        "graph_name": "unit",
+                        "guard_state": {
+                            "ok": False,
+                            "graph_generation": 3,
+                            "sidecar_generation": 7,
+                            "sidecar_generation_source": "graph",
+                        },
+                    },
+                }),
+                encoding="utf-8",
+            )
+            args = parser.parse_args(["compare-backups", str(base_path), str(candidate_path), "--sample-limit", "5"])
+            stream = io.StringIO()
+            with contextlib.redirect_stdout(stream):
+                args.func(args)
+            payload = json.loads(stream.getvalue())
+
+        self.assertEqual(payload["workflow"]["status"], "differences_found")
+        self.assertEqual(payload["items"]["only_in_base_count"], 1)
+        self.assertEqual(payload["items"]["only_in_candidate_count"], 1)
+        self.assertEqual(payload["items"]["changed_count"], 1)
+        self.assertEqual(payload["items"]["only_in_base"], ["graph-note:base-only"])
+        self.assertEqual(payload["items"]["only_in_candidate"], ["graph-note:candidate-only"])
+        self.assertEqual(payload["items"]["changed"][0]["stable_key"], "graph-note:shared")
+        self.assertEqual(payload["relations"]["fact_edges"]["only_in_base_count"], 1)
+        self.assertEqual(payload["relations"]["fact_edges"]["only_in_candidate_count"], 1)
+        self.assertEqual(payload["relations"]["structural_edges"]["only_in_candidate_count"], 1)
+        self.assertEqual(payload["candidate"]["salvage"]["guard_state"]["sidecar_generation"], 7)
+        self.assertEqual(payload["recovery_guidance"]["status"], "differences_found")
+        self.assertTrue(any("stale-snapshot salvage" in step for step in payload["recovery_guidance"]["suggested_next_steps"]))
+
+    def test_repair_embedded_snapshot_parser_accepts_safety_flags(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "repair-embedded-snapshot",
+            "--yes",
+            "--accept-data-loss",
+            "--restore-backup",
+            "/tmp/autopsy-memory.json",
+            "--backup-limit",
+            "2",
+            "--salvage-output",
+            "/tmp/stale-export.json",
+            "--salvage-limit",
+            "100",
+            "--include-operational",
+        ])
+        self.assertEqual(args.command, "repair-embedded-snapshot")
+        self.assertTrue(args.yes)
+        self.assertTrue(args.accept_data_loss)
+        self.assertEqual(args.restore_backup, "/tmp/autopsy-memory.json")
+        self.assertFalse(args.restore_latest_backup)
+        self.assertEqual(args.backup_limit, 2)
+        self.assertEqual(args.salvage_output, "/tmp/stale-export.json")
+        self.assertEqual(args.salvage_limit, 100)
+        self.assertFalse(args.skip_salvage)
+        self.assertTrue(args.include_operational)
+        skip_args = parser.parse_args(["repair-embedded-snapshot", "--skip-salvage"])
+        self.assertTrue(skip_args.skip_salvage)
+
+    def test_diagnostic_log_status_summarizes_without_payload_content(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "diagnostics.jsonl"
+            path.write_text(
+                "\n".join(
+                    [
+                        json.dumps({"timestamp": "2026-06-21T00:00:00Z", "event": "first", "target": "graph-note:hidden"}),
+                        "{not-json",
+                        json.dumps(
+                            {
+                                "timestamp": "2026-06-21T00:01:00Z",
+                                "event": "missing_relation_target",
+                                "policy": "memory_relation_diagnostics_v1",
+                                "process_id": 123,
+                                "graph_name": "unit",
+                                "missing_count": 1,
+                                "relation_requests": [{"target": "graph-note:hidden"}],
+                            }
+                        ),
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            status = cli.diagnostic_log_status(path)
+
+        self.assertTrue(status["exists"])
+        self.assertEqual(status["event_count"], 2)
+        self.assertEqual(status["malformed_count"], 1)
+        self.assertEqual(status["latest_event"]["event"], "missing_relation_target")
+        self.assertEqual(status["latest_event"]["missing_count"], 1)
+        self.assertNotIn("relation_requests", status["latest_event"])
+        self.assertNotIn("target", status["latest_event"])
+
+    def test_diagnostics_command_payload_tails_sanitized_events(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["diagnostics", "--log", "memory-relations", "--limit", "1"])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            relation_log = Path(temp_dir) / "memory-relations.jsonl"
+            relation_log.write_text(
+                "\n".join(
+                    [
+                        json.dumps({"timestamp": "2026-06-21T00:00:00Z", "event": "older", "target": "graph-note:hidden-old"}),
+                        json.dumps(
+                            {
+                                "timestamp": "2026-06-21T00:01:00Z",
+                                "event": "missing_relation_target",
+                                "policy": "memory_relation_diagnostics_v1",
+                                "process_id": 456,
+                                "graph_name": "unit",
+                                "missing_count": 1,
+                                "relation_requests": [{"target": "graph-note:hidden-new"}],
+                            }
+                        ),
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with mock.patch.dict(os.environ, {"AUTOPSY_MEMORY_RELATION_LOG_PATH": str(relation_log)}):
+                payload = cli.build_diagnostics_command_payload(args)
+
+        log_payload = payload["logs"]["memory_relations"]
+        self.assertEqual(payload["selected_log"], "memory-relations")
+        self.assertEqual(log_payload["event_count"], 2)
+        self.assertEqual(len(log_payload["events"]), 1)
+        self.assertEqual(log_payload["events"][0]["event"], "missing_relation_target")
+        self.assertNotIn("relation_requests", log_payload["events"][0])
+        self.assertNotIn("graph-note:hidden-new", json.dumps(log_payload["events"][0]))
+        self.assertNotIn("memory_guard", payload["logs"])
+
+    def test_missing_memory_item_diagnostic_summary_is_sanitized(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["diagnostics", "--log", "memory-relations", "--limit", "1"])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            relation_log = Path(temp_dir) / "memory-relations.jsonl"
+            relation_log.write_text(
+                json.dumps(
+                    {
+                        "timestamp": "2026-06-21T00:02:00Z",
+                        "event": "missing_memory_item",
+                        "policy": "memory_relation_diagnostics_v1",
+                        "process_id": 456,
+                        "graph_name": "unit",
+                        "operation": "item",
+                        "stable_key": "graph-note:hidden",
+                        "missing_count": 1,
+                        "history_count": 1,
+                        "candidate_count": 2,
+                        "diagnostics": {
+                            "stable_key": "graph-note:hidden",
+                            "candidate_matches": [{"stable_key": "graph-note:nearby", "title": "Hidden title"}],
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch.dict(os.environ, {"AUTOPSY_MEMORY_RELATION_LOG_PATH": str(relation_log)}):
+                payload = cli.build_diagnostics_command_payload(args)
+
+        event = payload["logs"]["memory_relations"]["events"][0]
+        self.assertEqual(event["event"], "missing_memory_item")
+        self.assertEqual(event["operation"], "item")
+        self.assertEqual(event["history_count"], 1)
+        self.assertEqual(event["candidate_count"], 2)
+        self.assertNotIn("stable_key", event)
+        self.assertNotIn("diagnostics", event)
+        self.assertNotIn("graph-note:hidden", json.dumps(event))
+
+    def test_diagnostics_command_payload_includes_memory_guard_generations(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["diagnostics", "--log", "memory-guard", "--limit", "1"])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            guard_log = Path(temp_dir) / "memory-guard.jsonl"
+            guard_log.write_text(
+                json.dumps(
+                    {
+                        "timestamp": "2026-06-21T00:00:00Z",
+                        "event": "rollback_detected",
+                        "policy": cli.MEMORY_DATABASE_GUARD_POLICY,
+                        "process_id": 789,
+                        "graph_name": "unit",
+                        "graph_generation": 4,
+                        "sidecar_generation": 7,
+                        "sidecar_generation_source": "graph",
+                        "sidecar_database_generation": 7,
+                        "sidecar_path": str(Path(temp_dir) / "autopsy-memory.db.guard.json"),
+                        "lite_path": str(Path(temp_dir) / "autopsy-memory.db"),
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch.dict(os.environ, {"AUTOPSY_MEMORY_GUARD_LOG_PATH": str(guard_log)}):
+                payload = cli.build_diagnostics_command_payload(args)
+
+        event = payload["logs"]["memory_guard"]["events"][0]
+        self.assertEqual(event["event"], "rollback_detected")
+        self.assertEqual(event["graph_name"], "unit")
+        self.assertEqual(event["graph_generation"], 4)
+        self.assertEqual(event["sidecar_generation"], 7)
+        self.assertIn("sidecar_path", event)
+        self.assertNotIn("memory_relations", payload["logs"])
 
     def test_doctor_parser_accepts_worker_cleanup(self):
         parser = cli.build_parser()
@@ -1245,6 +1899,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "write_quality_blocks_write": cli.write_quality_blocks_write,
             "create_graph_note_payload": cli.create_graph_note_payload,
             "refresh_activity_snapshot": cli.refresh_activity_snapshot,
+            "maybe_auto_backup_after_write": cli.maybe_auto_backup_after_write,
         }
         try:
             cli.open_workspace_graph = lambda _args: (cli, {"root_path": "/tmp/memory-root"}, {}, Graph())
@@ -1258,6 +1913,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
 
             cli.create_graph_note_payload = fake_create_graph_note_payload
             cli.refresh_activity_snapshot = lambda *_args, **_kwargs: None
+            cli.maybe_auto_backup_after_write = lambda *_args, **_kwargs: {"status": "skipped", "reason": "unit"}
             stream = io.StringIO()
             with contextlib.redirect_stdout(stream):
                 cli.cmd_create_note(args)
@@ -1268,54 +1924,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(captured["repository_root_path"], "/tmp/fresh-repo")
         payload = json.loads(stream.getvalue())
         self.assertEqual(payload["item"]["stableKey"], "graph-note:new")
-
-    def test_create_note_uses_current_codex_thread_for_write_attribution(self):
-        parser = cli.build_parser()
-        args = parser.parse_args([
-            "capture-outcome",
-            "--outcome",
-            "decision",
-            "--title",
-            "Thread write",
-            "--content",
-            "This write should attach to the current Codex context graph thread.",
-            "--no-relations-ok",
-        ])
-        captured: dict[str, object] = {}
-
-        class Graph:
-            pass
-
-        originals = {
-            "open_workspace_graph": cli.open_workspace_graph,
-            "build_write_quality_payload": cli.build_write_quality_payload,
-            "write_quality_blocks_write": cli.write_quality_blocks_write,
-            "create_graph_note_payload": cli.create_graph_note_payload,
-            "refresh_activity_snapshot": cli.refresh_activity_snapshot,
-            "current_write_thread_id": cli.current_write_thread_id,
-        }
-        try:
-            cli.open_workspace_graph = lambda _args: (cli, {"root_path": "/tmp/memory-root"}, {}, Graph())
-            cli.build_write_quality_payload = lambda *_args, **_kwargs: {"warnings": [], "complete": True}
-            cli.write_quality_blocks_write = lambda _quality: False
-            cli.current_write_thread_id = lambda explicit_thread_id=None: str(explicit_thread_id or "") or "session-actual"
-
-            def fake_create_graph_note_payload(*_args, **kwargs):
-                captured.update(kwargs)
-                return {"item": {"stableKey": "graph-note:new"}}
-
-            cli.create_graph_note_payload = fake_create_graph_note_payload
-            cli.refresh_activity_snapshot = lambda *_args, **_kwargs: None
-            stream = io.StringIO()
-            with contextlib.redirect_stdout(stream):
-                cli.cmd_create_note(args)
-        finally:
-            for name, value in originals.items():
-                setattr(cli, name, value)
-
-        self.assertEqual(captured["thread_id"], "session-actual")
-        payload = json.loads(stream.getvalue())
-        self.assertEqual(payload["item"]["stableKey"], "graph-note:new")
+        self.assertEqual(payload["auto_backup"]["status"], "skipped")
 
     def test_create_graph_note_payload_ensures_fresh_repository_node_and_links_note(self):
         class Result:
@@ -1426,103 +2035,315 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(request["scope"], "repo")
         self.assertEqual(request["repo"], "/tmp/fresh-repo")
 
-    def test_mcp_consult_does_not_record_generic_context_graph_event_when_thread_id_is_present(self):
-        calls: list[tuple[str, dict]] = []
-        original_worker_request = mcp_bridge.worker_request
-        try:
-            def fake_worker_request(endpoint, payload, *args, **kwargs):
-                calls.append((endpoint, payload))
-                if endpoint == "/memory/consult":
-                    return {
-                        "route": "hybrid",
-                        "hits": [{"stable_key": "graph-note:one"}],
-                        "items": [{"stable_key": "graph-note:one"}],
-                        "workflow": {"status": "ok", "complete": True},
-                    }
-                return {"event": payload["request"]}
-
-            mcp_bridge.worker_request = fake_worker_request
-            payload = mcp_bridge.tool_consult({"thread_id": "thread-1", "query": "release memory"})
-        finally:
-            mcp_bridge.worker_request = original_worker_request
-
-        self.assertEqual(payload["route"], "hybrid")
-        self.assertEqual([endpoint for endpoint, _payload in calls], ["/memory/consult"])
-
-    def test_mcp_create_note_does_not_record_generic_context_graph_event_when_thread_id_is_present(self):
-        calls: list[tuple[str, dict]] = []
-        original_worker_request = mcp_bridge.worker_request
-        try:
-            def fake_worker_request(endpoint, payload, *args, **kwargs):
-                calls.append((endpoint, payload))
-                if endpoint == "/memory/graph/note":
-                    return {"item": {"stableKey": "graph-note:new"}}
-                return {"event": payload["request"]}
-
-            mcp_bridge.worker_request = fake_worker_request
-            result = mcp_bridge.tool_create_note({
-                "thread_id": "thread-1",
-                "kind": "attempt",
-                "title": "Repo write",
-                "content": "This write should show in the graph.",
-            })
-        finally:
-            mcp_bridge.worker_request = original_worker_request
-
-        self.assertEqual(result["item"]["stableKey"], "graph-note:new")
-        self.assertEqual([endpoint for endpoint, _payload in calls], ["/memory/graph/note"])
-
-    def test_mcp_context_graph_event_records_allowlisted_command_event(self):
+    def test_mcp_health_forwards_repo_context(self):
         captured: dict[str, object] = {}
         original_worker_request = mcp_bridge.worker_request
         try:
-            def fake_worker_request(endpoint, payload, *args, **kwargs):
+            def fake_worker_request(endpoint, payload):
                 captured["endpoint"] = endpoint
                 captured["payload"] = payload
-                return {"ok": True, "event": payload["request"]}
+                return {"ok": False, "workflow": {"status": "rollback_detected"}}
 
             mcp_bridge.worker_request = fake_worker_request
-            with temporary_context_graph_settings({"enabled": True, "mode": "cli"}):
-                result = mcp_bridge.tool_context_graph_event({
-                    "thread_id": "thread-1",
-                    "command": "rg context-event src/autopsy_memory",
-                    "metadata": ["tool=rg", "{\"line\": 42}"],
-                })
+            result = mcp_bridge.tool_health({"repo": "/tmp/fresh-repo"})
         finally:
             mcp_bridge.worker_request = original_worker_request
 
-        self.assertTrue(result["ok"])
-        self.assertEqual(captured["endpoint"], "/context-graph/events")
-        request = captured["payload"]["request"]
-        self.assertEqual(request["thread_id"], "thread-1")
-        self.assertEqual(request["event_type"], "command")
-        self.assertEqual(request["title"], "rg context-event src/autopsy_memory")
-        self.assertEqual(request["content"], "rg context-event src/autopsy_memory")
-        self.assertEqual(request["metadata"]["command"], "rg context-event src/autopsy_memory")
-        self.assertEqual(request["metadata"]["capture"], "command_only")
-        self.assertNotIn("tool", request["metadata"])
-        self.assertNotIn("line", request["metadata"])
+        self.assertEqual(result["workflow"]["status"], "rollback_detected")
+        self.assertEqual(captured["endpoint"], "/memory/health")
+        self.assertEqual(captured["payload"]["request"], {"repo": "/tmp/fresh-repo"})
 
-    def test_mcp_context_graph_event_skips_non_allowlisted_command(self):
-        calls: list[tuple[str, dict]] = []
+    def test_mcp_diagnostics_forwards_log_selection_without_falkor_context(self):
+        captured: dict[str, object] = {}
         original_worker_request = mcp_bridge.worker_request
         try:
-            def fake_worker_request(endpoint, payload, *args, **kwargs):
-                calls.append((endpoint, payload))
-                return {"ok": True, "event": payload["request"]}
+            def fake_worker_request(endpoint, payload):
+                captured["endpoint"] = endpoint
+                captured["payload"] = payload
+                return {"workflow": {"status": "ok"}}
 
             mcp_bridge.worker_request = fake_worker_request
-            with temporary_context_graph_settings({"enabled": True, "mode": "cli"}):
-                result = mcp_bridge.tool_context_graph_event({
-                    "thread_id": "thread-1",
-                    "command": "ls -la",
-                })
+            result = mcp_bridge.tool_diagnostics({"log": "memory_guard", "limit": 2})
         finally:
             mcp_bridge.worker_request = original_worker_request
 
-        self.assertEqual(calls, [])
-        self.assertTrue(result["skipped"])
-        self.assertEqual(result["reason"], "command_not_allowlisted")
+        self.assertEqual(result["workflow"]["status"], "ok")
+        self.assertEqual(captured["endpoint"], "/memory/diagnostics")
+        self.assertEqual(captured["payload"]["request"], {"log": "memory-guard", "limit": 2})
+
+    def test_direct_consult_reports_weak_signals_for_relationship_candidates(self):
+        class Tool:
+            STATUS_WINDOW_DAYS_DEFAULT = 21
+
+            def build_read_workflow(self, *_args, **_kwargs):
+                return {"status": "empty", "complete": False}
+
+        args = types.SimpleNamespace(
+            query="relationship repair",
+            query_text=None,
+            no_worker=True,
+            limit=5,
+            inspect_limit=3,
+            route="hybrid",
+            current_only=True,
+            scope="system",
+            kind=[],
+            memory_type=[],
+            tag=[],
+            namespace=[],
+            metadata=[],
+            filter_json=[],
+            as_of="",
+            min_fact_rating=None,
+            repo=None,
+            repository_root_path=None,
+        )
+        consult_payload = {
+            "hits": [],
+            "items": [],
+            "relationship_candidate_hits": [
+                {
+                    "stable_key": "graph-note:related",
+                    "kind": "attempt",
+                    "title": "Related repair attempt",
+                }
+            ],
+        }
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "open_workspace_graph", return_value=(Tool(), {"root_path": "/tmp/autopsy"}, {}, object())),
+            mock.patch.object(cli, "build_consult_payload", return_value=consult_payload),
+            mock.patch.object(cli, "refresh_activity_snapshot", return_value={}),
+            contextlib.redirect_stdout(stream),
+        ):
+            cli.cmd_consult(args)
+
+        payload = json.loads(stream.getvalue())
+        self.assertEqual(payload["workflow"]["status"], "weak_signals_only")
+        self.assertFalse(payload["workflow"]["complete"])
+        self.assertEqual(payload["relationship_candidate_hits"][0]["stable_key"], "graph-note:related")
+
+    def test_mcp_repair_embedded_snapshot_plan_forwards_safe_preview_options(self):
+        captured: dict[str, object] = {}
+        original_worker_request = mcp_bridge.worker_request
+        try:
+            def fake_worker_request(endpoint, payload):
+                captured["endpoint"] = endpoint
+                captured["payload"] = payload
+                return {"dry_run": True, "mcp_safety": {"mutations_allowed": False}}
+
+            mcp_bridge.worker_request = fake_worker_request
+            result = mcp_bridge.tool_repair_embedded_snapshot_plan(
+                {
+                    "lite_path": "/tmp/autopsy.db",
+                    "restore_latest_backup": True,
+                    "backup_limit": 3,
+                    "include_operational": True,
+                }
+            )
+        finally:
+            mcp_bridge.worker_request = original_worker_request
+
+        self.assertTrue(result["dry_run"])
+        self.assertEqual(captured["endpoint"], "/memory/repair-embedded-snapshot/plan")
+        request = captured["payload"]["request"]
+        self.assertEqual(
+            request,
+            {
+                "backup_limit": 3,
+                "lite_path": "/tmp/autopsy.db",
+                "restore_latest_backup": True,
+                "include_operational": True,
+            },
+        )
+        self.assertNotIn("yes", request)
+        self.assertNotIn("accept_data_loss", request)
+        self.assertNotIn("salvage_output", request)
+        self.assertNotIn("skip_cleanup_workers", request)
+
+    def test_mcp_repair_embedded_snapshot_plan_rejects_conflicting_restore_selection(self):
+        with self.assertRaisesRegex(mcp_bridge.BridgeError, "mutually exclusive"):
+            mcp_bridge.tool_repair_embedded_snapshot_plan(
+                {
+                    "restore_backup": "/tmp/backup.json",
+                    "restore_latest_backup": True,
+                }
+            )
+
+    def test_mcp_feedback_forwards_rating_note_and_source(self):
+        captured: dict[str, object] = {}
+        original_worker_request = mcp_bridge.worker_request
+        try:
+            def fake_worker_request(endpoint, payload):
+                captured["endpoint"] = endpoint
+                captured["payload"] = payload
+                return {"ok": True}
+
+            mcp_bridge.worker_request = fake_worker_request
+            result = mcp_bridge.tool_feedback(
+                {
+                    "stable_key": "graph-note:abc",
+                    "rating": "useful",
+                    "note": "used during relation recovery",
+                    "source": "unit-test",
+                }
+            )
+        finally:
+            mcp_bridge.worker_request = original_worker_request
+
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(captured["endpoint"], "/memory/feedback")
+        request = captured["payload"]["request"]
+        self.assertEqual(request["stable_key"], "graph-note:abc")
+        self.assertEqual(request["rating"], "useful")
+        self.assertEqual(request["note"], "used during relation recovery")
+        self.assertEqual(request["source"], "unit-test")
+
+    def test_mcp_consolidate_session_forwards_draft_and_write_options(self):
+        captured: dict[str, object] = {}
+        original_worker_request = mcp_bridge.worker_request
+        try:
+            def fake_worker_request(endpoint, payload):
+                captured["endpoint"] = endpoint
+                captured["payload"] = payload
+                return {"ok": True}
+
+            mcp_bridge.worker_request = fake_worker_request
+            result = mcp_bridge.tool_consolidate_session(
+                {
+                    "stable_key": "session-import:abc",
+                    "kind": "procedure",
+                    "title": "Release process",
+                    "max_events": 12,
+                    "write": True,
+                }
+            )
+        finally:
+            mcp_bridge.worker_request = original_worker_request
+
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(captured["endpoint"], "/memory/consolidate-session")
+        request = captured["payload"]["request"]
+        self.assertEqual(request["stable_key"], "session-import:abc")
+        self.assertEqual(request["kind"], "procedure")
+        self.assertEqual(request["title"], "Release process")
+        self.assertEqual(request["max_events"], 12)
+        self.assertTrue(request["write"])
+
+    def test_mcp_import_session_defaults_to_dry_run_and_forwards_write_options(self):
+        captured: list[dict[str, object]] = []
+        original_worker_request = mcp_bridge.worker_request
+        try:
+            def fake_worker_request(endpoint, payload):
+                captured.append({"endpoint": endpoint, "payload": payload})
+                return {"ok": True, "endpoint": endpoint}
+
+            mcp_bridge.worker_request = fake_worker_request
+            dry_run_result = mcp_bridge.tool_import_session(
+                {
+                    "path": "/tmp/session.jsonl",
+                    "source": "codex-jsonl",
+                    "max_events": 25,
+                    "repo": "/tmp/repo",
+                }
+            )
+            write_result = mcp_bridge.tool_import_session(
+                {
+                    "path": "/tmp/session.jsonl",
+                    "title": "Imported Session",
+                    "source": "codex-jsonl",
+                    "max_events": 10,
+                    "dry_run": False,
+                    "repository_root_path": "/tmp/repo",
+                }
+            )
+        finally:
+            mcp_bridge.worker_request = original_worker_request
+
+        self.assertEqual(dry_run_result["endpoint"], "/memory/import-session")
+        self.assertEqual(write_result["endpoint"], "/memory/import-session")
+        self.assertEqual([entry["endpoint"] for entry in captured], ["/memory/import-session", "/memory/import-session"])
+        self.assertEqual(
+            captured[0]["payload"]["request"],
+            {
+                "path": "/tmp/session.jsonl",
+                "title": "",
+                "source": "codex-jsonl",
+                "max_events": 25,
+                "dry_run": True,
+                "repo": "/tmp/repo",
+            },
+        )
+        self.assertEqual(
+            captured[1]["payload"]["request"],
+            {
+                "path": "/tmp/session.jsonl",
+                "title": "Imported Session",
+                "source": "codex-jsonl",
+                "max_events": 10,
+                "dry_run": False,
+                "repository_root_path": "/tmp/repo",
+            },
+        )
+
+    def test_mcp_lifecycle_tools_forward_snapshot_expire_and_pin_requests(self):
+        captured: list[dict[str, object]] = []
+        original_worker_request = mcp_bridge.worker_request
+        try:
+            def fake_worker_request(endpoint, payload):
+                captured.append({"endpoint": endpoint, "payload": payload})
+                return {"ok": True, "endpoint": endpoint}
+
+            mcp_bridge.worker_request = fake_worker_request
+            snapshot_result = mcp_bridge.tool_snapshot({"stable_key": "graph-note:abc", "limit": 7})
+            expire_result = mcp_bridge.tool_expire_item(
+                {
+                    "stable_key": "graph-note:abc",
+                    "expires_at": "2026-07-01T00:00:00Z",
+                    "reason": "superseded",
+                }
+            )
+            pin_result = mcp_bridge.tool_pin_item(
+                {
+                    "stable_key": "graph-note:abc",
+                    "label": "core",
+                    "reason": "always relevant",
+                    "description": "Use when planning releases.",
+                    "block_limit": 1200,
+                    "read_only": False,
+                    "shared": True,
+                }
+            )
+        finally:
+            mcp_bridge.worker_request = original_worker_request
+
+        self.assertEqual(snapshot_result["endpoint"], "/memory/snapshot")
+        self.assertEqual(expire_result["endpoint"], "/memory/expire")
+        self.assertEqual(pin_result["endpoint"], "/memory/pin")
+        self.assertEqual([entry["endpoint"] for entry in captured], ["/memory/snapshot", "/memory/expire", "/memory/pin"])
+        self.assertEqual(captured[0]["payload"]["request"], {"stable_key": "graph-note:abc", "limit": 7})
+        self.assertEqual(
+            captured[1]["payload"]["request"],
+            {
+                "stable_key": "graph-note:abc",
+                "expires_at": "2026-07-01T00:00:00Z",
+                "reason": "superseded",
+                "clear": False,
+            },
+        )
+        self.assertEqual(
+            captured[2]["payload"]["request"],
+            {
+                "stable_key": "graph-note:abc",
+                "label": "core",
+                "reason": "always relevant",
+                "description": "Use when planning releases.",
+                "clear": False,
+                "block_limit": 1200,
+                "read_only": False,
+                "shared": True,
+            },
+        )
 
     def test_worker_process_records_filters_by_info_file(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1635,7 +2456,189 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(graph.generation, 1)
         self.assertEqual(graph.save_calls, 1)
         self.assertEqual(sidecar["generation"], 1)
+        self.assertEqual(sidecar["schema_version"], 2)
+        self.assertEqual(sidecar["graphs"]["unit"]["generation"], 1)
         self.assertEqual(sidecar["policy"], cli.MEMORY_DATABASE_GUARD_POLICY)
+
+    def test_guard_sidecar_tracks_generations_per_graph_name(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lite_path = str(Path(temp_dir) / "autopsy-memory.db")
+            first = cli.write_memory_database_guard_sidecar(
+                lite_path,
+                graph_name="graph_a",
+                generation=2,
+                updated_at="2026-06-11T00:00:00Z",
+            )
+            second = cli.write_memory_database_guard_sidecar(
+                lite_path,
+                graph_name="graph_b",
+                generation=5,
+                updated_at="2026-06-12T00:00:00Z",
+            )
+            sidecar = cli.read_memory_database_guard_sidecar(lite_path)
+
+        self.assertEqual(first["schema_version"], 2)
+        self.assertEqual(second["generation"], 5)
+        self.assertEqual(sidecar["generation"], 5)
+        self.assertEqual(sidecar["graphs"]["graph_a"]["generation"], 2)
+        self.assertEqual(sidecar["graphs"]["graph_b"]["generation"], 5)
+
+    def test_guard_state_uses_current_graph_generation_not_database_max(self):
+        class Result:
+            def __init__(self, rows):
+                self.result_set = rows
+
+        class Graph:
+            name = "graph_a"
+
+            def query(self, query, params=None):
+                if "MATCH (guard:AutopsyMemoryGuard" in query and "RETURN coalesce(guard.generation, 0)" in query:
+                    return Result([[2]])
+                return Result([])
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lite_path = str(Path(temp_dir) / "autopsy-memory.db")
+            cli.write_memory_database_guard_sidecar(
+                lite_path,
+                graph_name="graph_a",
+                generation=2,
+                updated_at="2026-06-11T00:00:00Z",
+            )
+            cli.write_memory_database_guard_sidecar(
+                lite_path,
+                graph_name="graph_b",
+                generation=5,
+                updated_at="2026-06-12T00:00:00Z",
+            )
+            state = cli.assert_memory_database_guard_current(Graph(), lite_path, graph_name="graph_a")
+
+        self.assertTrue(state["ok"])
+        self.assertEqual(state["graph_generation"], 2)
+        self.assertEqual(state["sidecar_generation"], 2)
+        self.assertEqual(state["sidecar_database_generation"], 5)
+        self.assertEqual(state["sidecar_generation_source"], "graph")
+
+    def test_legacy_sidecar_for_other_graph_does_not_block_current_graph(self):
+        class Result:
+            def __init__(self, rows):
+                self.result_set = rows
+
+        class Graph:
+            name = "current_graph"
+
+            def query(self, query, params=None):
+                if "MATCH (guard:AutopsyMemoryGuard" in query and "RETURN coalesce(guard.generation, 0)" in query:
+                    return Result([[1]])
+                return Result([])
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lite_path = str(Path(temp_dir) / "autopsy-memory.db")
+            cli.write_json_atomic(
+                cli.memory_database_guard_sidecar_path(lite_path),
+                {
+                    "schema_version": 1,
+                    "policy": cli.MEMORY_DATABASE_GUARD_POLICY,
+                    "graph_name": "other_graph",
+                    "generation": 9,
+                    "updated_at": "2026-06-11T00:00:00Z",
+                },
+            )
+            state = cli.assert_memory_database_guard_current(Graph(), lite_path, graph_name="current_graph")
+
+        self.assertTrue(state["ok"])
+        self.assertEqual(state["sidecar_generation"], 0)
+        self.assertEqual(state["sidecar_database_generation"], 9)
+        self.assertEqual(state["sidecar_generation_source"], "legacy_other_graph_ignored")
+
+    def test_guard_check_waits_for_generation_lock_before_declaring_rollback(self):
+        class Result:
+            def __init__(self, rows):
+                self.result_set = rows
+
+        class Graph:
+            name = "unit"
+
+            def __init__(self):
+                self.generation = 1
+
+            def query(self, query, params=None):
+                if "MATCH (guard:AutopsyMemoryGuard" in query and "RETURN coalesce(guard.generation, 0)" in query:
+                    return Result([[self.generation]])
+                return Result([])
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lite_path = str(Path(temp_dir) / "autopsy-memory.db")
+            cli.write_memory_database_guard_sidecar(
+                lite_path,
+                graph_name="unit",
+                generation=2,
+                updated_at="2026-06-11T00:00:00Z",
+            )
+            graph = Graph()
+
+            @contextlib.contextmanager
+            def refresh_before_check(_lite_path):
+                graph.generation = 2
+                yield
+
+            with mock.patch.object(cli, "memory_database_guard_lock", refresh_before_check):
+                state = cli.assert_memory_database_guard_current(graph, lite_path, graph_name="unit")
+
+        self.assertTrue(state["ok"])
+        self.assertEqual(state["graph_generation"], 2)
+        self.assertEqual(state["sidecar_generation"], 2)
+
+    def test_guarded_mutation_uses_single_generation_lock_window(self):
+        class Result:
+            def __init__(self, rows):
+                self.result_set = rows
+
+        class Graph:
+            name = "unit"
+
+            def __init__(self):
+                self.generation = 0
+                self.user_mutations = 0
+                self.save_calls = 0
+                self.client = types.SimpleNamespace(save=lambda: setattr(self, "save_calls", self.save_calls + 1))
+
+            def query(self, query, params=None):
+                params = params or {}
+                if "MATCH (guard:AutopsyMemoryGuard" in query and "RETURN coalesce(guard.generation, 0)" in query:
+                    return Result([[self.generation]] if self.generation else [])
+                if "MATCH (guard:AutopsyMemoryGuard" in query and "RETURN guard.stable_key" in query:
+                    return Result([[cli.MEMORY_DATABASE_GUARD_STABLE_KEY]] if self.generation else [])
+                if "CREATE (:AutopsyMemoryGuard" in query or "SET guard.policy" in query:
+                    self.generation = int(params["generation"])
+                    return Result([])
+                self.user_mutations += 1
+                return Result([])
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lite_path = str(Path(temp_dir) / "autopsy-memory.db")
+            graph = Graph()
+            active = False
+            entries = 0
+
+            @contextlib.contextmanager
+            def non_reentrant_lock(_lite_path):
+                nonlocal active, entries
+                if active:
+                    raise AssertionError("generation guard lock was reacquired while already held")
+                active = True
+                entries += 1
+                try:
+                    yield
+                finally:
+                    active = False
+
+            with mock.patch.object(cli, "memory_database_guard_lock", non_reentrant_lock):
+                cli.GuardedFalkorGraph(graph, lite_path=lite_path, graph_name="unit").query("CREATE (:Probe)")
+
+        self.assertEqual(entries, 1)
+        self.assertEqual(graph.user_mutations, 1)
+        self.assertEqual(graph.generation, 1)
+        self.assertEqual(graph.save_calls, 1)
 
     def test_guarded_falkor_graph_blocks_rollback_before_read(self):
         class Result:
@@ -1668,11 +2671,14 @@ class AutopsyCLIContractTests(unittest.TestCase):
             graph = Graph()
 
             with mock.patch.dict(os.environ, {"AUTOPSY_MEMORY_GUARD_LOG_PATH": str(log_path)}):
-                with self.assertRaises(cli.MemoryDatabaseRollbackError):
+                with self.assertRaises(cli.MemoryDatabaseRollbackError) as raised:
                     cli.guarded_falkor_graph(graph, lite_path=lite_path, graph_name="unit").query("RETURN 1")
             diagnostics = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
 
         self.assertEqual(graph.user_queries, 0)
+        self.assertEqual(raised.exception.state["graph_name"], "unit")
+        self.assertEqual(raised.exception.state["graph_generation"], 2)
+        self.assertEqual(raised.exception.state["sidecar_generation"], 3)
         self.assertEqual(diagnostics[-1]["event"], "rollback_detected")
 
     def test_guarded_falkor_graph_blocks_rollback_before_mutation(self):
@@ -1764,6 +2770,435 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(client.client.shutdown_calls, [{"nosave": True, "save": False, "now": True, "force": True}])
         self.assertEqual(diagnostics[-1]["event"], "nosave_shutdown_due_to_rollback_risk")
 
+    def test_ensure_graph_closes_stale_embedded_snapshot_with_nosave_before_reraising(self):
+        class Result:
+            def __init__(self, rows):
+                self.result_set = rows
+
+        class Graph:
+            name = "unit"
+
+            def query(self, query, params=None):
+                if "MATCH (guard:AutopsyMemoryGuard" in query and "RETURN coalesce(guard.generation, 0)" in query:
+                    return Result([[1]])
+                return Result([])
+
+        events: list[dict[str, object]] = []
+        graph_names_seen: list[list[str]] = []
+
+        class InnerClient:
+            pidfile = "/tmp/autopsy-redislite.pid"
+
+            def shutdown(self, **kwargs):
+                events.append(kwargs)
+                graph_names_seen.append(sorted(cli._FALKORDB_LITE_GRAPH_NAMES.get(lite_path) or []))
+
+        class Client:
+            def __init__(self, _path, serverconfig=None):
+                self.client = InnerClient()
+
+            def select_graph(self, _graph_name):
+                return Graph()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lite_path = str(Path(temp_dir) / "autopsy-memory.db")
+            log_path = Path(temp_dir) / "memory-guard.jsonl"
+            cli.write_memory_database_guard_sidecar(
+                lite_path,
+                graph_name="unit",
+                generation=2,
+                updated_at="2026-06-11T00:00:00Z",
+            )
+            with (
+                mock.patch.object(cli, "load_falkordblite", return_value=Client),
+                mock.patch.dict(os.environ, {"AUTOPSY_MEMORY_GUARD_LOG_PATH": str(log_path)}),
+            ):
+                with self.assertRaises(cli.MemoryDatabaseRollbackError):
+                    cli.ensure_graph("127.0.0.1", 6381, "unit", lite_path=lite_path)
+
+        self.assertEqual(events, [{"nosave": True, "save": False, "now": True, "force": True}])
+        self.assertEqual(graph_names_seen, [["unit"]])
+        self.assertIsNone(cli._FALKORDB_LITE_CLIENTS.get(lite_path))
+
+    def test_repair_embedded_snapshot_defaults_to_dry_run_without_confirmation(self):
+        parser = cli.build_parser()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            support_dir = Path(temp_dir) / "Support"
+            backup_dir = support_dir / "Backups"
+            backup_dir.mkdir(parents=True)
+            backup_path = backup_dir / "autopsy-memory-20260621T000000Z.json"
+            backup_path.write_text(
+                json.dumps({
+                    "schema_version": 1,
+                    "exported_at": "2026-06-21T00:00:00Z",
+                    "autopsy_version": "0.0-test",
+                    "graph_name": "unit",
+                    "items": [
+                        {
+                            "stable_key": "graph-note:backup",
+                            "kind": "decision",
+                            "title": "Backup memory",
+                            "content": "Backup memory content.",
+                        }
+                    ],
+                    "relations": [],
+                    "structural_edges": [],
+                }),
+                encoding="utf-8",
+            )
+            workspace = Path(temp_dir) / "MemoryRoot"
+            lite_path = Path(temp_dir) / "FalkorDB" / "autopsy-memory.db"
+            lite_path.parent.mkdir(parents=True)
+            lite_path.write_text("stale-rdb", encoding="utf-8")
+            Path(str(lite_path) + ".settings").write_text("socket=/tmp/stale.sock", encoding="utf-8")
+            args = parser.parse_args([
+                "--workspace",
+                str(workspace),
+                "repair-embedded-snapshot",
+                "--lite-path",
+                str(lite_path),
+            ])
+            graph_name, _workspace = cli.embedded_snapshot_repair_graph_name(args)
+            cli.write_memory_database_guard_sidecar(
+                lite_path,
+                graph_name=graph_name,
+                generation=9,
+                updated_at="2026-06-21T00:00:00Z",
+            )
+
+            with mock.patch.object(cli, "APP_SUPPORT_DIR_DEFAULT", support_dir):
+                payload = cli.build_embedded_snapshot_repair_payload(args)
+
+            self.assertTrue(payload["dry_run"])
+            self.assertTrue(payload["requires_confirmation"])
+            self.assertEqual(payload["workflow"]["status"], "dry_run")
+            self.assertEqual(payload["guard"]["sidecar_generation"], 9)
+            self.assertEqual(payload["recovery_reference_at"], "2026-06-21T00:00:00Z")
+            self.assertEqual(payload["backup_candidates"]["count"], 1)
+            self.assertTrue(payload["backup_candidates"]["candidates"][0]["valid"])
+            self.assertFalse(payload["backup_candidates"]["candidates"][0]["recovery_risk"]["stale"])
+            self.assertIsNone(payload["restore_backup"])
+            self.assertTrue(lite_path.exists())
+            self.assertTrue(Path(str(lite_path) + ".settings").exists())
+            self.assertTrue(cli.memory_database_guard_sidecar_path(lite_path).exists())
+
+    def test_repair_embedded_snapshot_can_select_latest_valid_backup(self):
+        parser = cli.build_parser()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            support_dir = Path(temp_dir) / "Support"
+            backup_dir = support_dir / "Backups"
+            backup_dir.mkdir(parents=True)
+            invalid_backup = backup_dir / "autopsy-memory-20260622T000000Z.json"
+            old_backup = backup_dir / "autopsy-memory-20260620T000000Z.json"
+            latest_backup = backup_dir / "autopsy-memory-20260621T000000Z.json"
+            invalid_backup.write_text(json.dumps({"schema_version": 1, "items": "not-a-list"}), encoding="utf-8")
+            old_backup.write_text(
+                json.dumps({
+                    "schema_version": 1,
+                    "items": [{"stable_key": "graph-note:old", "kind": "decision", "title": "Old", "content": "Old."}],
+                    "relations": [],
+                }),
+                encoding="utf-8",
+            )
+            latest_backup.write_text(
+                json.dumps({
+                    "schema_version": 1,
+                    "exported_at": "2026-06-20T00:00:00Z",
+                    "items": [{"stable_key": "graph-note:new", "kind": "decision", "title": "New", "content": "New."}],
+                    "relations": [],
+                }),
+                encoding="utf-8",
+            )
+            os.utime(old_backup, (1_800_000_000, 1_800_000_000))
+            os.utime(latest_backup, (1_800_000_100, 1_800_000_100))
+            os.utime(invalid_backup, (1_800_000_200, 1_800_000_200))
+            workspace = Path(temp_dir) / "MemoryRoot"
+            lite_path = Path(temp_dir) / "FalkorDB" / "autopsy-memory.db"
+            lite_path.parent.mkdir(parents=True)
+            lite_path.write_text("stale-rdb", encoding="utf-8")
+            args = parser.parse_args([
+                "--workspace",
+                str(workspace),
+                "repair-embedded-snapshot",
+                "--lite-path",
+                str(lite_path),
+                "--restore-latest-backup",
+            ])
+            graph_name, _workspace = cli.embedded_snapshot_repair_graph_name(args)
+            cli.write_memory_database_guard_sidecar(
+                lite_path,
+                graph_name=graph_name,
+                generation=10,
+                updated_at="2026-06-21T00:00:00Z",
+            )
+
+            with mock.patch.object(cli, "APP_SUPPORT_DIR_DEFAULT", support_dir):
+                payload = cli.build_embedded_snapshot_repair_payload(args)
+
+            self.assertTrue(payload["dry_run"])
+            self.assertEqual(payload["restore_backup_source"], "latest_valid_backup")
+            self.assertEqual(payload["restore_backup"]["path"], str(latest_backup))
+            self.assertEqual(payload["restore_backup"]["counts"]["restorable_items"], 1)
+            self.assertEqual(payload["restore_backup"]["recovery_risk"]["status"], "stale")
+            self.assertEqual(payload["restore_backup"]["recovery_risk"]["level"], "low")
+            self.assertEqual(payload["restore_backup"]["recovery_risk"]["staleness_seconds"], 86400)
+            self.assertEqual(
+                [candidate["path"] for candidate in payload["backup_candidates"]["candidates"]],
+                [str(invalid_backup), str(latest_backup), str(old_backup)],
+            )
+            self.assertFalse(payload["backup_candidates"]["candidates"][0]["valid"])
+            self.assertEqual(payload["backup_candidates"]["candidates"][0]["error"], "items_must_be_array")
+
+    def test_repair_embedded_snapshot_can_salvage_stale_snapshot_without_save(self):
+        parser = cli.build_parser()
+        shutdown_events: list[dict[str, object]] = []
+
+        class Result:
+            def __init__(self, rows):
+                self.result_set = rows
+
+        class Graph:
+            name = "unit"
+
+            def query(self, query, params=None):
+                if "MATCH (guard:AutopsyMemoryGuard" in query:
+                    return Result([[3]])
+                if "MATCH (node:MemoryNode)" in query:
+                    return Result([
+                        [
+                            1,
+                            "graph-note:salvage",
+                            "decision",
+                            "Salvaged memory",
+                            "Salvage summary",
+                            "Salvage content",
+                            "graph_note",
+                            1.0,
+                            "2026-06-21T00:00:00Z",
+                            "2026-06-21T00:00:00Z",
+                            "",
+                            "",
+                            "",
+                            "",
+                            "",
+                            "",
+                            "{}",
+                        ]
+                    ])
+                return Result([])
+
+        class InnerClient:
+            pidfile = "/tmp/autopsy-redislite.pid"
+
+            def shutdown(self, **kwargs):
+                shutdown_events.append(kwargs)
+
+        class Client:
+            def __init__(self, _path, serverconfig=None):
+                self.client = InnerClient()
+
+            def select_graph(self, _graph_name):
+                return Graph()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            support_dir = Path(temp_dir) / "Support"
+            workspace = Path(temp_dir) / "MemoryRoot"
+            lite_path = Path(temp_dir) / "FalkorDB" / "autopsy-memory.db"
+            output_path = Path(temp_dir) / "salvage.json"
+            lite_path.parent.mkdir(parents=True)
+            lite_path.write_text("stale-rdb", encoding="utf-8")
+            args = parser.parse_args([
+                "--workspace",
+                str(workspace),
+                "repair-embedded-snapshot",
+                "--lite-path",
+                str(lite_path),
+                "--graph-name",
+                "autopsy_memory",
+                "--salvage-output",
+                str(output_path),
+            ])
+            graph_name, _workspace = cli.embedded_snapshot_repair_graph_name(args)
+            cli.write_memory_database_guard_sidecar(
+                lite_path,
+                graph_name=graph_name,
+                generation=7,
+                updated_at="2026-06-21T01:00:00Z",
+            )
+
+            with (
+                mock.patch.object(cli, "APP_SUPPORT_DIR_DEFAULT", support_dir),
+                mock.patch.object(cli, "load_falkordblite", return_value=Client),
+                mock.patch.object(cli, "configure_falkordblite_runtime", return_value=None),
+            ):
+                payload = cli.build_embedded_snapshot_repair_payload(args)
+            exported = json.loads(output_path.read_text(encoding="utf-8"))
+
+            self.assertTrue(payload["dry_run"])
+            self.assertEqual(payload["salvage"]["export"]["written"], str(output_path))
+            self.assertTrue(payload["salvage"]["export"]["closed_with_nosave"])
+            self.assertEqual(payload["salvage"]["export"]["guard_state"]["graph_generation"], 3)
+            self.assertEqual(payload["salvage"]["export"]["guard_state"]["sidecar_generation"], 7)
+            self.assertEqual(exported["counts"]["items"], 1)
+            self.assertEqual(exported["items"][0]["stable_key"], "graph-note:salvage")
+            self.assertEqual(exported["salvage"]["guard_state"]["sidecar_generation"], 7)
+
+        self.assertEqual(shutdown_events, [{"nosave": True, "save": False, "now": True, "force": True}])
+
+    def test_repair_embedded_snapshot_quarantines_files_after_explicit_confirmation(self):
+        parser = cli.build_parser()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            support_dir = Path(temp_dir) / "Support"
+            workspace = Path(temp_dir) / "MemoryRoot"
+            lite_path = Path(temp_dir) / "FalkorDB" / "autopsy-memory.db"
+            lite_path.parent.mkdir(parents=True)
+            lite_path.write_text("stale-rdb", encoding="utf-8")
+            settings_path = Path(str(lite_path) + ".settings")
+            settings_path.write_text("socket=/tmp/stale.sock", encoding="utf-8")
+            args = parser.parse_args([
+                "--workspace",
+                str(workspace),
+                "repair-embedded-snapshot",
+                "--lite-path",
+                str(lite_path),
+                "--yes",
+                "--accept-data-loss",
+                "--skip-salvage",
+                "--skip-cleanup-workers",
+            ])
+            graph_name, _workspace = cli.embedded_snapshot_repair_graph_name(args)
+            sidecar_path = cli.memory_database_guard_sidecar_path(lite_path)
+            cli.write_memory_database_guard_sidecar(
+                lite_path,
+                graph_name=graph_name,
+                generation=12,
+                updated_at="2026-06-21T00:00:00Z",
+            )
+
+            with mock.patch.object(cli, "APP_SUPPORT_DIR_DEFAULT", support_dir):
+                payload = cli.build_embedded_snapshot_repair_payload(args)
+            manifest_path = Path(payload["bundle"]["manifest"])
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+            self.assertFalse(payload["dry_run"])
+            self.assertEqual(payload["workflow"]["status"], "quarantined")
+            self.assertTrue(payload["workflow"]["complete"])
+            self.assertFalse(lite_path.exists())
+            self.assertFalse(settings_path.exists())
+            self.assertFalse(sidecar_path.exists())
+            self.assertTrue((manifest_path.parent / lite_path.name).exists())
+            self.assertTrue((manifest_path.parent / settings_path.name).exists())
+            self.assertTrue((manifest_path.parent / sidecar_path.name).exists())
+            self.assertEqual(manifest["guard"]["sidecar_generation"], 12)
+            self.assertEqual(manifest["salvage"]["source"], "skipped")
+            self.assertTrue(manifest["salvage"]["skipped"])
+            self.assertEqual(manifest["cleanup"]["reason"], "skip_cleanup_workers")
+
+    def test_repair_embedded_snapshot_auto_salvages_before_confirmed_quarantine(self):
+        parser = cli.build_parser()
+        shutdown_events: list[dict[str, object]] = []
+
+        class Result:
+            def __init__(self, rows):
+                self.result_set = rows
+
+        class Graph:
+            name = "unit"
+
+            def query(self, query, params=None):
+                if "MATCH (guard:AutopsyMemoryGuard" in query:
+                    return Result([[5]])
+                if "MATCH (node:MemoryNode)" in query:
+                    return Result([
+                        [
+                            1,
+                            "graph-note:auto-salvage",
+                            "attempt",
+                            "Auto salvaged memory",
+                            "Auto salvage summary",
+                            "Auto salvage content",
+                            "graph_note",
+                            1.0,
+                            "2026-06-21T00:00:00Z",
+                            "2026-06-21T00:00:00Z",
+                            "",
+                            "",
+                            "",
+                            "",
+                            "",
+                            "",
+                            "{}",
+                        ]
+                    ])
+                return Result([])
+
+        class InnerClient:
+            pidfile = "/tmp/autopsy-redislite.pid"
+
+            def shutdown(self, **kwargs):
+                shutdown_events.append(kwargs)
+
+        class Client:
+            def __init__(self, _path, serverconfig=None):
+                self.client = InnerClient()
+
+            def select_graph(self, _graph_name):
+                return Graph()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            support_dir = Path(temp_dir) / "Support"
+            workspace = Path(temp_dir) / "MemoryRoot"
+            lite_path = Path(temp_dir) / "FalkorDB" / "autopsy-memory.db"
+            lite_path.parent.mkdir(parents=True)
+            lite_path.write_text("stale-rdb", encoding="utf-8")
+            settings_path = Path(str(lite_path) + ".settings")
+            settings_path.write_text("socket=/tmp/stale.sock", encoding="utf-8")
+            args = parser.parse_args([
+                "--workspace",
+                str(workspace),
+                "repair-embedded-snapshot",
+                "--lite-path",
+                str(lite_path),
+                "--graph-name",
+                "autopsy_memory",
+                "--yes",
+                "--accept-data-loss",
+                "--skip-cleanup-workers",
+            ])
+            graph_name, _workspace = cli.embedded_snapshot_repair_graph_name(args)
+            sidecar_path = cli.memory_database_guard_sidecar_path(lite_path)
+            cli.write_memory_database_guard_sidecar(
+                lite_path,
+                graph_name=graph_name,
+                generation=14,
+                updated_at="2026-06-21T02:00:00Z",
+            )
+
+            with (
+                mock.patch.object(cli, "APP_SUPPORT_DIR_DEFAULT", support_dir),
+                mock.patch.object(cli, "load_falkordblite", return_value=Client),
+                mock.patch.object(cli, "configure_falkordblite_runtime", return_value=None),
+            ):
+                payload = cli.build_embedded_snapshot_repair_payload(args)
+            manifest_path = Path(payload["bundle"]["manifest"])
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            salvage_path = Path(payload["salvage"]["export"]["written"])
+            exported = json.loads(salvage_path.read_text(encoding="utf-8"))
+
+            self.assertFalse(payload["dry_run"])
+            self.assertEqual(payload["salvage"]["source"], "automatic")
+            self.assertTrue(payload["salvage"]["automatic_on_confirmed_repair"])
+            self.assertTrue(payload["salvage"]["export"]["closed_with_nosave"])
+            self.assertEqual(exported["items"][0]["stable_key"], "graph-note:auto-salvage")
+            self.assertEqual(exported["salvage"]["guard_state"]["sidecar_generation"], 14)
+            self.assertEqual(manifest["salvage"]["export"]["written"], str(salvage_path))
+            self.assertFalse(lite_path.exists())
+            self.assertFalse(settings_path.exists())
+            self.assertFalse(sidecar_path.exists())
+            self.assertTrue((manifest_path.parent / lite_path.name).exists())
+
+        self.assertEqual(shutdown_events, [{"nosave": True, "save": False, "now": True, "force": True}])
+
     def test_redislite_lifecycle_payload_reports_excess_autopsy_processes(self):
         rows = [
             {"pid": 31, "command": "/pkg/redislite/bin/redis-server unixsocket:/tmp/autopsy-a/redis.socket"},
@@ -1837,15 +3272,26 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload, expected)
         lifecycle.assert_called_once_with(cleanup=True)
 
-    def test_shutdown_falkordb_lite_clients_closes_registered_clients(self):
-        closed: list[str] = []
+    def test_shutdown_falkordb_lite_clients_detaches_registered_clients_by_default(self):
+        events: list[str] = []
+
+        class Pool:
+            def __init__(self, name: str):
+                self.name = name
+
+            def disconnect(self):
+                events.append(f"disconnect:{self.name}")
 
         class FakeClient:
             def __init__(self, name: str):
                 self.name = name
+                self.client = types.SimpleNamespace(
+                    connection_pool=Pool(name),
+                    save=lambda: events.append(f"save:{name}"),
+                )
 
             def shutdown(self):
-                closed.append(self.name)
+                events.append(f"shutdown:{self.name}")
 
         previous = dict(cli._FALKORDB_LITE_CLIENTS)
         try:
@@ -1859,8 +3305,75 @@ class AutopsyCLIContractTests(unittest.TestCase):
             cli._FALKORDB_LITE_CLIENTS.clear()
             cli._FALKORDB_LITE_CLIENTS.update(previous)
 
-        self.assertEqual(sorted(closed), ["one", "two"])
+        self.assertEqual(sorted(events), ["disconnect:one", "disconnect:two", "save:one", "save:two"])
         self.assertEqual(cli._FALKORDB_LITE_CLIENTS, previous)
+
+    def test_close_falkordb_lite_client_can_terminate_when_explicitly_requested(self):
+        events: list[str] = []
+
+        class FakeClient:
+            def close(self):
+                events.append("close")
+
+        with mock.patch.dict(os.environ, {"AUTOPSY_FALKORDB_LITE_TERMINATE_ON_CLOSE": "1"}):
+            cli.close_falkordb_lite_client(FakeClient(), save=True)
+
+        self.assertEqual(events, ["close"])
+
+    def test_detach_falkordb_lite_client_disarms_redislite_cleanup_before_disconnect(self):
+        events: list[str] = []
+
+        class Pool:
+            def disconnect(self):
+                events.append("disconnect")
+
+        class InnerClient:
+            pidfile = "/tmp/autopsy-redislite.pid"
+            connection_pool = Pool()
+
+            def save(self):
+                events.append("save")
+
+        class Client:
+            client = InnerClient()
+
+        cli.close_falkordb_lite_client(Client(), save=True)
+
+        self.assertEqual(events, ["save", "disconnect"])
+        self.assertTrue(getattr(Client.client, "_async_managed"))
+        self.assertIsNone(Client.client.pidfile)
+
+    def test_close_falkordb_lite_client_disarms_cleanup_after_nosave_shutdown(self):
+        events: list[dict[str, object]] = []
+        disarmed_before_shutdown: list[bool] = []
+
+        class InnerClient:
+            pidfile = "/tmp/autopsy-redislite.pid"
+
+            def shutdown(self, **kwargs):
+                disarmed_before_shutdown.append(bool(getattr(self, "_async_managed", False)))
+                events.append(kwargs)
+                raise RuntimeError("connection closed during shutdown")
+
+        class Client:
+            client = InnerClient()
+
+        with self.assertRaises(RuntimeError):
+            cli.close_falkordb_lite_client(Client(), save=False)
+
+        self.assertEqual(events, [{"nosave": True, "save": False, "now": True, "force": True}])
+        self.assertEqual(disarmed_before_shutdown, [True])
+        self.assertTrue(getattr(Client.client, "_async_managed"))
+        self.assertIsNone(Client.client.pidfile)
+
+    def test_embedded_cli_shutdown_detach_probe_covers_default_runtime_policy(self):
+        with mock.patch.dict(os.environ, {"AUTOPSY_FALKORDB_LITE_TERMINATE_ON_CLOSE": "1", "AUTOPSY_EMBEDDED_DB_OWNER": "worker"}):
+            payload = cli.embedded_cli_shutdown_detach_probe()
+            self.assertEqual(os.environ["AUTOPSY_FALKORDB_LITE_TERMINATE_ON_CLOSE"], "1")
+            self.assertEqual(os.environ["AUTOPSY_EMBEDDED_DB_OWNER"], "worker")
+
+        self.assertTrue(payload["passed"])
+        self.assertEqual(payload["events"], ["save", "disconnect"])
 
     def test_cli_main_always_shuts_down_falkordb_lite_clients(self):
         stream = io.StringIO()
@@ -2115,6 +3628,29 @@ class AutopsyCLIContractTests(unittest.TestCase):
             {"relation": "refines", "target": "graph-note:abc"},
         ])
 
+    def test_relation_specs_unwrap_common_stable_key_wrappers(self):
+        specs = cli.relation_specs_from_mapping({
+            "refines": [
+                '"graph-note:abc"',
+                "`graph-note:abc`",
+                "sourceRef=graph-note:def",
+                '{"sourceRef":"graph-note:ghi"}',
+                '{"item":{"stableKey":"graph-note:jkl"}}',
+            ],
+        })
+        self.assertEqual(specs, [
+            {"relation": "refines", "target": "graph-note:abc"},
+            {"relation": "refines", "target": "graph-note:def"},
+            {"relation": "refines", "target": "graph-note:ghi"},
+            {"relation": "refines", "target": "graph-note:jkl"},
+        ])
+
+    def test_relation_target_normalization_fails_closed_when_ambiguous(self):
+        raw = "sourceRef=graph-note:one targetStableKey=graph-note:two"
+        self.assertEqual(cli.normalize_relation_target_stable_key(raw), raw)
+        specs = cli.relation_specs_from_mapping({"refines": [raw]})
+        self.assertEqual(specs, [{"relation": "refines", "target": raw}])
+
     def test_relation_specs_include_temporal_fact_window(self):
         specs = cli.relation_specs_from_mapping({
             "refines": ["graph-note:abc"],
@@ -2141,6 +3677,747 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "fact_rating": "0.9",
         })
         self.assertEqual(specs, [{"relation": "refines", "target": "graph-note:abc", "fact_rating": 0.9}])
+
+    def test_missing_relation_target_error_includes_actionable_diagnostics(self):
+        class Result:
+            def __init__(self, rows):
+                self.result_set = rows
+
+        class Graph:
+            name = "unit"
+
+            def query(self, query, params=None):
+                params = params or {}
+                if "MATCH (node:MemoryNode {stable_key: $stable_key})" in query:
+                    return Result([])
+                if "MATCH (event:MemoryHistoryEvent)" in query:
+                    return Result([
+                        [
+                            "memory-history:deleted",
+                            "DELETE",
+                            "2026-06-21T10:00:00Z",
+                            "2026-06-21T10:00:00Z",
+                            "",
+                            "",
+                            "[]",
+                            "{}",
+                            "{}",
+                            "cli",
+                        ]
+                    ])
+                if "CONTAINS $needle" in query:
+                    return Result([["graph-note:misspelled", "attempt", "Close candidate", "", "2026-06-21T10:01:00Z"]])
+                return Result([])
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_path = Path(temp_dir) / "memory-relations.jsonl"
+            with mock.patch.dict(os.environ, {"AUTOPSY_MEMORY_RELATION_LOG_PATH": str(log_path)}):
+                with self.assertRaises(ValueError) as raised:
+                    cli.relation_target_records(
+                        Graph(),
+                        [{"relation": "supersedes", "target": "graph-note:missing"}],
+                    )
+            diagnostics = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+
+        message = str(raised.exception)
+        self.assertIn("Memory relation target not found: graph-note:missing", message)
+        self.assertIn("--supersedes graph-note:missing", message)
+        self.assertIn("latest event is DELETE", message)
+        self.assertIn("candidate: graph-note:misspelled", message)
+        self.assertIn("autopsy history graph-note:missing", message)
+        self.assertIn("Do not retry with --no-relations-ok just to bypass this error", message)
+        self.assertNotIn("Graph relation target not found", message)
+        self.assertEqual(diagnostics[-1]["event"], "missing_relation_target")
+        self.assertEqual(diagnostics[-1]["graph_name"], "unit")
+        self.assertEqual(diagnostics[-1]["relation_requests"][0]["flag"], "--supersedes")
+        self.assertEqual(diagnostics[-1]["relation_requests"][0]["target"], "graph-note:missing")
+        self.assertEqual(diagnostics[-1]["diagnostics"][0]["history_events"][0]["event"], "DELETE")
+        self.assertEqual(diagnostics[-1]["diagnostics"][0]["candidate_matches"][0]["stable_key"], "graph-note:misspelled")
+
+    def test_relation_target_records_normalizes_wrapped_target_before_lookup(self):
+        class Result:
+            def __init__(self, rows=None):
+                self.result_set = rows or []
+
+        class Graph:
+            name = "unit"
+
+            def query(self, query, params=None):
+                params = params or {}
+                if "MATCH (node:MemoryNode {stable_key: $stable_key})" in query:
+                    if params.get("stable_key") == "graph-note:present":
+                        return Result([
+                            [
+                                1,
+                                "graph-note:present",
+                                "attempt",
+                                "Present relation target",
+                                "",
+                                "{}",
+                            ]
+                        ])
+                    return Result([])
+                return Result([])
+
+        records = cli.relation_target_records(
+            Graph(),
+            [{"relation": "refines", "target": '{"sourceRef":"graph-note:present"}'}],
+        )
+
+        self.assertEqual(list(records.keys()), ["graph-note:present"])
+        self.assertEqual(records["graph-note:present"]["stable_key"], "graph-note:present")
+
+    def test_capture_outcome_missing_relation_target_fails_before_write(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "capture-outcome",
+            "--outcome",
+            "attempt",
+            "--title",
+            "Needs relation",
+            "--content",
+            "This should not be written when the relation target is missing.",
+            "--supersedes",
+            "graph-note:missing",
+        ])
+
+        class Result:
+            result_set = []
+
+        class Graph:
+            name = "unit"
+
+            def query(self, _query, params=None):
+                params = params or {}
+                if params.get("stable_key") == "graph-note:source":
+                    return Result([[1, "graph-note:source", "attempt", "Source", "", "{}"]])
+                return Result()
+
+        originals = {
+            "open_workspace_graph": cli.open_workspace_graph,
+            "create_graph_note_payload": cli.create_graph_note_payload,
+        }
+        calls = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_path = Path(temp_dir) / "memory-relations.jsonl"
+            try:
+                cli.open_workspace_graph = lambda _args: (object(), {"root_path": "/tmp/autopsy"}, {}, Graph())
+                cli.create_graph_note_payload = lambda *_args, **_kwargs: calls.append(True) or {}
+                stream = io.StringIO()
+                with (
+                    mock.patch.dict(os.environ, {"AUTOPSY_MEMORY_RELATION_LOG_PATH": str(log_path)}),
+                    contextlib.redirect_stdout(stream),
+                    self.assertRaises(SystemExit) as raised,
+                ):
+                    cli.cmd_create_note(args)
+            finally:
+                for name, value in originals.items():
+                    setattr(cli, name, value)
+            diagnostics = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertEqual(calls, [])
+        payload = json.loads(stream.getvalue())
+        self.assertTrue(payload["blocked"])
+        self.assertEqual(payload["reason"], "missing_relation_target")
+        self.assertEqual(payload["missing_relation_targets"], ["graph-note:missing"])
+        self.assertFalse(payload["retry_policy"]["retry_with_no_relations_ok"])
+        self.assertEqual(payload["workflow"]["status"], "blocked_missing_relation_target")
+        self.assertIn("Memory relation target not found: graph-note:missing", payload["message"])
+        self.assertIn("autopsy search graph-note:missing --current-only", payload["message"])
+        self.assertIn("Do not retry with --no-relations-ok just to bypass this error", payload["message"])
+        commands = [
+            str(step.get("command") or "")
+            for step in payload["workflow"]["suggested_next_steps"]
+        ]
+        self.assertIn("autopsy item graph-note:missing", commands)
+        self.assertIn("autopsy history graph-note:missing", commands)
+        self.assertIn("autopsy search graph-note:missing --current-only", commands)
+        self.assertEqual(diagnostics[-1]["event"], "missing_relation_target")
+        self.assertEqual(diagnostics[-1]["relation_requests"][0]["target"], "graph-note:missing")
+
+    def test_update_missing_relation_target_emits_blocked_payload_before_write(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "update",
+            "graph-note:source",
+            "--title",
+            "Needs relation",
+            "--content",
+            "This update should not be written when the relation target is missing.",
+            "--refines",
+            "graph-note:missing",
+        ])
+
+        class Result:
+            def __init__(self, rows=None):
+                self.result_set = rows or []
+
+        class Graph:
+            name = "unit"
+
+            def query(self, *_args, **kwargs):
+                if kwargs.get("params", {}).get("stable_key") == "graph-note:source":
+                    return Result([[1, "graph-note:source", "attempt", "Source", "", "{}"]])
+                return Result()
+
+        originals = {
+            "open_workspace_graph": cli.open_workspace_graph,
+            "update_graph_item_payload": cli.update_graph_item_payload,
+        }
+        calls = []
+        try:
+            cli.open_workspace_graph = lambda _args: (object(), {"root_path": "/tmp/autopsy"}, {}, Graph())
+            cli.update_graph_item_payload = lambda *_args, **_kwargs: calls.append(True) or {}
+            stream = io.StringIO()
+            with contextlib.redirect_stdout(stream), self.assertRaises(SystemExit) as raised:
+                cli.cmd_update_item(args)
+        finally:
+            for name, value in originals.items():
+                setattr(cli, name, value)
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertEqual(calls, [])
+        payload = json.loads(stream.getvalue())
+        self.assertTrue(payload["blocked"])
+        self.assertEqual(payload["operation"], "update")
+        self.assertEqual(payload["stable_key"], "graph-note:source")
+        self.assertEqual(payload["reason"], "missing_relation_target")
+        self.assertFalse(payload["retry_policy"]["retry_with_no_relations_ok"])
+
+    def test_update_missing_source_emits_blocked_payload_before_write(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "update",
+            "graph-note:missing-source",
+            "--title",
+            "Missing source",
+            "--content",
+            "This update should not create a replacement memory implicitly.",
+        ])
+
+        class Result:
+            result_set = []
+
+        class Graph:
+            name = "unit"
+
+            def query(self, *_args, **_kwargs):
+                return Result()
+
+        originals = {
+            "open_workspace_graph": cli.open_workspace_graph,
+            "update_graph_item_payload": cli.update_graph_item_payload,
+        }
+        calls = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_path = Path(temp_dir) / "memory-relations.jsonl"
+            try:
+                cli.open_workspace_graph = lambda _args: (object(), {"root_path": "/tmp/autopsy"}, {}, Graph())
+                cli.update_graph_item_payload = lambda *_args, **_kwargs: calls.append(True) or {}
+                stream = io.StringIO()
+                with (
+                    mock.patch.dict(os.environ, {"AUTOPSY_MEMORY_RELATION_LOG_PATH": str(log_path)}),
+                    contextlib.redirect_stdout(stream),
+                    self.assertRaises(SystemExit) as raised,
+                ):
+                    cli.cmd_update_item(args)
+            finally:
+                for name, value in originals.items():
+                    setattr(cli, name, value)
+            diagnostics = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertEqual(calls, [])
+        payload = json.loads(stream.getvalue())
+        self.assertTrue(payload["blocked"])
+        self.assertEqual(payload["operation"], "update")
+        self.assertEqual(payload["stable_key"], "graph-note:missing-source")
+        self.assertEqual(payload["reason"], "missing_memory_item")
+        self.assertFalse(payload["retry_policy"]["retry_as_create"])
+        self.assertEqual(payload["workflow"]["status"], "blocked_missing_memory_item")
+        self.assertEqual(payload["diagnostics"]["stable_key"], "graph-note:missing-source")
+        self.assertEqual(diagnostics[-1]["event"], "missing_memory_item")
+        self.assertEqual(diagnostics[-1]["operation"], "update")
+        self.assertEqual(diagnostics[-1]["stable_key"], "graph-note:missing-source")
+
+    def test_item_missing_key_emits_blocked_payload_without_self_retry(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["item", "graph-note:missing"])
+
+        class Result:
+            result_set = []
+
+        class Graph:
+            name = "unit"
+
+            def query(self, *_args, **_kwargs):
+                return Result()
+
+        originals = {
+            "open_workspace_graph": cli.open_workspace_graph,
+            "build_item_payload": cli.build_item_payload,
+        }
+        calls = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_path = Path(temp_dir) / "memory-relations.jsonl"
+            try:
+                cli.open_workspace_graph = lambda _args: (object(), {"root_path": "/tmp/autopsy"}, {}, Graph())
+                cli.build_item_payload = lambda *_args, **_kwargs: calls.append(True) or {}
+                stream = io.StringIO()
+                with (
+                    mock.patch.dict(os.environ, {"AUTOPSY_MEMORY_RELATION_LOG_PATH": str(log_path)}),
+                    contextlib.redirect_stdout(stream),
+                    self.assertRaises(SystemExit) as raised,
+                ):
+                    cli.cmd_item(args)
+            finally:
+                for name, value in originals.items():
+                    setattr(cli, name, value)
+            diagnostics = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertEqual(calls, [])
+        payload = json.loads(stream.getvalue())
+        self.assertTrue(payload["blocked"])
+        self.assertEqual(payload["operation"], "item")
+        self.assertEqual(payload["reason"], "missing_memory_item")
+        commands = [
+            str(step.get("command") or "")
+            for step in payload["workflow"]["suggested_next_steps"]
+        ]
+        self.assertNotIn("autopsy item graph-note:missing", commands)
+        self.assertIn("autopsy history graph-note:missing", commands)
+        self.assertIn("autopsy search graph-note:missing --current-only", commands)
+        self.assertEqual(diagnostics[-1]["event"], "missing_memory_item")
+        self.assertEqual(diagnostics[-1]["operation"], "item")
+
+    def test_feedback_missing_source_emits_blocked_payload_before_write(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["feedback", "graph-note:missing", "--rating", "useful"])
+
+        class Result:
+            result_set = []
+
+        class Graph:
+            name = "unit"
+
+            def query(self, *_args, **_kwargs):
+                return Result()
+
+        originals = {
+            "open_workspace_graph": cli.open_workspace_graph,
+            "record_memory_feedback": cli.record_memory_feedback,
+        }
+        calls = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_path = Path(temp_dir) / "memory-relations.jsonl"
+            try:
+                cli.open_workspace_graph = lambda _args: (object(), {"root_path": "/tmp/autopsy"}, {}, Graph())
+                cli.record_memory_feedback = lambda *_args, **_kwargs: calls.append(True) or {}
+                stream = io.StringIO()
+                with (
+                    mock.patch.dict(os.environ, {"AUTOPSY_MEMORY_RELATION_LOG_PATH": str(log_path)}),
+                    contextlib.redirect_stdout(stream),
+                    self.assertRaises(SystemExit) as raised,
+                ):
+                    cli.cmd_feedback(args)
+            finally:
+                for name, value in originals.items():
+                    setattr(cli, name, value)
+            diagnostics = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertEqual(calls, [])
+        payload = json.loads(stream.getvalue())
+        self.assertTrue(payload["blocked"])
+        self.assertEqual(payload["operation"], "feedback")
+        self.assertEqual(payload["stable_key"], "graph-note:missing")
+        self.assertEqual(payload["reason"], "missing_memory_item")
+        self.assertFalse(payload["retry_policy"]["retry_as_create"])
+        self.assertEqual(payload["workflow"]["status"], "blocked_missing_memory_item")
+        self.assertEqual(payload["diagnostics"]["stable_key"], "graph-note:missing")
+        self.assertEqual(diagnostics[-1]["event"], "missing_memory_item")
+        self.assertEqual(diagnostics[-1]["operation"], "feedback")
+        self.assertEqual(diagnostics[-1]["stable_key"], "graph-note:missing")
+
+    def test_observe_missing_seed_emits_blocked_payload_before_evidence_scan(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["observe", "--stable-key", "graph-note:missing-seed", "--write-if-stale"])
+
+        class Tool:
+            workspace_payload = staticmethod(cli.workspace_payload)
+
+        class Result:
+            result_set = []
+
+        class Graph:
+            name = "unit"
+
+            def query(self, *_args, **_kwargs):
+                return Result()
+
+        originals = {
+            "open_workspace_graph": cli.open_workspace_graph,
+            "fetch_observation_evidence_neighborhood": cli.fetch_observation_evidence_neighborhood,
+        }
+        calls = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_path = Path(temp_dir) / "memory-relations.jsonl"
+            try:
+                cli.open_workspace_graph = lambda _args: (Tool, {"root_path": "/tmp/autopsy"}, {}, Graph())
+                cli.fetch_observation_evidence_neighborhood = lambda *_args, **_kwargs: calls.append(True) or {"items": []}
+                stream = io.StringIO()
+                with (
+                    mock.patch.dict(os.environ, {"AUTOPSY_MEMORY_RELATION_LOG_PATH": str(log_path)}),
+                    contextlib.redirect_stdout(stream),
+                    self.assertRaises(SystemExit) as raised,
+                ):
+                    cli.cmd_observe(args)
+            finally:
+                for name, value in originals.items():
+                    setattr(cli, name, value)
+            diagnostics = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertEqual(calls, [])
+        payload = json.loads(stream.getvalue())
+        self.assertTrue(payload["blocked"])
+        self.assertEqual(payload["operation"], "observe")
+        self.assertEqual(payload["stable_key"], "graph-note:missing-seed")
+        self.assertEqual(payload["reason"], "missing_memory_item")
+        self.assertFalse(payload["retry_policy"]["retry_as_create"])
+        self.assertEqual(payload["workflow"]["status"], "blocked_missing_memory_item")
+        self.assertEqual(payload["diagnostics"]["stable_key"], "graph-note:missing-seed")
+        self.assertEqual(diagnostics[-1]["event"], "missing_memory_item")
+        self.assertEqual(diagnostics[-1]["operation"], "observe")
+        self.assertEqual(diagnostics[-1]["stable_key"], "graph-note:missing-seed")
+
+    def test_consolidate_session_missing_source_emits_blocked_payload_before_event_scan(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["consolidate-session", "session-import:missing", "--write"])
+
+        class Tool:
+            workspace_payload = staticmethod(cli.workspace_payload)
+
+        class Result:
+            result_set = []
+
+        class Graph:
+            name = "unit"
+
+            def query(self, *_args, **_kwargs):
+                return Result()
+
+        originals = {
+            "open_workspace_graph": cli.open_workspace_graph,
+            "fetch_session_events": cli.fetch_session_events,
+        }
+        calls = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_path = Path(temp_dir) / "memory-relations.jsonl"
+            try:
+                cli.open_workspace_graph = lambda _args: (Tool, {"root_path": "/tmp/autopsy"}, {}, Graph())
+                cli.fetch_session_events = lambda *_args, **_kwargs: calls.append(True) or []
+                stream = io.StringIO()
+                with (
+                    mock.patch.dict(os.environ, {"AUTOPSY_MEMORY_RELATION_LOG_PATH": str(log_path)}),
+                    contextlib.redirect_stdout(stream),
+                    self.assertRaises(SystemExit) as raised,
+                ):
+                    cli.cmd_consolidate_session(args)
+            finally:
+                for name, value in originals.items():
+                    setattr(cli, name, value)
+            diagnostics = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertEqual(calls, [])
+        payload = json.loads(stream.getvalue())
+        self.assertTrue(payload["blocked"])
+        self.assertEqual(payload["operation"], "consolidate_session")
+        self.assertEqual(payload["stable_key"], "session-import:missing")
+        self.assertEqual(payload["reason"], "missing_memory_item")
+        self.assertTrue(payload["write"])
+        self.assertFalse(payload["retry_policy"]["retry_as_create"])
+        self.assertEqual(payload["workflow"]["status"], "blocked_missing_memory_item")
+        self.assertEqual(payload["diagnostics"]["stable_key"], "session-import:missing")
+        self.assertEqual(diagnostics[-1]["event"], "missing_memory_item")
+        self.assertEqual(diagnostics[-1]["operation"], "consolidate_session")
+        self.assertEqual(diagnostics[-1]["stable_key"], "session-import:missing")
+
+    def test_read_commands_missing_stable_key_emit_blocked_payload_before_graph_reads(self):
+        parser = cli.build_parser()
+
+        class Tool:
+            workspace_payload = staticmethod(cli.workspace_payload)
+
+        class Result:
+            result_set = []
+
+        class Graph:
+            name = "unit"
+
+            def query(self, *_args, **_kwargs):
+                return Result()
+
+        originals = {
+            "open_workspace_graph": cli.open_workspace_graph,
+            "fetch_timeline": cli.fetch_timeline,
+            "fetch_neighbors": cli.fetch_neighbors,
+            "fetch_snapshot": cli.fetch_snapshot,
+        }
+        calls: list[str] = []
+        command_cases = [
+            ("timeline", ["timeline", "graph-note:missing"], "fetch_timeline"),
+            ("neighbors", ["neighbors", "--stable-key", "graph-note:missing"], "fetch_neighbors"),
+            ("snapshot", ["snapshot", "graph-note:missing"], "fetch_snapshot"),
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_path = Path(temp_dir) / "memory-relations.jsonl"
+            try:
+                cli.open_workspace_graph = lambda _args: (Tool, {"root_path": "/tmp/autopsy"}, {}, Graph())
+                cli.fetch_timeline = lambda *_args, **_kwargs: calls.append("fetch_timeline") or {}
+                cli.fetch_neighbors = lambda *_args, **_kwargs: calls.append("fetch_neighbors") or []
+                cli.fetch_snapshot = lambda *_args, **_kwargs: calls.append("fetch_snapshot") or {}
+                for operation, argv, _helper_name in command_cases:
+                    stream = io.StringIO()
+                    with (
+                        mock.patch.dict(os.environ, {"AUTOPSY_MEMORY_RELATION_LOG_PATH": str(log_path)}),
+                        contextlib.redirect_stdout(stream),
+                        self.assertRaises(SystemExit) as raised,
+                    ):
+                        args = parser.parse_args(argv)
+                        args.func(args)
+                    self.assertEqual(raised.exception.code, 2)
+                    payload = json.loads(stream.getvalue())
+                    self.assertTrue(payload["blocked"])
+                    self.assertEqual(payload["operation"], operation)
+                    self.assertEqual(payload["stable_key"], "graph-note:missing")
+                    self.assertEqual(payload["reason"], "missing_memory_item")
+                    self.assertFalse(payload["retry_policy"]["retry_as_create"])
+                    self.assertEqual(payload["workflow"]["status"], "blocked_missing_memory_item")
+            finally:
+                for name, value in originals.items():
+                    setattr(cli, name, value)
+            diagnostics = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(calls, [])
+        self.assertEqual([event["operation"] for event in diagnostics], ["timeline", "neighbors", "snapshot"])
+        self.assertTrue(all(event["event"] == "missing_memory_item" for event in diagnostics))
+
+    def test_neighbors_missing_entity_id_emits_selector_blocked_payload_before_seed_resolution(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["neighbors", "--entity-id", "404"])
+
+        class Tool:
+            workspace_payload = staticmethod(cli.workspace_payload)
+
+        class Result:
+            result_set = []
+
+        class Graph:
+            name = "unit"
+
+            def query(self, *_args, **_kwargs):
+                return Result()
+
+        originals = {
+            "open_workspace_graph": cli.open_workspace_graph,
+            "resolve_seed": cli.resolve_seed,
+            "fetch_neighbors": cli.fetch_neighbors,
+        }
+        calls: list[str] = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_path = Path(temp_dir) / "memory-relations.jsonl"
+            try:
+                cli.open_workspace_graph = lambda _args: (Tool, {"root_path": "/tmp/autopsy"}, {}, Graph())
+                cli.resolve_seed = lambda *_args, **_kwargs: calls.append("resolve_seed") or {}
+                cli.fetch_neighbors = lambda *_args, **_kwargs: calls.append("fetch_neighbors") or []
+                stream = io.StringIO()
+                with (
+                    mock.patch.dict(os.environ, {"AUTOPSY_MEMORY_RELATION_LOG_PATH": str(log_path)}),
+                    contextlib.redirect_stdout(stream),
+                    self.assertRaises(SystemExit) as raised,
+                ):
+                    cli.cmd_neighbors(args)
+            finally:
+                for name, value in originals.items():
+                    setattr(cli, name, value)
+            diagnostics = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertEqual(calls, [])
+        payload = json.loads(stream.getvalue())
+        self.assertTrue(payload["blocked"])
+        self.assertEqual(payload["operation"], "neighbors")
+        self.assertEqual(payload["reason"], "missing_memory_item")
+        self.assertEqual(payload["selector"], {"type": "entity_id", "value": "404"})
+        self.assertFalse(payload["retry_policy"]["retry_as_create"])
+        self.assertEqual(payload["workflow"]["status"], "blocked_missing_memory_item")
+        self.assertEqual(payload["workflow"]["next_step"], "inspect_missing_memory_selector")
+        self.assertNotIn("stable_key", payload)
+        self.assertEqual(diagnostics[-1]["event"], "missing_memory_item")
+        self.assertEqual(diagnostics[-1]["operation"], "neighbors")
+        self.assertEqual(diagnostics[-1]["selector_type"], "entity_id")
+        self.assertEqual(diagnostics[-1]["selector_value"], "404")
+
+    def test_lifecycle_commands_missing_source_emit_blocked_payload_before_write(self):
+        parser = cli.build_parser()
+
+        class Result:
+            result_set = []
+
+        class Graph:
+            name = "unit"
+
+            def query(self, *_args, **_kwargs):
+                return Result()
+
+        command_cases = [
+            ("delete", ["delete", "graph-note:missing"], cli.delete_graph_item_payload),
+            ("expire", ["expire", "graph-note:missing"], cli.expire_graph_item_payload),
+            ("pin", ["pin", "graph-note:missing"], cli.pin_graph_item_payload),
+        ]
+        originals = {
+            "open_workspace_graph": cli.open_workspace_graph,
+            "delete_graph_item_payload": cli.delete_graph_item_payload,
+            "expire_graph_item_payload": cli.expire_graph_item_payload,
+            "pin_graph_item_payload": cli.pin_graph_item_payload,
+        }
+        calls: list[str] = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_path = Path(temp_dir) / "memory-relations.jsonl"
+            try:
+                cli.open_workspace_graph = lambda _args: (object(), {"root_path": "/tmp/autopsy"}, {}, Graph())
+                cli.delete_graph_item_payload = lambda *_args, **_kwargs: calls.append("delete") or {}
+                cli.expire_graph_item_payload = lambda *_args, **_kwargs: calls.append("expire") or {}
+                cli.pin_graph_item_payload = lambda *_args, **_kwargs: calls.append("pin") or {}
+                for operation, argv, _helper in command_cases:
+                    stream = io.StringIO()
+                    with (
+                        mock.patch.dict(os.environ, {"AUTOPSY_MEMORY_RELATION_LOG_PATH": str(log_path)}),
+                        contextlib.redirect_stdout(stream),
+                        self.assertRaises(SystemExit) as raised,
+                    ):
+                        args = parser.parse_args(argv)
+                        args.func(args)
+                    self.assertEqual(raised.exception.code, 2)
+                    payload = json.loads(stream.getvalue())
+                    self.assertTrue(payload["blocked"])
+                    self.assertEqual(payload["operation"], operation)
+                    self.assertEqual(payload["reason"], "missing_memory_item")
+            finally:
+                for name, value in originals.items():
+                    setattr(cli, name, value)
+            diagnostics = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(calls, [])
+        self.assertEqual([event["operation"] for event in diagnostics], ["delete", "expire", "pin"])
+        self.assertTrue(all(event["event"] == "missing_memory_item" for event in diagnostics))
+
+    def test_conflict_resolve_missing_current_emits_blocked_payload_before_write(self):
+        class Tool:
+            def workspace_payload(self, workspace):
+                return workspace
+
+        class Result:
+            result_set = []
+
+        class Graph:
+            name = "unit"
+
+            def query(self, *_args, **_kwargs):
+                return Result()
+
+        originals = {
+            "create_fact_edge": cli.create_fact_edge,
+            "build_graph_item_detail_payload": cli.build_graph_item_detail_payload,
+        }
+        calls = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_path = Path(temp_dir) / "memory-relations.jsonl"
+            try:
+                cli.create_fact_edge = lambda *_args, **_kwargs: calls.append("edge")
+                cli.build_graph_item_detail_payload = lambda *_args, **_kwargs: calls.append("detail") or {}
+                with mock.patch.dict(os.environ, {"AUTOPSY_MEMORY_RELATION_LOG_PATH": str(log_path)}):
+                    payload = cli.resolve_graph_conflict_payload(
+                        Graph(),
+                        tool=Tool(),
+                        workspace={"root_path": "/tmp/autopsy"},
+                        current_stable_key="graph-note:missing-current",
+                        superseded_stable_keys=["graph-note:target"],
+                        relation="supersedes",
+                        summary=None,
+                    )
+            finally:
+                for name, value in originals.items():
+                    setattr(cli, name, value)
+            diagnostics = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+
+        self.assertTrue(payload["blocked"])
+        self.assertEqual(payload["operation"], "resolve_conflict")
+        self.assertEqual(payload["reason"], "missing_memory_item")
+        self.assertEqual(calls, [])
+        self.assertEqual(diagnostics[-1]["event"], "missing_memory_item")
+        self.assertEqual(diagnostics[-1]["operation"], "resolve_conflict")
+
+    def test_conflict_resolve_missing_target_emits_blocked_payload_before_write(self):
+        class Tool:
+            def workspace_payload(self, workspace):
+                return workspace
+
+        class Result:
+            def __init__(self, rows=None):
+                self.result_set = rows or []
+
+        class Graph:
+            name = "unit"
+
+            def query(self, _query, params=None):
+                params = params or {}
+                if params.get("stable_key") == "graph-note:current":
+                    return Result([[1, "graph-note:current", "attempt", "Current", "", "{}"]])
+                return Result()
+
+        originals = {
+            "create_fact_edge": cli.create_fact_edge,
+            "build_graph_item_detail_payload": cli.build_graph_item_detail_payload,
+        }
+        calls = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_path = Path(temp_dir) / "memory-relations.jsonl"
+            try:
+                cli.create_fact_edge = lambda *_args, **_kwargs: calls.append("edge")
+                cli.build_graph_item_detail_payload = lambda *_args, **_kwargs: calls.append("detail") or {}
+                with mock.patch.dict(os.environ, {"AUTOPSY_MEMORY_RELATION_LOG_PATH": str(log_path)}):
+                    payload = cli.resolve_graph_conflict_payload(
+                        Graph(),
+                        tool=Tool(),
+                        workspace={"root_path": "/tmp/autopsy"},
+                        current_stable_key="graph-note:current",
+                        superseded_stable_keys=["graph-note:missing-target"],
+                        relation="supersedes",
+                        summary=None,
+                    )
+            finally:
+                for name, value in originals.items():
+                    setattr(cli, name, value)
+            diagnostics = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+
+        self.assertTrue(payload["blocked"])
+        self.assertEqual(payload["operation"], "resolve_conflict")
+        self.assertEqual(payload["stable_key"], "graph-note:current")
+        self.assertEqual(payload["reason"], "missing_relation_target")
+        self.assertEqual(payload["missing_relation_targets"], ["graph-note:missing-target"])
+        commands = [
+            str(step.get("command") or "")
+            for step in payload["workflow"]["suggested_next_steps"]
+        ]
+        self.assertIn("autopsy search graph-note:missing-target --current-only", commands)
+        self.assertEqual(calls, [])
+        self.assertEqual(diagnostics[-1]["event"], "missing_relation_target")
+        self.assertEqual(diagnostics[-1]["relation_requests"][0]["target"], "graph-note:missing-target")
 
     def test_fact_rating_filter_keeps_high_quality_relationships(self):
         hits = [
@@ -2265,671 +4542,9 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(args.note, "used in release fix")
         self.assertEqual(args.source, "unit-test")
 
-    def test_context_event_parser_accepts_command_and_metadata(self):
-        parser = cli.build_parser()
-        args = parser.parse_args([
-            "context-event",
-            "--thread-id",
-            "thread-1",
-            "--command",
-            "rg context-event src/autopsy_memory",
-            "--status",
-            "complete",
-            "--metadata",
-            "tool=rg",
-            "--metadata",
-            "{\"line\": 42}",
-            "--json",
-        ])
-        self.assertEqual(args.command, "context-event")
-        self.assertEqual(args.thread_id, "thread-1")
-        self.assertEqual(args.context_command, "rg context-event src/autopsy_memory")
-        self.assertEqual(args.metadata, ["tool=rg", "{\"line\": 42}"])
-        self.assertTrue(args.json)
-
-    def test_context_event_parser_accepts_command_without_type(self):
-        parser = cli.build_parser()
-        args = parser.parse_args([
-            "context-event",
-            "--thread-id",
-            "thread-1",
-            "--command",
-            "rg context_graph_event src/autopsy_memory/worker.py",
-        ])
-        self.assertEqual(args.command, "context-event")
-        self.assertEqual(args.event_type, "")
-        self.assertEqual(args.context_command, "rg context_graph_event src/autopsy_memory/worker.py")
-
-    def test_context_event_command_records_silently_by_default(self):
-        parser = cli.build_parser()
-        args = parser.parse_args([
-            "context-event",
-            "--thread-id",
-            "thread-1",
-            "--command",
-            "rg context_graph_event src/autopsy_memory/worker.py",
-            "--metadata",
-            "tool=rg",
-        ])
-        stream = io.StringIO()
-        calls = []
-
-        def fake_worker_request(endpoint, payload, **_kwargs):
-            calls.append((endpoint, payload))
-            return {"ok": True, "event": payload["request"]}
-
-        with (
-            temporary_context_graph_settings({"enabled": True, "mode": "cli"}),
-            mock.patch("autopsy_memory.mcp_bridge.worker_request", side_effect=fake_worker_request),
-            contextlib.redirect_stdout(stream),
-        ):
-            args.func(args)
-
-        self.assertEqual(stream.getvalue(), "")
-        self.assertEqual(calls[0][0], "/context-graph/events")
-        request = calls[0][1]["request"]
-        self.assertEqual(request["thread_id"], "thread-1")
-        self.assertEqual(request["event_type"], "command")
-        self.assertEqual(request["title"], "rg context_graph_event src/autopsy_memory/worker.py")
-        self.assertEqual(request["content"], "rg context_graph_event src/autopsy_memory/worker.py")
-        self.assertEqual(request["metadata"]["command"], "rg context_graph_event src/autopsy_memory/worker.py")
-        self.assertEqual(request["metadata"]["capture"], "command_only")
-        self.assertNotIn("tool", request["metadata"])
-
-    def test_context_event_command_skips_non_allowlisted_commands(self):
-        parser = cli.build_parser()
-        args = parser.parse_args([
-            "context-event",
-            "--thread-id",
-            "thread-1",
-            "--command",
-            "ls -la",
-            "--json",
-        ])
-        stream = io.StringIO()
-        calls = []
-
-        def fake_worker_request(endpoint, payload, **_kwargs):
-            calls.append((endpoint, payload))
-            return {"ok": True, "event": payload["request"]}
-
-        with (
-            temporary_context_graph_settings({"enabled": True, "mode": "cli"}),
-            mock.patch("autopsy_memory.mcp_bridge.worker_request", side_effect=fake_worker_request),
-            contextlib.redirect_stdout(stream),
-        ):
-            args.func(args)
-
-        payload = json.loads(stream.getvalue())
-        self.assertEqual(calls, [])
-        self.assertTrue(payload["skipped"])
-        self.assertEqual(payload["reason"], "command_not_allowlisted")
-
-    def test_context_event_skips_generic_event_type(self):
-        parser = cli.build_parser()
-        args = parser.parse_args([
-            "context-event",
-            "--thread-id",
-            "thread-1",
-            "--type",
-            "file_read",
-            "--command",
-            "rg context-event",
-            "--json",
-        ])
-        stream = io.StringIO()
-        calls = []
-
-        def fake_worker_request(endpoint, payload, **_kwargs):
-            calls.append((endpoint, payload))
-            return {"ok": True, "event": payload["request"]}
-
-        with (
-            temporary_context_graph_settings({"enabled": True, "mode": "cli"}),
-            mock.patch("autopsy_memory.mcp_bridge.worker_request", side_effect=fake_worker_request),
-            contextlib.redirect_stdout(stream),
-        ):
-            args.func(args)
-
-        payload = json.loads(stream.getvalue())
-        self.assertEqual(calls, [])
-        self.assertTrue(payload["skipped"])
-        self.assertEqual(payload["reason"], "generic_events_disabled")
-
-    def test_context_event_json_prints_debug_payload_when_requested(self):
-        parser = cli.build_parser()
-        args = parser.parse_args([
-            "context-event",
-            "--thread-id",
-            "thread-1",
-            "--command",
-            "rg context-event",
-            "--json",
-        ])
-        stream = io.StringIO()
-
-        def fake_worker_request(_endpoint, payload, **_kwargs):
-            return {"ok": True, "event": payload["request"]}
-
-        with (
-            temporary_context_graph_settings({"enabled": True, "mode": "cli"}),
-            mock.patch("autopsy_memory.mcp_bridge.worker_request", side_effect=fake_worker_request),
-            contextlib.redirect_stdout(stream),
-        ):
-            args.func(args)
-
-        payload = json.loads(stream.getvalue())
-        self.assertTrue(payload["ok"])
-        self.assertEqual(payload["event"]["content"], "rg context-event")
-
-    def test_context_event_reports_hook_mode_for_stale_cli_capture(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            settings_path = Path(tmp_dir) / "context-graph-settings.json"
-            settings_path.write_text(json.dumps({"enabled": True, "mode": "hooks"}), encoding="utf-8")
-            parser = cli.build_parser()
-            args = parser.parse_args([
-                "context-event",
-                "--thread-id",
-                "thread-1",
-                "--command",
-                "rg context-event",
-            ])
-            stream = io.StringIO()
-            calls = []
-
-            def fake_worker_request(endpoint, payload, **_kwargs):
-                calls.append((endpoint, payload))
-                return {"ok": True, "event": payload["request"]}
-
-            with (
-                mock.patch.dict(os.environ, {"AUTOPSY_CONTEXT_GRAPH_SETTINGS_PATH": str(settings_path)}),
-                mock.patch("autopsy_memory.mcp_bridge.worker_request", side_effect=fake_worker_request),
-                contextlib.redirect_stdout(stream),
-            ):
-                args.func(args)
-
-        self.assertEqual(calls, [])
-        self.assertIn("hooks mode", stream.getvalue())
-
-    def test_context_event_reports_disabled_graph_for_stale_capture(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            settings_path = Path(tmp_dir) / "context-graph-settings.json"
-            settings_path.write_text(json.dumps({"enabled": False, "mode": "cli"}), encoding="utf-8")
-            parser = cli.build_parser()
-            args = parser.parse_args([
-                "context-event",
-                "--thread-id",
-                "thread-1",
-                "--command",
-                "rg context-event",
-                "--json",
-            ])
-            stream = io.StringIO()
-
-            with (
-                mock.patch.dict(os.environ, {"AUTOPSY_CONTEXT_GRAPH_SETTINGS_PATH": str(settings_path)}),
-                contextlib.redirect_stdout(stream),
-            ):
-                args.func(args)
-
-        payload = json.loads(stream.getvalue())
-        self.assertTrue(payload["skipped"])
-        self.assertEqual(payload["reason"], "context_graph_disabled")
-        self.assertEqual(payload["context_graph"]["enabled"], False)
-
-    def test_codex_hook_parser_accepts_hook_options(self):
-        parser = cli.build_parser()
-        args = parser.parse_args(["codex-hook", "--thread-id", "thread-1", "--dry-run", "--json", "--strict"])
-        self.assertEqual(args.command, "codex-hook")
-        self.assertEqual(args.thread_id, "thread-1")
-        self.assertTrue(args.dry_run)
-        self.assertTrue(args.json)
-        self.assertTrue(args.strict)
-
-    def test_context_graph_url_parser_accepts_open_and_json(self):
-        parser = cli.build_parser()
-        args = parser.parse_args(["context-graph-url", "--thread-id", "thread-1", "--open", "--json"])
-        self.assertEqual(args.command, "context-graph-url")
-        self.assertEqual(args.thread_id, "thread-1")
-        self.assertTrue(args.open)
-        self.assertTrue(args.json)
-
-    def test_context_graph_url_parser_accepts_codex_current_without_thread_id(self):
-        parser = cli.build_parser()
-        args = parser.parse_args(["context-graph-url", "--codex-current", "--json"])
-        self.assertEqual(args.command, "context-graph-url")
-        self.assertIsNone(args.thread_id)
-        self.assertTrue(args.codex_current)
-        self.assertTrue(args.json)
-
-    def test_context_graph_settings_parser_and_command_update_settings(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            settings_path = Path(tmp_dir) / "context-graph-settings.json"
-            parser = cli.build_parser()
-            args = parser.parse_args([
-                "context-graph-settings",
-                "--mode",
-                "hooks",
-                "--enabled",
-                "--multi-turn",
-                "--update-codex-instructions",
-                "--json",
-            ])
-            stream = io.StringIO()
-
-            with (
-                mock.patch.dict(os.environ, {"AUTOPSY_CONTEXT_GRAPH_SETTINGS_PATH": str(settings_path)}),
-                mock.patch("autopsy_memory.cli.build_init_payload", return_value={"targets": [], "workflow": {"complete": True}}),
-                contextlib.redirect_stdout(stream),
-            ):
-                args.func(args)
-            saved = json.loads(settings_path.read_text(encoding="utf-8"))
-
-        payload = json.loads(stream.getvalue())
-        self.assertTrue(payload["enabled"])
-        self.assertEqual(payload["mode"], "hooks")
-        self.assertTrue(payload["multi_turn"])
-        self.assertTrue(payload["changed"])
-        self.assertEqual(payload["codex_instructions"]["workflow"]["complete"], True)
-        self.assertEqual(saved["mode"], "hooks")
-        self.assertTrue(saved["multi_turn"])
-
-    def test_context_event_metadata_accepts_key_values_and_json_objects(self):
-        metadata = cli.normalize_context_event_metadata([
-            "path=src/autopsy_memory/worker.py",
-            "line=42",
-            "{\"stable_key\":\"graph-note:one\",\"ok\":true}",
-        ])
-        self.assertEqual(metadata["path"], "src/autopsy_memory/worker.py")
-        self.assertEqual(metadata["line"], 42)
-        self.assertEqual(metadata["stable_key"], "graph-note:one")
-        self.assertTrue(metadata["ok"])
-
-    def test_codex_hook_user_prompt_is_not_recorded_as_generic_graph_event(self):
-        request = cli.build_codex_hook_context_event({
-            "session_id": "session-1",
-            "turn_id": "turn-1",
-            "hook_event_name": "UserPromptSubmit",
-            "cwd": "/repo",
-            "model": "gpt-5",
-            "prompt": "please fix the graph",
-        })
-        self.assertIsNone(request)
-
-    def test_codex_hook_post_tool_records_only_allowlisted_bash_command_text(self):
-        class PoisonedToolResponse(dict):
-            def get(self, *_args, **_kwargs):
-                raise AssertionError("Codex context graph hooks must not inspect tool_response")
-
-        hook = {
-            "session_id": "session-1",
-            "turn_id": "turn-1",
-            "hook_event_name": "PostToolUse",
-            "tool_name": "Bash",
-            "tool_use_id": "tool-1",
-            "tool_input": {"command": "rg nohit-token tests/test_worker.py"},
-            "tool_response": PoisonedToolResponse({"exit_code": 1, "stderr": "failed"}),
-        }
-        request = cli.build_codex_hook_context_event(hook)
-        duplicate_request = cli.build_codex_hook_context_event(hook)
-        self.assertEqual(request["event_type"], "command")
-        self.assertTrue(request["id"].startswith("codex-hook:"))
-        self.assertEqual(request["id"], duplicate_request["id"])
-        self.assertEqual(request["title"], "rg nohit-token tests/test_worker.py")
-        self.assertEqual(request["content"], "rg nohit-token tests/test_worker.py")
-        self.assertNotIn("failed", request["content"])
-        self.assertEqual(request["status"], "complete")
-        self.assertEqual(request["metadata"]["command"], "rg nohit-token tests/test_worker.py")
-        self.assertEqual(request["metadata"]["capture"], "command_only")
-        self.assertNotIn("tool", request["metadata"])
-        self.assertNotIn("tool_use_id", request["metadata"])
-        self.assertNotIn("tool_response", request["metadata"])
-
-    def test_codex_hook_preflight_tool_events_are_not_recorded(self):
-        base_hook = {
-            "session_id": "session-1",
-            "turn_id": "turn-1",
-            "tool_name": "Bash",
-            "tool_use_id": "tool-1",
-            "tool_input": {"command": "rg context_graph tests/test_worker.py"},
-        }
-        pre_request = cli.build_codex_hook_context_event({
-            **base_hook,
-            "hook_event_name": "PreToolUse",
-        })
-        permission_request = cli.build_codex_hook_context_event({
-            **base_hook,
-            "hook_event_name": "PermissionRequest",
-        })
-
-        self.assertIsNone(pre_request)
-        self.assertIsNone(permission_request)
-
-    def test_codex_hook_pretool_updates_session_state_without_graph_event(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            settings_path = Path(tmp_dir) / "context-graph-settings.json"
-            state_path = Path(tmp_dir) / "codex-hook-session.json"
-            settings_path.write_text(json.dumps({"enabled": True, "mode": "hooks"}), encoding="utf-8")
-            parser = cli.build_parser()
-            args = parser.parse_args(["codex-hook"])
-            hook_payload = json.dumps({
-                "session_id": "session-actual",
-                "turn_id": "turn-1",
-                "hook_event_name": "PreToolUse",
-                "tool_name": "Bash",
-                "tool_input": {"command": "autopsy context-graph-url --codex-current"},
-            })
-            calls = []
-
-            def fake_worker_request(endpoint, payload, **_kwargs):
-                calls.append((endpoint, payload))
-                return {"ok": True}
-
-            with (
-                mock.patch.dict(os.environ, {
-                    "AUTOPSY_CONTEXT_GRAPH_SETTINGS_PATH": str(settings_path),
-                    "AUTOPSY_CODEX_HOOK_STATE_PATH": str(state_path),
-                }),
-                mock.patch.object(cli.sys, "stdin", io.StringIO(hook_payload)),
-                mock.patch("autopsy_memory.mcp_bridge.worker_request", side_effect=fake_worker_request),
-                contextlib.redirect_stdout(io.StringIO()),
-            ):
-                args.func(args)
-
-            self.assertEqual(calls, [])
-            state = json.loads(state_path.read_text(encoding="utf-8"))
-            self.assertEqual(state["thread_id"], "session-actual")
-            self.assertEqual(state["hook_event_name"], "PreToolUse")
-
-    def test_codex_hook_thread_id_uses_session_payload_over_manual_sources(self):
-        with mock.patch.dict(os.environ, {
-            "AUTOPSY_CONTEXT_GRAPH_THREAD_ID": "invented-env",
-            "AUTOPSY_THREAD_ID": "invented-thread",
-        }):
-            thread_id = cli.codex_hook_thread_id({"session_id": "session-actual"}, override="invented-override")
-
-        self.assertEqual(thread_id, "session-actual")
-
-    def test_context_graph_url_codex_current_uses_hook_state(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            settings_path = Path(tmp_dir) / "context-graph-settings.json"
-            state_path = Path(tmp_dir) / "codex-hook-session.json"
-            settings_path.write_text(json.dumps({"enabled": True, "mode": "hooks"}), encoding="utf-8")
-            state_path.write_text(
-                json.dumps({
-                    "thread_id": "session-actual",
-                    "updated_at": "2999-01-01T00:00:00+00:00",
-                    "hook_event_name": "PreToolUse",
-                    "source": "codex-hook",
-                }),
-                encoding="utf-8",
-            )
-            parser = cli.build_parser()
-            args = parser.parse_args(["context-graph-url", "--codex-current", "--json"])
-            stream = io.StringIO()
-
-            with (
-                mock.patch.dict(os.environ, {
-                    "AUTOPSY_CONTEXT_GRAPH_SETTINGS_PATH": str(settings_path),
-                    "AUTOPSY_CODEX_HOOK_STATE_PATH": str(state_path),
-                }),
-                mock.patch("autopsy_memory.mcp_bridge.ensure_worker", return_value={
-                    "base_url": "http://127.0.0.1:12345",
-                    "token": "TOKEN",
-                    "pid": 42,
-                }),
-                contextlib.redirect_stdout(stream),
-            ):
-                args.func(args)
-
-            payload = json.loads(stream.getvalue())
-            self.assertEqual(payload["thread_id"], "session-actual")
-            self.assertEqual(payload["thread_source"]["source"], "codex-hook")
-            self.assertIn("/context-graph/threads/session-actual", payload["url"])
-
-    def test_current_write_thread_id_uses_explicit_or_fresh_hook_state_only(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            state_path = Path(tmp_dir) / "codex-hook-session.json"
-            state_path.write_text(
-                json.dumps({
-                    "thread_id": "session-actual",
-                    "updated_at": "2999-01-01T00:00:00+00:00",
-                    "hook_event_name": "PreToolUse",
-                    "source": "codex-hook",
-                }),
-                encoding="utf-8",
-            )
-            with mock.patch.dict(os.environ, {"AUTOPSY_CODEX_HOOK_STATE_PATH": str(state_path)}):
-                self.assertEqual(cli.current_write_thread_id("explicit-thread"), "explicit-thread")
-                self.assertEqual(cli.current_write_thread_id(), "session-actual")
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            state_path = Path(tmp_dir) / "missing-codex-hook-session.json"
-            with mock.patch.dict(os.environ, {"AUTOPSY_CODEX_HOOK_STATE_PATH": str(state_path)}):
-                self.assertIsNone(cli.current_write_thread_id())
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            state_path = Path(tmp_dir) / "stale-codex-hook-session.json"
-            state_path.write_text(
-                json.dumps({
-                    "thread_id": "stale-session",
-                    "updated_at": "2000-01-01T00:00:00+00:00",
-                    "hook_event_name": "PreToolUse",
-                    "source": "codex-hook",
-                }),
-                encoding="utf-8",
-            )
-            with mock.patch.dict(os.environ, {"AUTOPSY_CODEX_HOOK_STATE_PATH": str(state_path)}):
-                self.assertIsNone(cli.current_write_thread_id())
-
-    def test_context_graph_url_codex_current_refuses_missing_hook_state(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            settings_path = Path(tmp_dir) / "context-graph-settings.json"
-            state_path = Path(tmp_dir) / "missing-codex-hook-session.json"
-            settings_path.write_text(json.dumps({"enabled": True, "mode": "hooks"}), encoding="utf-8")
-            parser = cli.build_parser()
-            args = parser.parse_args(["context-graph-url", "--codex-current", "--json"])
-            stream = io.StringIO()
-            with (
-                mock.patch.dict(os.environ, {
-                    "AUTOPSY_CONTEXT_GRAPH_SETTINGS_PATH": str(settings_path),
-                    "AUTOPSY_CODEX_HOOK_STATE_PATH": str(state_path),
-                }),
-                contextlib.redirect_stdout(stream),
-            ):
-                with self.assertRaises(SystemExit) as raised:
-                    args.func(args)
-
-            self.assertEqual(raised.exception.code, 1)
-            payload = json.loads(stream.getvalue())
-            self.assertEqual(payload["reason"], "no_current_codex_hook_session")
-            self.assertIn("Do not invent", payload["message"])
-
-    def test_context_graph_url_codex_current_ignores_env_without_hook_state(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            settings_path = Path(tmp_dir) / "context-graph-settings.json"
-            state_path = Path(tmp_dir) / "missing-codex-hook-session.json"
-            settings_path.write_text(json.dumps({"enabled": True, "mode": "hooks"}), encoding="utf-8")
-            parser = cli.build_parser()
-            args = parser.parse_args(["context-graph-url", "--codex-current", "--json"])
-            stream = io.StringIO()
-            with (
-                mock.patch.dict(os.environ, {
-                    "AUTOPSY_CONTEXT_GRAPH_SETTINGS_PATH": str(settings_path),
-                    "AUTOPSY_CODEX_HOOK_STATE_PATH": str(state_path),
-                    "AUTOPSY_CONTEXT_GRAPH_THREAD_ID": "invented-env-thread",
-                    "AUTOPSY_THREAD_ID": "invented-env-thread",
-                }),
-                contextlib.redirect_stdout(stream),
-            ):
-                with self.assertRaises(SystemExit) as raised:
-                    args.func(args)
-
-            self.assertEqual(raised.exception.code, 1)
-            payload = json.loads(stream.getvalue())
-            self.assertEqual(payload["reason"], "no_current_codex_hook_session")
-            self.assertNotIn("invented-env-thread", json.dumps(payload))
-
-    def test_context_graph_url_hook_mode_rejects_manual_thread_id(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            settings_path = Path(tmp_dir) / "context-graph-settings.json"
-            settings_path.write_text(json.dumps({"enabled": True, "mode": "hooks"}), encoding="utf-8")
-            parser = cli.build_parser()
-            args = parser.parse_args(["context-graph-url", "--thread-id", "invented-thread", "--json"])
-            stream = io.StringIO()
-            with (
-                mock.patch.dict(os.environ, {"AUTOPSY_CONTEXT_GRAPH_SETTINGS_PATH": str(settings_path)}),
-                contextlib.redirect_stdout(stream),
-            ):
-                with self.assertRaises(SystemExit) as raised:
-                    args.func(args)
-
-            self.assertEqual(raised.exception.code, 1)
-            payload = json.loads(stream.getvalue())
-            self.assertEqual(payload["reason"], "manual_thread_id_forbidden_in_hook_mode")
-            self.assertIn("--codex-current", payload["message"])
-            self.assertNotIn("invented-thread", json.dumps(payload))
-
-    def test_context_graph_url_disabled_hook_mode_returns_disabled_without_thread_resolution(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            settings_path = Path(tmp_dir) / "context-graph-settings.json"
-            settings_path.write_text(json.dumps({"enabled": False, "mode": "hooks"}), encoding="utf-8")
-            parser = cli.build_parser()
-            args = parser.parse_args(["context-graph-url", "--thread-id", "invented-thread", "--json"])
-            stream = io.StringIO()
-            with (
-                mock.patch.dict(os.environ, {"AUTOPSY_CONTEXT_GRAPH_SETTINGS_PATH": str(settings_path)}),
-                contextlib.redirect_stdout(stream),
-            ):
-                args.func(args)
-
-            payload = json.loads(stream.getvalue())
-            self.assertEqual(payload["reason"], "context_graph_disabled")
-            self.assertNotIn("invented-thread", json.dumps(payload))
-
-    def test_codex_hook_skips_non_allowlisted_bash_command(self):
-        request = cli.build_codex_hook_context_event({
-            "session_id": "session-1",
-            "turn_id": "turn-1",
-            "hook_event_name": "PostToolUse",
-            "tool_name": "Bash",
-            "tool_use_id": "tool-1",
-            "tool_input": {"command": "ls -la"},
-            "tool_response": {"exit_code": 0},
-        })
-        self.assertIsNone(request)
-
-    def test_codex_hook_does_not_allow_commands_only_because_arguments_mention_context(self):
-        request = cli.build_codex_hook_context_event({
-            "session_id": "session-1",
-            "turn_id": "turn-1",
-            "hook_event_name": "PostToolUse",
-            "tool_name": "Bash",
-            "tool_use_id": "tool-1",
-            "tool_input": {"command": "curl -s http://127.0.0.1/context-graph | sed -n '1,20p'"},
-            "tool_response": {"exit_code": 0},
-        })
-        self.assertIsNone(request)
-
-    def test_context_command_allowlist_supports_shell_segments_and_nested_python(self):
-        self.assertTrue(cli.should_capture_context_command("autopsy context --current-only --query graph"))
-        self.assertTrue(cli.should_capture_context_command("autopsy consult --current-only --query graph"))
-        self.assertTrue(cli.should_capture_context_command("autopsy status --current-only"))
-        self.assertTrue(cli.should_capture_context_command("nl -ba src/autopsy_memory/worker.py"))
-        self.assertTrue(cli.should_capture_context_command("cd apps/context-graph && rg graph src"))
-        self.assertTrue(cli.should_capture_context_command("cd apps/context-graph && git diff -- src/autopsy_memory/worker.py"))
-        self.assertTrue(cli.should_capture_context_command("git diff -- src/autopsy_memory/worker.py"))
-        self.assertTrue(cli.should_capture_context_command("rg 'graph|event' src | sed -n '1,20p'"))
-        self.assertFalse(cli.should_capture_context_command("cd apps/context-graph"))
-        self.assertFalse(cli.should_capture_context_command("cd apps/context-graph && npm run build"))
-        self.assertFalse(cli.should_capture_context_command("npm run build && rg graph src"))
-        self.assertFalse(cli.should_capture_context_command("git diff -- src/autopsy_memory/worker.py && npm test"))
-        self.assertFalse(cli.should_capture_context_command("./.venv/bin/python -m pytest tests/test_worker.py"))
-        self.assertFalse(cli.should_capture_context_command("autopsy capture-outcome --kind attempt --title write"))
-        self.assertFalse(cli.should_capture_context_command("autopsy context-event --thread-id t --command 'rg graph'"))
-        self.assertFalse(cli.should_capture_context_command("curl -s http://127.0.0.1/context-graph | sed -n '1,20p'"))
-        self.assertFalse(cli.should_capture_context_command("rg graph src | head -20"))
-        self.assertFalse(cli.should_capture_context_command("rg graph src | npm run build"))
-        self.assertFalse(cli.should_capture_context_command("rg graph src > /tmp/graph.txt"))
-        self.assertFalse(cli.should_capture_context_command("rg graph $(autopsy item graph-note:secret)"))
-        self.assertFalse(cli.should_capture_context_command("rg graph src & npm run build"))
-        self.assertFalse(cli.should_capture_context_command("rg graph src\nnpm run build"))
-        self.assertFalse(cli.should_capture_context_command("sed -i '' 's/a/b/' src/autopsy_memory/worker.py"))
-        self.assertFalse(cli.should_capture_context_command("git diff --output /tmp/diff.txt"))
-        self.assertTrue(cli.should_capture_context_command("rg '<GraphNode' apps/context-graph/src"))
-
-    def test_codex_hook_skips_non_bash_tool_events(self):
-        request = cli.build_codex_hook_context_event({
-            "session_id": "session-1",
-            "turn_id": "turn-1",
-            "hook_event_name": "PostToolUse",
-            "tool_name": "apply_patch",
-            "tool_use_id": "tool-1",
-            "tool_input": {"patch": "*** Begin Patch"},
-            "tool_response": {"status": "ok"},
-        })
-        self.assertIsNone(request)
-
-    def test_codex_hook_stop_is_not_recorded_as_generic_event(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            settings_path = Path(tmp_dir) / "context-graph-settings.json"
-            settings_path.write_text(json.dumps({"enabled": True, "mode": "hooks"}), encoding="utf-8")
-            parser = cli.build_parser()
-            args = parser.parse_args(["codex-hook"])
-            hook_payload = json.dumps({
-                "session_id": "session-1",
-                "hook_event_name": "Stop",
-                "turn_id": "turn-1",
-                "last_assistant_message": "Done",
-            })
-            stream = io.StringIO()
-            calls = []
-
-            def fake_worker_request(endpoint, payload, **_kwargs):
-                calls.append((endpoint, payload))
-                return {"ok": True}
-
-            with (
-                mock.patch.dict(os.environ, {"AUTOPSY_CONTEXT_GRAPH_SETTINGS_PATH": str(settings_path)}),
-                mock.patch.object(cli.sys, "stdin", io.StringIO(hook_payload)),
-                mock.patch("autopsy_memory.mcp_bridge.worker_request", side_effect=fake_worker_request),
-                contextlib.redirect_stdout(stream),
-            ):
-                args.func(args)
-
-        self.assertEqual(stream.getvalue(), "")
-        self.assertEqual(calls, [])
-
-    def test_codex_hook_dry_run_reports_lifecycle_hooks_as_generic_disabled(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            settings_path = Path(tmp_dir) / "context-graph-settings.json"
-            settings_path.write_text(json.dumps({"enabled": True, "mode": "hooks"}), encoding="utf-8")
-            parser = cli.build_parser()
-            args = parser.parse_args(["codex-hook", "--dry-run", "--json"])
-            hook_payload = json.dumps({
-                "hook_event_name": "Stop",
-                "last_assistant_message": "Done",
-            })
-            stream = io.StringIO()
-            calls = []
-
-            def fake_worker_request(endpoint, payload, **_kwargs):
-                calls.append((endpoint, payload))
-                return {"ok": True}
-
-            with (
-                mock.patch.dict(os.environ, {"AUTOPSY_CONTEXT_GRAPH_SETTINGS_PATH": str(settings_path)}),
-                mock.patch.object(cli.sys, "stdin", io.StringIO(hook_payload)),
-                mock.patch("autopsy_memory.mcp_bridge.worker_request", side_effect=fake_worker_request),
-                contextlib.redirect_stdout(stream),
-            ):
-                args.func(args)
-
-        payload = json.loads(stream.getvalue())
-        self.assertEqual(calls, [])
-        self.assertTrue(payload["skipped"])
-        self.assertEqual(payload["reason"], "generic_events_disabled")
-        self.assertEqual(payload["hook_event_name"], "Stop")
+    def test_current_write_thread_id_uses_only_explicit_thread_id(self):
+        self.assertEqual(cli.current_write_thread_id("explicit-thread"), "explicit-thread")
+        self.assertIsNone(cli.current_write_thread_id())
 
     def test_expire_parser_accepts_lifecycle_options(self):
         parser = cli.build_parser()
@@ -3572,6 +5187,40 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(parsed["changed_fields"], ["content"])
         self.assertEqual(parsed["old_snapshot"], {"content": "Old"})
 
+    def test_record_memory_history_event_archives_node_for_current_reads(self):
+        class Result:
+            result_set = []
+
+        class Graph:
+            def __init__(self):
+                self.queries = []
+
+            def query(self, query, params=None):
+                self.queries.append((query, params or {}))
+                return Result()
+
+        graph = Graph()
+        created_nodes = []
+        with (
+            mock.patch.object(cli, "next_entity_id", return_value=123),
+            mock.patch.object(cli, "create_memory_node", side_effect=lambda *_args, **kwargs: created_nodes.append(kwargs)),
+            mock.patch.object(cli, "upsert_structural_edge", return_value=None),
+        ):
+            cli.record_memory_history_event(
+                graph,
+                target_stable_key="graph-note:one",
+                event="EXPIRE",
+                timestamp="2026-06-21T12:00:00Z",
+                old_item={"content": "Old content"},
+                new_item={"content": "New content"},
+            )
+
+        self.assertEqual(created_nodes[0]["kind"], cli.MEMORY_HISTORY_EVENT_KIND)
+        archive_query, archive_params = graph.queries[-1]
+        self.assertIn("event.expired_at = $archived_at", archive_query)
+        self.assertEqual(archive_params["archived_at"], "2026-06-21T12:00:00Z")
+        self.assertEqual(archive_params["expiration_reason"], cli.MEMORY_HISTORY_EVENT_EXPIRATION_REASON)
+
     def test_namespace_write_helpers_persist_tags_and_metadata(self):
         self.assertEqual(
             cli.memory_tags_with_namespaces([" Release "], [" Memory Layer ", "namespace:Repo/Autopsy"]),
@@ -3579,6 +5228,46 @@ class AutopsyCLIContractTests(unittest.TestCase):
         )
         metadata = cli.memory_metadata_with_namespaces(["area=release", 'namespaces=["legacy"]'], [" Memory Layer ", "legacy"])
         self.assertEqual(metadata["namespaces"], ["legacy", "memory-layer"])
+
+    def test_repeated_write_metadata_keys_preserve_all_values(self):
+        metadata = cli.memory_metadata_with_namespaces_and_entity_scopes(
+            [
+                "file=src/autopsy_memory/cli.py",
+                "file=tests/test_cli_contract.py",
+                "file=src/autopsy_memory/cli.py",
+                "score=8",
+                "score=9",
+            ],
+            [" Memory Layer "],
+            None,
+        )
+
+        self.assertEqual(metadata["file"], ["src/autopsy_memory/cli.py", "tests/test_cli_contract.py"])
+        self.assertEqual(metadata["score"], [8, 9])
+        self.assertEqual(metadata["namespaces"], ["memory-layer"])
+        serialized = cli.serialize_memory_metadata(metadata)
+        self.assertEqual(cli.item_memory_metadata({"memory_metadata": serialized})["file"], ["src/autopsy_memory/cli.py", "tests/test_cli_contract.py"])
+
+    def test_metadata_filters_match_repeated_metadata_values(self):
+        items = [
+            {
+                "stable_key": "graph-note:match",
+                "kind": "attempt",
+                "metadata": cli.normalize_memory_metadata([
+                    "file=src/autopsy_memory/cli.py",
+                    "file=tests/test_cli_contract.py",
+                ]),
+            },
+            {
+                "stable_key": "graph-note:miss",
+                "kind": "attempt",
+                "metadata": cli.normalize_memory_metadata(["file=README.md"]),
+            },
+        ]
+        filters = cli.build_consult_filters(None, metadata=["file=tests/test_cli_contract.py"])
+
+        filtered = cli.filter_candidates_by_metadata(None, items, filters)
+        self.assertEqual([item["stable_key"] for item in filtered], ["graph-note:match"])
 
     def test_entity_scope_write_helpers_persist_tags_and_metadata(self):
         self.assertEqual(
@@ -3771,7 +5460,89 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertIn("[graph-note:decision]", payload["context_block"])
         self.assertLessEqual(len(payload["context_block"]), payload["context_budget"]["max_chars"])
 
-    def test_context_pack_includes_related_memory_graph_neighborhood(self):
+    def test_context_pack_reports_weak_signals_when_only_side_channels_exist(self):
+        class Tool:
+            def workspace_payload(self, workspace):
+                return {"root_path": workspace["root_path"]}
+
+        payload = cli.build_context_pack_payload(
+            tool=Tool(),
+            workspace={"root_path": "/tmp/autopsy"},
+            query="rollback repair preview",
+            status_payload={
+                "status": {
+                    "summary": "1 active item",
+                    "active_now": [
+                        {
+                            "stable_key": "graph-note:active",
+                            "kind": "attempt",
+                            "title": "Active repair hardening",
+                            "summary": "Current repair hardening is in progress.",
+                        }
+                    ],
+                },
+                "items": [{"stable_key": "graph-note:active"}],
+            },
+            consult_payload={
+                "route": "hybrid",
+                "workflow": {"status": "empty", "complete": False},
+                "hits": [],
+                "items": [],
+                "vector_only_hits": [
+                    {
+                        "stable_key": "graph-note:weak-vector",
+                        "kind": "attempt",
+                        "title": "Weak repair-preview candidate",
+                        "preview": "This candidate is shown only as a weak side-channel signal.",
+                    }
+                ],
+                "entity_only_hits": [
+                    {
+                        "stable_key": "graph-note:weak-entity",
+                        "kind": "decision",
+                        "title": "Weak entity candidate",
+                        "preview": "This candidate only shares entity overlap.",
+                    }
+                ],
+            },
+            max_chars=1400,
+        )
+
+        self.assertEqual(payload["workflow"]["status"], "weak_signals_only")
+        self.assertFalse(payload["workflow"]["complete"])
+        self.assertEqual(payload["retrieval"]["weak_signal_count"], 2)
+        self.assertEqual(payload["retrieval"]["hit_count"], 0)
+
+    def test_context_command_uses_single_process_consult_by_default(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["context", "--query", "broad reliability query"])
+        tool = types.SimpleNamespace(STATUS_WINDOW_DAYS_DEFAULT=21, workspace_payload=cli.workspace_payload)
+        workspace = {"id": "/tmp/ws", "workspace_key": "/tmp/ws", "slug": "ws", "title": "ws", "root_path": "/tmp/ws"}
+        graph = types.SimpleNamespace(name="unit")
+        status_payload = {"items": [], "workflow": {"complete": True}}
+        consult_payload = {"route": "hybrid", "hits": [], "items": []}
+
+        with (
+            mock.patch.object(cli, "open_workspace_graph", return_value=(tool, workspace, {}, graph)),
+            mock.patch.object(cli, "build_status_payload", return_value=status_payload),
+            mock.patch.object(cli, "build_consult_filters", return_value={}),
+            mock.patch.object(cli, "filter_status_payload_by_metadata", side_effect=lambda _graph, payload, _filters: payload),
+            mock.patch.object(cli, "build_worker_consult_payload") as worker_consult,
+            mock.patch.object(cli, "build_consult_payload", return_value=consult_payload) as local_consult,
+            mock.patch.object(cli, "build_related_memory_payload_for_consult", return_value={"items": []}),
+            mock.patch.object(cli, "context_stable_keys_from_payloads", return_value=[]),
+            mock.patch.object(cli, "fetch_context_lineage", return_value={"items": []}),
+            mock.patch.object(cli, "build_context_pack_payload", return_value={"ok": True}),
+            mock.patch.object(cli, "refresh_activity_snapshot", return_value={}),
+        ):
+            payload = cli.build_context_command_payload(args)
+
+        self.assertEqual(payload, {"ok": True})
+        worker_consult.assert_not_called()
+        local_consult.assert_called_once()
+        self.assertEqual(local_consult.call_args.kwargs["query"], "broad reliability query")
+
+    def test_context_pack_includes_related_memory_neighborhood(self):
         class Tool:
             def workspace_payload(self, workspace):
                 return {"root_path": workspace["root_path"]}
@@ -3800,8 +5571,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
                     }
                 ],
             },
-            graph_context={
-                "policy": cli.CONTEXT_GRAPH_EXPANSION_POLICY,
+            related_memory={
+                "policy": cli.RELATED_MEMORY_EXPANSION_POLICY,
                 "depth": 1,
                 "seed_keys": ["graph-note:decision"],
                 "items": [
@@ -3823,8 +5594,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
         related_entries = [entry for entry in payload["agent_context"] if entry["section"] == "related_memory"]
         self.assertEqual([entry["stable_key"] for entry in related_entries], ["graph-note:attempt"])
         self.assertIn("implements", related_entries[0]["text"])
-        self.assertEqual(payload["retrieval"]["graph_context"]["policy"], cli.CONTEXT_GRAPH_EXPANSION_POLICY)
-        self.assertEqual(payload["retrieval"]["graph_context"]["items"][0]["stable_key"], "graph-note:attempt")
+        self.assertEqual(payload["retrieval"]["related_memory"]["policy"], cli.RELATED_MEMORY_EXPANSION_POLICY)
+        self.assertEqual(payload["retrieval"]["related_memory"]["items"][0]["stable_key"], "graph-note:attempt")
         self.assertIn("Related Memory", payload["context_block"])
 
     def test_context_pack_surfaces_procedure_status_section(self):
@@ -3971,74 +5742,6 @@ class AutopsyCLIContractTests(unittest.TestCase):
         ]
         filtered = cli.filter_observation_evidence_items("graph-note:seed", related, limit=5)
         self.assertEqual([item["stable_key"] for item in filtered], ["graph-note:attempt"])
-
-    def test_fetch_context_graph_neighborhood_is_bounded_by_seed(self):
-        class Result:
-            def __init__(self, rows):
-                self.result_set = rows
-
-        class Graph:
-            def query(self, _query, params=None):
-                self.params = params or {}
-                return Result(
-                    [
-                        [
-                            "graph-note:seed",
-                            "Seed decision",
-                            "graph-note:one",
-                            "attempt",
-                            "First neighbor",
-                            "First neighbor summary",
-                            "implements",
-                            "IMPLEMENTS",
-                            "First neighbor implements seed",
-                            "outgoing",
-                            "2026-05-30T00:00:00Z",
-                            "2026-05-30T00:00:00Z",
-                        ],
-                        [
-                            "graph-note:seed",
-                            "Seed decision",
-                            "graph-note:two",
-                            "attempt",
-                            "Second neighbor",
-                            "Second neighbor summary",
-                            "informed_by",
-                            "INFORMED_BY",
-                            "Second neighbor informs seed",
-                            "incoming",
-                            "2026-05-29T00:00:00Z",
-                            "2026-05-29T00:00:00Z",
-                        ],
-                        [
-                            "graph-note:seed",
-                            "Seed decision",
-                            "graph-note:seed",
-                            "decision",
-                            "Seed decision",
-                            "Seed summary",
-                            "refines",
-                            "REFINES",
-                            "Self edge should be ignored",
-                            "outgoing",
-                            "2026-05-28T00:00:00Z",
-                            "2026-05-28T00:00:00Z",
-                        ],
-                    ]
-                )
-
-        graph = Graph()
-        payload = cli.fetch_context_graph_neighborhood(
-            graph,
-            ["graph-note:seed"],
-            limit=5,
-            per_seed_limit=1,
-            as_of="2026-05-30T12:00:00Z",
-        )
-        self.assertEqual(payload["policy"], cli.CONTEXT_GRAPH_EXPANSION_POLICY)
-        self.assertEqual([item["stable_key"] for item in payload["items"]], ["graph-note:one"])
-        self.assertEqual(payload["items"][0]["retrieval_reasons"], ["graph_neighbor"])
-        self.assertEqual(graph.params["read_time"], "2026-05-30T12:00:00Z")
 
     def test_context_pack_includes_pinned_memory_without_retrieval(self):
         class Tool:
@@ -4225,6 +5928,49 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertIn("stable_key", schema["required"])
         self.assertIn("min_fact_rating", schema["properties"])
         self.assertIn("write_if_stale", schema["properties"])
+        health_schema = mcp_bridge.TOOLS["autopsy_memory_health"]["schema"]
+        self.assertIn("repo", health_schema["properties"])
+        self.assertIn("repository_root_path", health_schema["properties"])
+        diagnostics_schema = mcp_bridge.TOOLS["autopsy_memory_diagnostics"]["schema"]
+        self.assertEqual(diagnostics_schema["properties"]["log"]["enum"], ["all", "memory-guard", "memory-relations"])
+        self.assertIn("limit", diagnostics_schema["properties"])
+        repair_schema = mcp_bridge.TOOLS["autopsy_memory_repair_embedded_snapshot_plan"]["schema"]
+        self.assertIn("restore_latest_backup", repair_schema["properties"])
+        self.assertIn("restore_backup", repair_schema["properties"])
+        self.assertIn("backup_limit", repair_schema["properties"])
+        self.assertIn("include_operational", repair_schema["properties"])
+        self.assertNotIn("yes", repair_schema["properties"])
+        self.assertNotIn("accept_data_loss", repair_schema["properties"])
+        self.assertNotIn("salvage_output", repair_schema["properties"])
+        feedback_schema = mcp_bridge.TOOLS["autopsy_memory_feedback"]["schema"]
+        self.assertIn("stable_key", feedback_schema["required"])
+        self.assertIn("rating", feedback_schema["required"])
+        self.assertEqual(feedback_schema["properties"]["rating"]["enum"], ["useful", "not-useful", "neutral"])
+        self.assertIn("note", feedback_schema["properties"])
+        self.assertIn("source", feedback_schema["properties"])
+        consolidate_schema = mcp_bridge.TOOLS["autopsy_memory_consolidate_session"]["schema"]
+        self.assertIn("stable_key", consolidate_schema["required"])
+        self.assertIn("kind", consolidate_schema["properties"])
+        self.assertIn("max_events", consolidate_schema["properties"])
+        self.assertIn("write", consolidate_schema["properties"])
+        import_schema = mcp_bridge.TOOLS["autopsy_memory_import_session"]["schema"]
+        self.assertIn("path", import_schema["required"])
+        self.assertIn("dry_run", import_schema["properties"])
+        self.assertTrue(import_schema["properties"]["dry_run"]["default"])
+        self.assertIn("repo", import_schema["properties"])
+        self.assertIn("repository_root_path", import_schema["properties"])
+        snapshot_schema = mcp_bridge.TOOLS["autopsy_memory_snapshot"]["schema"]
+        self.assertIn("stable_key", snapshot_schema["required"])
+        self.assertIn("limit", snapshot_schema["properties"])
+        expire_schema = mcp_bridge.TOOLS["autopsy_memory_expire_item"]["schema"]
+        self.assertIn("stable_key", expire_schema["required"])
+        self.assertIn("expires_at", expire_schema["properties"])
+        self.assertIn("clear", expire_schema["properties"])
+        pin_schema = mcp_bridge.TOOLS["autopsy_memory_pin_item"]["schema"]
+        self.assertIn("stable_key", pin_schema["required"])
+        self.assertIn("block_limit", pin_schema["properties"])
+        self.assertIn("read_only", pin_schema["properties"])
+        self.assertIn("shared", pin_schema["properties"])
         consult_schema = mcp_bridge.TOOLS["autopsy_memory_consult"]["schema"]
         self.assertIn("memory_type", consult_schema["properties"])
         self.assertIn("memory_types", consult_schema["properties"])
@@ -4235,13 +5981,6 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertIn("entity_scope", search_schema["properties"])
         create_schema = mcp_bridge.TOOLS["autopsy_memory_create_note"]["schema"]
         self.assertIn("group_id", create_schema["properties"])
-        self.assertIn("autopsy_context_graph_event", mcp_bridge.TOOLS)
-        self.assertIn("autopsy_context_graph_url", mcp_bridge.TOOLS)
-        graph_event_schema = mcp_bridge.TOOLS["autopsy_context_graph_event"]["schema"]
-        self.assertIn("thread_id", graph_event_schema["required"])
-        self.assertIn("command", graph_event_schema["required"])
-        self.assertNotIn("event_type", graph_event_schema["properties"])
-        self.assertNotIn("metadata", graph_event_schema["properties"])
 
     def test_nohit_identifier_queries_are_detected(self):
         self.assertTrue(cli.query_has_unlikely_identifier("nohit-autopsy-init-smoke-glass-cactus"))
@@ -4323,6 +6062,346 @@ class AutopsyCLIContractTests(unittest.TestCase):
         kept = cli.filter_weak_lexical_hits(query, items)
         self.assertEqual([item["stable_key"] for item in kept], ["graph-note:marker"])
 
+    def test_exact_lexical_anchor_is_strong_without_three_hits(self):
+        exact_items = [
+            {
+                "stable_key": "graph-note:exact",
+                "title": "Exact benchmark title",
+                "retrieval_reasons": ["exact"],
+                "exact_match_boost": 365.0,
+            }
+        ]
+        broad_items = [
+            {
+                "stable_key": "graph-note:broad",
+                "title": "Memory",
+                "retrieval_reasons": ["lexical"],
+                "exact_match_boost": 120.0,
+                "lexical_score": 8.0,
+            }
+        ]
+
+        self.assertTrue(cli.lexical_results_are_strong(exact_items, limit=5, config={}))
+        self.assertFalse(cli.lexical_results_are_strong(broad_items, limit=5, config={}))
+
+    def test_query_token_variants_cover_common_memory_wording_drift(self):
+        gate_group = next(group for group in cli.query_token_variant_groups("benchmark gates") if "gates" in group)
+        hardening_group = next(group for group in cli.query_token_variant_groups("hardening priorities") if "hardening" in group)
+        removing_group = next(group for group in cli.query_token_variant_groups("removing relation target") if "removing" in group)
+
+        self.assertIn("gate", gate_group)
+        self.assertIn("hardened", hardening_group)
+        self.assertIn("removed", removing_group)
+
+    def test_recent_token_overlap_scan_keeps_broad_current_memory_hits(self):
+        class Graph:
+            def __init__(self):
+                self.query_text = ""
+                self.params = {}
+
+            def query(self, query, params=None):
+                self.query_text = query
+                self.params = params or {}
+                return types.SimpleNamespace(result_set=[
+                    [
+                        1,
+                        "graph-note:benchmark-gate",
+                        "attempt",
+                        "Hardened benchmark pass gate",
+                        "Benchmark reliability gate now reports partial failures.",
+                        "2026-06-21T00:00:00Z",
+                        "graph_note",
+                        "",
+                        4,
+                    ]
+                ])
+
+        graph = Graph()
+
+        items, _elapsed = cli.fetch_token_overlap_candidates(
+            graph,
+            "reliability work benchmark gates hardening priorities",
+            limit=5,
+            recent_scan_limit=1200,
+        )
+
+        self.assertEqual([item["stable_key"] for item in items], ["graph-note:benchmark-gate"])
+        self.assertEqual(graph.params["scan_limit"], 1200)
+        self.assertIn("LIMIT $scan_limit", graph.query_text)
+        self.assertEqual(graph.params["min_token_hits"], 3)
+
+    def test_consult_exposes_weak_side_channels_when_reliable_hits_are_empty(self):
+        class Tool:
+            def workspace_payload(self, workspace):
+                return {"root_path": workspace["root_path"]}
+
+            def rerank_candidates(self, _query, candidates, _config):
+                return [
+                    {
+                        **item,
+                        "reranker_score": 0.01,
+                        "retrieval_reasons": sorted(set(item.get("retrieval_reasons", [])) | {"reranker"}),
+                    }
+                    for item in candidates
+                ]
+
+            def filter_low_relevance_candidates(self, _query, _candidates, _config):
+                return []
+
+        weak_vector = {
+            "stable_key": "graph-note:weak-vector",
+            "kind": "attempt",
+            "title": "FalkorDB repair preview",
+            "preview": "Repair-preview recall candidate that did not pass reranker relevance.",
+            "retrieval_reasons": ["embedding"],
+            "embedding_score": 0.42,
+            "updated_at": "2026-06-21T00:00:00Z",
+        }
+
+        with (
+            mock.patch.object(cli, "semantic_item_count", return_value=3),
+            mock.patch.object(cli, "fetch_exact_text_candidates", return_value=([], 0.0)),
+            mock.patch.object(cli, "fetch_node_lexical", return_value=([], 0.0)),
+            mock.patch.object(cli, "fetch_entity_overlap_candidates", return_value=([], 0.0)),
+            mock.patch.object(cli, "fetch_token_overlap_candidates", return_value=([], 0.0)),
+            mock.patch.object(cli, "fetch_relationship_matches", return_value=([], [], 0.0)),
+            mock.patch.object(cli, "fetch_vector_candidates", return_value=([weak_vector], 0.01)),
+            mock.patch.object(cli, "build_consult_filters", return_value={}),
+            mock.patch.object(cli, "filter_candidates_by_metadata", side_effect=lambda _graph, items, _filters: items),
+            mock.patch.object(cli, "filter_items_as_of", side_effect=lambda items, _as_of: items),
+            mock.patch.object(cli, "filter_items_for_read_lifecycle", side_effect=lambda items, _as_of: items),
+            mock.patch.object(cli, "filter_relationship_hits_by_min_fact_rating", side_effect=lambda items, _rating: items),
+            mock.patch.object(cli, "filter_relationship_hits_by_metadata", side_effect=lambda _graph, items, _filters: items),
+            mock.patch.object(cli, "fetch_memory_usage", return_value={}),
+            mock.patch.object(cli, "apply_usage_adaptive_ranking", side_effect=lambda items, _usage: items),
+            mock.patch.object(cli, "build_memory_read_guard_payload", return_value={}),
+            mock.patch.object(cli, "filter_items_by_read_guard", side_effect=lambda items, _guard: items),
+            mock.patch.object(cli, "filter_relationship_hits_for_answer_context", side_effect=lambda items, _hits: items),
+            mock.patch.object(cli, "filter_relationship_hits_by_read_guard", side_effect=lambda items, _guard: items),
+            mock.patch.object(cli, "record_memory_access", return_value={"updated": 0, "stable_keys": []}),
+            mock.patch.object(cli, "reranker_enabled_for_current_process", return_value=True),
+        ):
+            payload = cli.build_consult_payload(
+                types.SimpleNamespace(name="unit"),
+                tool=Tool(),
+                conn=None,
+                workspace={"root_path": "/tmp/autopsy"},
+                config={"rerank_min_candidates": 1, "reranker": {"enabled": True}},
+                query="FalkorDB rollback repair preview",
+                limit=5,
+                route="hybrid",
+            )
+
+        self.assertEqual(payload["hits"], [])
+        self.assertEqual([item["stable_key"] for item in payload["vector_only_hits"]], ["graph-note:weak-vector"])
+        self.assertEqual(payload["lexical_only_hits"], [])
+        self.assertEqual(payload["read_guard"], {})
+
+    def test_scale_readiness_benchmark_uses_sample_title_for_fast_path_probe(self):
+        original_build_consult_payload = cli.build_consult_payload
+        captured: dict[str, object] = {}
+        try:
+            def fake_build_consult_payload(*_args, **kwargs):
+                captured["query"] = kwargs["query"]
+                return {
+                    "routing": {"hybrid_skipped_reason": "lexical_fast_path"},
+                    "timings": {"rerank_s": 0.0},
+                }
+
+            cli.build_consult_payload = fake_build_consult_payload
+            payload = cli.benchmark_scale_readiness(
+                object(),
+                tool=object(),
+                workspace={"root_path": "/tmp/autopsy"},
+                config={"token_overlap_scan_max_items": 2000, "vector_candidate_limit": 64},
+                sample={"stable_key": "graph-note:sample", "title": "Exact sample memory title"},
+            )
+        finally:
+            cli.build_consult_payload = original_build_consult_payload
+
+        self.assertEqual(captured["query"], "Exact sample memory title")
+        self.assertEqual(payload["score"], 10.0)
+
+    def test_benchmark_samples_exclude_expired_memories(self):
+        class Graph:
+            def __init__(self):
+                self.query_text = ""
+                self.params = {}
+
+            def query(self, query, params=None):
+                self.query_text = query
+                self.params = params or {}
+                return types.SimpleNamespace(result_set=[
+                    [
+                        "graph-note:expired",
+                        "attempt",
+                        "Expired obsolete memory",
+                        "Obsolete feature note.",
+                        "2026-06-21T00:00:00Z",
+                        "2000-01-01T00:00:00Z",
+                    ],
+                    [
+                        "graph-note:active",
+                        "attempt",
+                        "Active memory",
+                        "Current feature note.",
+                        "2026-06-21T00:00:00Z",
+                        "",
+                    ],
+                ])
+
+        graph = Graph()
+
+        samples = cli.sample_semantic_items(graph, 5)
+
+        self.assertIn("expired_at", graph.query_text)
+        self.assertIn("read_time", graph.params)
+        self.assertEqual([item["stable_key"] for item in samples], ["graph-note:active"])
+
+    def test_repo_scoped_benchmark_sample_excludes_expired_memories(self):
+        class Graph:
+            def __init__(self):
+                self.query_text = ""
+                self.params = {}
+
+            def query(self, query, params=None):
+                self.query_text = query
+                self.params = params or {}
+                return types.SimpleNamespace(result_set=[
+                    [
+                        "graph-note:expired",
+                        "attempt",
+                        "Expired repo memory",
+                        "Obsolete repo note.",
+                        "2026-06-21T00:00:00Z",
+                        "/tmp/repo",
+                        "2000-01-01T00:00:00Z",
+                    ],
+                    [
+                        "graph-note:active",
+                        "attempt",
+                        "Active repo memory",
+                        "Current repo note.",
+                        "2026-06-21T00:00:00Z",
+                        "/tmp/repo",
+                        "",
+                    ],
+                ])
+
+        graph = Graph()
+
+        sample = cli.repo_scoped_benchmark_sample(graph)
+
+        self.assertIn("expired_at", graph.query_text)
+        self.assertIn("read_time", graph.params)
+        self.assertEqual(sample["stable_key"], "graph-note:active")
+
+    def test_benchmark_quality_gate_rejects_partial_attributes(self):
+        strong = cli.benchmark_attribute("strong", [{"name": "ok", "passed": True}])
+        partial = cli.benchmark_attribute(
+            "scale_readiness",
+            [
+                {"name": "token_overlap_scan_guard", "passed": True},
+                {"name": "expanded_vector_candidate_pool", "passed": True},
+                {"name": "lexical_fast_path_avoids_heavy_hybrid", "passed": False},
+            ],
+        )
+
+        gate = cli.benchmark_quality_gate([strong, partial], overall_score=9.7)
+
+        self.assertFalse(gate["passed"])
+        self.assertTrue(gate["overall_passed"])
+        self.assertEqual(gate["failed_attributes"][0]["name"], "scale_readiness")
+        self.assertEqual(gate["failed_attributes"][0]["failed_checks"], ["lexical_fast_path_avoids_heavy_hybrid"])
+
+    def test_falkor_native_benchmark_checks_embedded_cli_detach_policy(self):
+        class Graph:
+            name = "unit"
+
+        with (
+            mock.patch.object(cli, "scalar_query", return_value=1),
+            mock.patch.object(cli, "check_runtime_index_probe", return_value=True),
+        ):
+            payload = cli.benchmark_falkor_native(Graph(), include_sync=False, sync_payload=None)
+
+        checks = {check["name"]: check for check in payload["checks"]}
+        self.assertTrue(checks["embedded_cli_shutdown_detaches_by_default"]["passed"])
+        self.assertEqual(checks["embedded_cli_shutdown_detaches_by_default"]["events"], ["save", "disconnect"])
+
+    def test_benchmark_payload_reports_partial_attribute_as_failed(self):
+        class Tool:
+            workspace_payload = staticmethod(cli.workspace_payload)
+
+        class Graph:
+            name = "unit"
+
+        def good_attribute(name):
+            return cli.benchmark_attribute(name, [{"name": "ok", "passed": True}])
+
+        partial = cli.benchmark_attribute(
+            "scale_readiness",
+            [
+                {"name": "token_overlap_scan_guard", "passed": True},
+                {"name": "expanded_vector_candidate_pool", "passed": True},
+                {"name": "lexical_fast_path_avoids_heavy_hybrid", "passed": False},
+            ],
+        )
+        originals = {
+            "ensure_runtime_indexes": cli.ensure_runtime_indexes,
+            "build_graph_stats_payload": cli.build_graph_stats_payload,
+            "sample_semantic_items": cli.sample_semantic_items,
+            "embedding_provider_available": cli.embedding_provider_available,
+            "reranker_provider_available": cli.reranker_provider_available,
+            "scalar_query": cli.scalar_query,
+            "check_runtime_index_probe": cli.check_runtime_index_probe,
+            "benchmark_recall": cli.benchmark_recall,
+            "benchmark_inspection": cli.benchmark_inspection,
+            "benchmark_precision_abstention": cli.benchmark_precision_abstention,
+            "benchmark_performance": cli.benchmark_performance,
+            "benchmark_context_pack": cli.benchmark_context_pack,
+            "benchmark_metadata_filters": cli.benchmark_metadata_filters,
+            "benchmark_memory_governance": cli.benchmark_memory_governance,
+            "benchmark_session_import": cli.benchmark_session_import,
+            "benchmark_scale_readiness": cli.benchmark_scale_readiness,
+            "benchmark_falkor_native": cli.benchmark_falkor_native,
+        }
+        try:
+            cli.ensure_runtime_indexes = lambda _graph: None
+            cli.build_graph_stats_payload = lambda _graph: {"itemCount": 1}
+            cli.sample_semantic_items = lambda _graph, _limit: [{"stable_key": "graph-note:sample", "title": "Sample"}]
+            cli.embedding_provider_available = lambda _config: (True, None)
+            cli.reranker_provider_available = lambda _config: (True, None)
+            cli.scalar_query = lambda *_args, **_kwargs: 1
+            cli.check_runtime_index_probe = lambda _graph: True
+            cli.benchmark_recall = lambda *_args, **_kwargs: good_attribute("recall_top1")
+            cli.benchmark_inspection = lambda *_args, **_kwargs: good_attribute("inspection_accuracy")
+            cli.benchmark_precision_abstention = lambda *_args, **_kwargs: good_attribute("precision_abstention")
+            cli.benchmark_performance = lambda *_args, **_kwargs: good_attribute("performance")
+            cli.benchmark_context_pack = lambda *_args, **_kwargs: good_attribute("context_pack")
+            cli.benchmark_metadata_filters = lambda *_args, **_kwargs: good_attribute("metadata_filters")
+            cli.benchmark_memory_governance = lambda *_args, **_kwargs: good_attribute("memory_governance")
+            cli.benchmark_session_import = lambda *_args, **_kwargs: good_attribute("session_import")
+            cli.benchmark_scale_readiness = lambda *_args, **_kwargs: partial
+            cli.benchmark_falkor_native = lambda *_args, **_kwargs: good_attribute("falkor_native")
+
+            payload = cli.build_benchmark_payload(
+                Graph(),
+                tool=Tool,
+                workspace={"root_path": "/tmp/autopsy"},
+                config={},
+                sample_size=1,
+                include_sync=False,
+                skip_write_probe=True,
+            )
+        finally:
+            for name, value in originals.items():
+                setattr(cli, name, value)
+
+        self.assertFalse(payload["passed"])
+        self.assertFalse(payload["workflow"]["complete"])
+        self.assertEqual(payload["quality_gate"]["failed_attributes"][0]["name"], "scale_readiness")
+        self.assertIn("scale_readiness", payload["workflow"]["next_steps"][1])
+
     def test_relation_fact_filter_requires_query_signal_overlap(self):
         self.assertTrue(cli.fact_text_matches_query_terms("FalkorDB consult", "FalkorDB consult path refines worker retrieval"))
         self.assertFalse(cli.fact_text_matches_query_terms("FalkorDB consult", "Release packaging implements Sparkle updater"))
@@ -4381,19 +6460,19 @@ class AutopsyCLIContractTests(unittest.TestCase):
         reset.assert_called_once_with(args)
         self.assertTrue(json.loads(stream.getvalue())["passed"])
 
-    def test_cmd_context_retries_once_after_stale_falkordb_socket(self):
+    def test_cmd_context_retries_stale_falkordb_socket_until_retry_budget(self):
         parser = cli.build_parser()
         args = parser.parse_args(["context", "--query", "release procedure"])
         stale = RuntimeError("Error 2 connecting to /tmp/tmpabc/redis.socket. No such file or directory.")
         stream = io.StringIO()
         with (
-            mock.patch.object(cli, "build_context_command_payload", side_effect=[stale, {"ok": True, "context_block": "context ok"}]) as build_context,
+            mock.patch.object(cli, "build_context_command_payload", side_effect=[stale, stale, {"ok": True, "context_block": "context ok"}]) as build_context,
             mock.patch.object(cli, "reset_stale_falkordb_lite_runtime", return_value={"settings_backup": "/tmp/settings.bak"}) as reset,
             contextlib.redirect_stdout(stream),
         ):
             args.func(args)
-        self.assertEqual(build_context.call_count, 2)
-        reset.assert_called_once_with(args)
+        self.assertEqual(build_context.call_count, 3)
+        self.assertEqual(reset.call_count, 2)
         self.assertTrue(json.loads(stream.getvalue())["ok"])
 
     def test_falkordblite_runtime_uses_module_path_override(self):
@@ -4423,6 +6502,39 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["mode"], "embedded")
         self.assertEqual(payload["log"]["tail"], ["line one", "module failed to load"])
         self.assertTrue(any("brew reinstall autopsy-memory" in step for step in payload["workflow"]["suggested_next_steps"]))
+
+    def test_falkor_start_failure_payload_classifies_guard_rollback(self):
+        parser = cli.build_parser()
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            lite_path = Path(tmp_dir) / "FalkorDB" / "autopsy-memory.db"
+            args = parser.parse_args(["status", "--lite-path", str(lite_path)])
+            error = cli.MemoryDatabaseRollbackError(
+                "Autopsy memory database rollback detected",
+                state={
+                    "graph_name": "unit",
+                    "graph_generation": 4,
+                    "sidecar_generation": 7,
+                    "sidecar_path": str(lite_path) + ".guard.json",
+                    "lite_path": str(lite_path),
+                },
+            )
+
+            payload = cli.falkor_start_failure_payload(args, error)
+
+        suggested = "\n".join(payload["workflow"]["suggested_next_steps"])
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["workflow"]["status"], "rollback_detected")
+        self.assertEqual(payload["workflow"]["next_step"], "restore_or_repair_embedded_memory_snapshot")
+        self.assertIn("autopsy diagnostics --log memory-guard --limit 5", suggested)
+        self.assertIn("autopsy repair-embedded-snapshot --dry-run", suggested)
+        self.assertIn("repair-embedded-snapshot --yes --accept-data-loss", suggested)
+        self.assertIn("--restore-backup <backup.json>", suggested)
+        self.assertIn("--restore-latest-backup", suggested)
+        self.assertNotIn("autopsy restore <backup.json> --dry-run", suggested)
+        self.assertNotIn("brew reinstall autopsy-memory", suggested)
+        self.assertEqual(payload["diagnostics"]["rollback_guard"]["graph_name"], "unit")
+        self.assertEqual(payload["diagnostics"]["rollback_guard"]["sidecar_generation"], 7)
+        self.assertIn("memory_guard_log", payload["diagnostics"])
 
     def test_falkordb_lite_log_path_avoids_app_support_spaces(self):
         lite_path = Path.home() / "Library" / "Application Support" / "Autopsy" / "FalkorDB" / "autopsy-memory.db"

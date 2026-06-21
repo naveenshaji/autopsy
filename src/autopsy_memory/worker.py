@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 import argparse
+import contextlib
 import copy
 import hashlib
 import importlib
 import importlib.util
+import io
 import json
-import mimetypes
 import os
 import re
 import shlex
@@ -14,10 +15,9 @@ import sys
 import threading
 import time
 from datetime import datetime, timezone
-from importlib import resources
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, urlparse
 
 _EMBEDDING_MODEL_CACHE = {}
 _RERANKER_MODEL_CACHE = {}
@@ -27,10 +27,7 @@ _EMBEDDINGS_CONFIG_CACHE = {}
 _EMBEDDINGS_STATUS_CACHE = {}
 _FALKOR_CONTEXT_CACHE = {}
 _FALKOR_FAILURE_CACHE = {}
-_CONTEXT_GRAPH_MEMORY_ENRICH_CACHE = {}
-_CONTEXT_GRAPH_MEMORY_WRITE_CACHE = {}
 _FALKOR_CONTEXT_LOCK = threading.Lock()
-_CONTEXT_GRAPH_LOCK = threading.Lock()
 _FALKOR_VALIDATION_TTL_SECONDS = 10.0
 _FALKOR_FAILURE_TTL_SECONDS = 30.0
 _WORKER_DEFAULT_IDLE_TIMEOUT_SECONDS = 3600.0
@@ -41,124 +38,7 @@ APP_SUPPORT_DIR_DEFAULT = Path.home() / 'Library' / 'Application Support' / 'Aut
 FALKORDB_LITE_PATH_DEFAULT = APP_SUPPORT_DIR_DEFAULT / 'FalkorDB' / 'autopsy-memory.db'
 GLOBAL_MEMORY_SETTINGS_DEFAULT = APP_SUPPORT_DIR_DEFAULT / 'Config' / 'memory-settings.json'
 UNIFIED_MEMORY_ROOT_DEFAULT = APP_SUPPORT_DIR_DEFAULT / 'MemoryRoot'
-CONTEXT_GRAPH_DIR_DEFAULT = APP_SUPPORT_DIR_DEFAULT / 'ContextGraph'
 STATUS_WINDOW_DAYS_DEFAULT = 21
-CONTEXT_GRAPH_ALLOWED_EVENT_TYPES = {'command', 'shell_command'}
-CONTEXT_GRAPH_COMMAND_DENY_CONTAINS = (
-    'autopsy codex-hook',
-    'autopsy context-event',
-    'autopsy context-graph-url',
-)
-CONTEXT_GRAPH_COMMAND_ALLOW_PREFIXES = (
-    'autopsy status',
-    'autopsy context',
-    'autopsy consult',
-    'autopsy search',
-    'autopsy item',
-    'autopsy timeline',
-    'autopsy history',
-    'autopsy neighbors',
-    'git status',
-    'git diff',
-    'git show',
-    'git log',
-    'rg',
-    'nl',
-    'sed',
-)
-CONTEXT_GRAPH_COMMAND_ALLOW_CONTAINS: tuple[str, ...] = ()
-CONTEXT_GRAPH_COMMAND_SETUP_PREFIXES = (
-    'cd',
-)
-CONTEXT_GRAPH_MAX_RENDERED_COMMAND_EVENTS = 24
-CONTEXT_GRAPH_METADATA_DENY_KEYS = {
-    'content',
-    'output',
-    'outputs',
-    'stdout',
-    'stderr',
-    'result',
-    'response',
-    'tool_response',
-    'tool_output',
-    'text',
-}
-CONTEXT_GRAPH_METADATA_ALLOW_KEYS = {
-    'capture': 'capture',
-    'command': 'command',
-}
-CONTEXT_GRAPH_MEMORY_ENRICH_TTL_SECONDS = 30.0
-CONTEXT_GRAPH_MEMORY_WRITE_TTL_SECONDS = 2.0
-CONTEXT_GRAPH_MEMORY_RELATION_LIMIT = 4
-CONTEXT_GRAPH_MEMORY_WRITE_LIMIT = 6
-
-
-def context_graph_truthy_setting(value, default: bool = False) -> bool:
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return default
-    text = str(value).strip().lower()
-    if text in {'1', 'true', 'yes', 'on', 'enabled'}:
-        return True
-    if text in {'0', 'false', 'no', 'off', 'disabled'}:
-        return False
-    return default
-
-
-def load_context_graph_runtime_settings() -> dict:
-    try:
-        from autopsy_memory.context_graph_settings import load_context_graph_settings
-        return load_context_graph_settings()
-    except Exception:
-        configured = str(
-            os.environ.get('AUTOPSY_CONTEXT_GRAPH_SETTINGS_PATH')
-            or os.environ.get('AUTOPSY_CONTEXT_GRAPH_SETTINGS')
-            or ''
-        ).strip()
-        path = Path(configured).expanduser() if configured else APP_SUPPORT_DIR_DEFAULT / 'Config' / 'context-graph-settings.json'
-        raw = {}
-        if path.exists():
-            try:
-                parsed = json.loads(path.read_text(encoding='utf-8'))
-                if isinstance(parsed, dict):
-                    raw = parsed
-            except Exception:
-                raw = {}
-        return {
-            'enabled': context_graph_truthy_setting(raw.get('enabled'), True),
-            'mode': str(raw.get('mode') or 'cli').strip().lower() or 'cli',
-            'multi_turn': context_graph_truthy_setting(raw.get('multi_turn') or raw.get('multiTurn'), False),
-        }
-
-
-CONTEXT_GRAPH_COMMAND_OPTION_VALUE_FLAGS = {
-    '--workspace',
-    '--query',
-    '-q',
-    '--scope',
-    '--repo',
-    '--repository-root-path',
-    '--kind',
-    '--memory-type',
-    '--tag',
-    '--namespace',
-    '--entity-scope',
-    '--user-id',
-    '--agent-id',
-    '--app-id',
-    '--run-id',
-    '--group-id',
-    '--metadata',
-    '--filter-json',
-    '--min-fact-rating',
-    '--limit',
-    '--inspect-limit',
-    '--relation-limit',
-    '--as-of',
-    '--stable-key',
-    '--thread-id',
-}
 EMBEDDINGS_CONFIG_DEFAULT = {
     'enabled': True,
     'provider': 'sentence_transformers',
@@ -248,1617 +128,6 @@ def workspace_payload(workspace: dict) -> dict:
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
 
-
-def stable_graph_identifier(key: str) -> int:
-    value = 1_469_598_103_934_665_603
-    for byte in str(key).encode('utf-8'):
-        value ^= byte
-        value = (value * 1_099_511_628_211) & 0xffff_ffff_ffff_ffff
-    return int(value & 0x7fff_ffff)
-
-
-def trimmed_excerpt(text: str | None, max_length: int = 220) -> str:
-    trimmed = str(text or '').strip()
-    if len(trimmed) <= max_length:
-        return trimmed
-    return trimmed[:max_length].strip() + '...'
-
-
-def empty_to_none(value: str | None) -> str | None:
-    stripped = str(value or '').strip()
-    return stripped or None
-
-
-def context_graph_root_dir() -> Path:
-    raw = str(os.environ.get('AUTOPSY_CONTEXT_GRAPH_DIR') or '').strip()
-    if raw:
-        return Path(raw).expanduser()
-    return CONTEXT_GRAPH_DIR_DEFAULT
-
-
-def context_graph_thread_file(thread_id: str) -> Path:
-    digest = hashlib.sha256(str(thread_id).encode('utf-8')).hexdigest()[:32]
-    return context_graph_root_dir() / 'threads' / f'{digest}.json'
-
-
-def normalize_context_event_type(value: str | None) -> str:
-    normalized = re.sub(r'[^a-z0-9]+', '_', str(value or '').strip().lower()).strip('_')
-    return normalized or 'context_event'
-
-
-def context_graph_command_title(command: str, max_length: int = 180) -> str:
-    text = re.sub(r'\s+', ' ', str(command or '')).strip()
-    if len(text) <= max_length:
-        return text
-    return text[: max(0, max_length - 3)].rstrip() + '...'
-
-
-def context_graph_command_matches_prefix(command: str, prefix: str) -> bool:
-    return command == prefix or command.startswith(f'{prefix} ') or command.startswith(f'{prefix}\t')
-
-
-def context_graph_command_has_unsafe_shell_syntax(command: str) -> bool:
-    quote = ''
-    escaped = False
-    index = 0
-    while index < len(command):
-        char = command[index]
-        if escaped:
-            escaped = False
-            index += 1
-            continue
-        if char == '\\':
-            escaped = True
-            index += 1
-            continue
-        if quote == "'":
-            if char == "'":
-                quote = ''
-            index += 1
-            continue
-        if quote == '"':
-            if char == '"':
-                quote = ''
-                index += 1
-                continue
-            if char == '`' or (char == '$' and index + 1 < len(command) and command[index + 1] == '('):
-                return True
-            index += 1
-            continue
-        if char in {"'", '"'}:
-            quote = char
-            index += 1
-            continue
-        if char in {'>', '<', '`'}:
-            return True
-        if char == '$' and index + 1 < len(command) and command[index + 1] == '(':
-            return True
-        index += 1
-    return False
-
-
-def context_graph_command_segments(command: str) -> list[str]:
-    segments: list[str] = []
-    current: list[str] = []
-    quote = ''
-    escaped = False
-    index = 0
-
-    def flush_segment() -> None:
-        segment = ''.join(current).strip()
-        current.clear()
-        if segment:
-            segments.append(segment)
-
-    while index < len(command):
-        char = command[index]
-        if escaped:
-            current.append(char)
-            escaped = False
-            index += 1
-            continue
-        if char == '\\':
-            current.append(char)
-            escaped = True
-            index += 1
-            continue
-        if quote:
-            current.append(char)
-            if char == quote:
-                quote = ''
-            index += 1
-            continue
-        if char in {"'", '"'}:
-            quote = char
-            current.append(char)
-            index += 1
-            continue
-        if char == ';':
-            flush_segment()
-            index += 1
-            continue
-        if char == '&' and index + 1 < len(command) and command[index + 1] == '&':
-            flush_segment()
-            index += 2
-            continue
-        if char == '&':
-            flush_segment()
-            segments.append('&')
-            index += 1
-            continue
-        if char == '|':
-            if index + 1 < len(command) and command[index + 1] == '|':
-                flush_segment()
-                index += 2
-                continue
-            flush_segment()
-            index += 1
-            continue
-        current.append(char)
-        index += 1
-    flush_segment()
-    return segments
-
-
-def context_graph_command_is_allowed_segment(segment: str) -> bool:
-    if context_graph_command_has_disallowed_write_flags(segment):
-        return False
-    return (
-        any(context_graph_command_matches_prefix(segment, prefix) for prefix in CONTEXT_GRAPH_COMMAND_ALLOW_PREFIXES)
-        or any(fragment in segment for fragment in CONTEXT_GRAPH_COMMAND_ALLOW_CONTAINS)
-    )
-
-
-def context_graph_command_has_disallowed_write_flags(segment: str) -> bool:
-    try:
-        parts = shlex.split(segment)
-    except ValueError:
-        return True
-    if not parts:
-        return False
-    executable = parts[0]
-    if executable == 'sed':
-        return any(part == '-i' or part.startswith('-i') or part == '--in-place' or part.startswith('--in-place=') for part in parts[1:])
-    if executable == 'git' and len(parts) > 1 and parts[1] in {'diff', 'show', 'log', 'status'}:
-        return any(part == '--output' or part.startswith('--output=') for part in parts[2:])
-    return False
-
-
-def context_graph_command_is_setup_segment(segment: str) -> bool:
-    return any(context_graph_command_matches_prefix(segment, prefix) for prefix in CONTEXT_GRAPH_COMMAND_SETUP_PREFIXES)
-
-
-def should_capture_context_graph_command(command: str) -> bool:
-    raw_text = str(command or '')
-    if '\n' in raw_text or '\r' in raw_text:
-        return False
-    text = re.sub(r'\s+', ' ', raw_text).strip().lower()
-    if not text:
-        return False
-    if context_graph_command_has_unsafe_shell_syntax(text):
-        return False
-    if any(fragment in text for fragment in CONTEXT_GRAPH_COMMAND_DENY_CONTAINS):
-        return False
-    saw_allowed_segment = False
-    for segment in context_graph_command_segments(text):
-        if context_graph_command_is_allowed_segment(segment):
-            saw_allowed_segment = True
-            continue
-        if context_graph_command_is_setup_segment(segment):
-            continue
-        return False
-    return saw_allowed_segment
-
-
-def context_graph_shell_words(segment: str) -> list[str]:
-    try:
-        return shlex.split(segment)
-    except ValueError:
-        return []
-
-
-def context_graph_primary_command_segment(command: str) -> str:
-    for segment in context_graph_command_segments(str(command or '')):
-        if context_graph_command_is_setup_segment(segment):
-            continue
-        return segment.strip()
-    return ''
-
-
-def context_graph_option_value(parts: list[str], names: set[str] | tuple[str, ...]) -> str:
-    names_set = set(names)
-    for index, part in enumerate(parts):
-        if part in names_set and index + 1 < len(parts):
-            return str(parts[index + 1] or '').strip()
-        for name in names_set:
-            if part.startswith(f'{name}='):
-                return part.split('=', 1)[1].strip()
-    return ''
-
-
-def context_graph_has_flag(parts: list[str], names: set[str] | tuple[str, ...]) -> bool:
-    names_set = set(names)
-    return any(part in names_set for part in parts)
-
-
-def context_graph_positionals(parts: list[str], start_index: int) -> list[str]:
-    values: list[str] = []
-    skip_next = False
-    for part in parts[start_index:]:
-        if skip_next:
-            skip_next = False
-            continue
-        if part in CONTEXT_GRAPH_COMMAND_OPTION_VALUE_FLAGS:
-            skip_next = True
-            continue
-        if any(part.startswith(f'{flag}=') for flag in CONTEXT_GRAPH_COMMAND_OPTION_VALUE_FLAGS):
-            continue
-        if part.startswith('-'):
-            continue
-        values.append(part)
-    return values
-
-
-def context_graph_command_chip(text: str, max_length: int = 54) -> str:
-    return trimmed_excerpt(re.sub(r'\s+', ' ', str(text or '')).strip(), max_length)
-
-
-def context_graph_memory_scope_chips(parts: list[str]) -> list[str]:
-    chips: list[str] = []
-    if context_graph_has_flag(parts, {'--current-only'}):
-        chips.append('current only')
-    scope = context_graph_option_value(parts, {'--scope'})
-    if scope:
-        chips.append(f'scope: {context_graph_command_chip(scope, 28)}')
-    repo = context_graph_option_value(parts, {'--repo', '--repository-root-path'})
-    if repo:
-        chips.append(f'repo: {context_graph_command_chip(Path(repo).name or repo, 28)}')
-    kind = context_graph_option_value(parts, {'--kind'})
-    if kind:
-        chips.append(f'kind: {context_graph_command_chip(kind, 28)}')
-    memory_type = context_graph_option_value(parts, {'--memory-type'})
-    if memory_type:
-        chips.append(f'type: {context_graph_command_chip(memory_type, 28)}')
-    return chips
-
-
-def context_graph_memory_stable_key(parts: list[str], subcommand: str) -> str:
-    stable_key = context_graph_option_value(parts, {'--stable-key'})
-    if stable_key:
-        return stable_key
-    if subcommand in {'item', 'timeline', 'history'}:
-        positionals = context_graph_positionals(parts, 2)
-        return positionals[0] if positionals else ''
-    if subcommand == 'neighbors':
-        positionals = context_graph_positionals(parts, 2)
-        if positionals and not context_graph_option_value(parts, {'--thread-id'}):
-            return positionals[0]
-    return ''
-
-
-def context_graph_memory_query(parts: list[str], subcommand: str) -> str:
-    query = context_graph_option_value(parts, {'--query', '-q'})
-    if query:
-        return query
-    if subcommand == 'search':
-        return ' '.join(context_graph_positionals(parts, 2)).strip()
-    return ''
-
-
-def context_graph_file_search_chips(parts: list[str]) -> list[str]:
-    positionals = context_graph_positionals(parts, 1)
-    chips: list[str] = []
-    if positionals:
-        chips.append(f'pattern: {context_graph_command_chip(positionals[0])}')
-    if len(positionals) > 1:
-        chips.append(f'paths: {context_graph_command_chip(", ".join(positionals[1:3]))}')
-    return chips
-
-
-def context_graph_file_read_chips(parts: list[str]) -> list[str]:
-    if not parts:
-        return []
-    executable = parts[0]
-    positionals = context_graph_positionals(parts, 1)
-    chips: list[str] = []
-    if executable == 'sed':
-        script = ''
-        if '-n' in parts:
-            index = parts.index('-n')
-            if index + 1 < len(parts):
-                script = parts[index + 1]
-        if script:
-            chips.append(f'range: {context_graph_command_chip(script, 28)}')
-        if positionals:
-            chips.append(f'file: {context_graph_command_chip(positionals[-1])}')
-    elif positionals:
-        chips.append(f'file: {context_graph_command_chip(positionals[-1])}')
-    return chips
-
-
-def context_graph_git_chips(parts: list[str]) -> list[str]:
-    if len(parts) < 2:
-        return []
-    positionals = context_graph_positionals(parts, 2)
-    chips: list[str] = []
-    if positionals:
-        chips.append(f'target: {context_graph_command_chip(", ".join(positionals[:2]))}')
-    if context_graph_has_flag(parts, {'--stat'}):
-        chips.append('stat')
-    if context_graph_has_flag(parts, {'--short'}):
-        chips.append('short')
-    return chips
-
-
-def context_graph_command_view(command: str) -> dict:
-    segment = context_graph_primary_command_segment(command)
-    parts = context_graph_shell_words(segment)
-    if not parts:
-        return {
-            'family': 'command',
-            'visual_kind': 'command_context',
-            'label': 'Run command',
-            'summary': '',
-            'chips': [],
-        }
-    executable = parts[0].lower()
-    subcommand = parts[1].lower() if len(parts) > 1 else ''
-
-    if executable == 'autopsy':
-        chips = context_graph_memory_scope_chips(parts)
-        stable_key = context_graph_memory_stable_key(parts, subcommand)
-        query = context_graph_memory_query(parts, subcommand)
-        if query:
-            chips.insert(0, f'query: {context_graph_command_chip(query)}')
-        if stable_key:
-            chips.insert(0, f'key: {context_graph_command_chip(stable_key)}')
-        memory_views = {
-            'status': ('memory_status_context', 'Check memory status'),
-            'context': ('memory_query_context', 'Build memory context'),
-            'consult': ('memory_query_context', 'Consult memory'),
-            'search': ('memory_search_context', 'Search memory'),
-            'item': ('memory_item_context', 'Inspect memory item'),
-            'timeline': ('memory_timeline_context', 'Review memory timeline'),
-            'history': ('memory_history_context', 'Review memory history'),
-            'neighbors': ('memory_neighbors_context', 'Read memory relations'),
-        }
-        visual_kind, label = memory_views.get(subcommand, ('memory_query_context', 'Read memory'))
-        return {
-            'family': 'memory',
-            'subcommand': subcommand,
-            'visual_kind': visual_kind,
-            'label': label,
-            'summary': '\n'.join(chips),
-            'chips': chips[:4],
-            'stable_key': stable_key,
-            'query': query,
-            'min_fact_rating': context_graph_option_value(parts, {'--min-fact-rating'}),
-        }
-
-    if executable == 'rg':
-        chips = context_graph_file_search_chips(parts)
-        return {
-            'family': 'file',
-            'visual_kind': 'file_search_context',
-            'label': 'Search files',
-            'summary': '\n'.join(chips),
-            'chips': chips[:3],
-        }
-
-    if executable in {'nl', 'sed'}:
-        chips = context_graph_file_read_chips(parts)
-        return {
-            'family': 'file',
-            'visual_kind': 'file_read_context',
-            'label': 'Read file',
-            'summary': '\n'.join(chips),
-            'chips': chips[:3],
-        }
-
-    if executable == 'git':
-        labels = {
-            'status': 'Check git status',
-            'diff': 'Review git diff',
-            'show': 'Inspect git object',
-            'log': 'Read git history',
-        }
-        chips = context_graph_git_chips(parts)
-        return {
-            'family': 'git',
-            'visual_kind': f'git_{subcommand}_context' if subcommand in labels else 'git_context',
-            'label': labels.get(subcommand, 'Inspect git'),
-            'summary': '\n'.join(chips),
-            'chips': chips[:3],
-        }
-
-    return {
-        'family': 'command',
-        'visual_kind': 'command_context',
-        'label': 'Run command',
-        'summary': context_graph_command_title(command, 88),
-        'chips': [],
-    }
-
-
-CONTEXT_GRAPH_COLLAPSED_COMMAND_GROUPS = {
-    'file_reads': {
-        'visual_kind': 'file_read_context',
-        'family': 'file',
-        'single_label': 'Read file',
-        'plural_label': 'Read files',
-        'count_noun': 'read command',
-        'summary_prefix': 'read command',
-        'source_ref': 'file_read_context',
-        'relation': 'consulted',
-    },
-    'file_searches': {
-        'visual_kind': 'file_search_context',
-        'family': 'file',
-        'single_label': 'Search files',
-        'plural_label': 'Search files',
-        'count_noun': 'search command',
-        'summary_prefix': 'search command',
-        'source_ref': 'file_search_context',
-        'relation': 'consulted',
-    },
-    'review_context': {
-        'visual_kind': 'review_context',
-        'family': 'git',
-        'single_label': 'Review git diff',
-        'plural_label': 'Review git diffs',
-        'count_noun': 'review command',
-        'summary_prefix': 'git diff review',
-        'source_ref': 'git_diff_context',
-        'relation': 'consulted',
-    },
-}
-
-
-def context_graph_collapsed_command_group(command_view: dict) -> str:
-    visual_kind = str(command_view.get('visual_kind') or '').strip()
-    if visual_kind == 'file_read_context':
-        return 'file_reads'
-    if visual_kind == 'file_search_context':
-        return 'file_searches'
-    if visual_kind == 'git_diff_context':
-        return 'review_context'
-    return ''
-
-
-def context_graph_collapsed_command_label(collapsed_group: str, command_count: int, config: dict) -> str:
-    if collapsed_group == 'file_reads':
-        return f"{command_count} {'Files' if command_count != 1 else 'File'} Read"
-    if collapsed_group == 'file_searches':
-        return f"{command_count} File Search{'es' if command_count != 1 else ''}"
-    if collapsed_group == 'review_context':
-        return 'Review git diff' if command_count == 1 else f'{command_count} Git Diff Reviews'
-    return str(config['single_label'] if command_count == 1 else config['plural_label'])
-
-
-def context_graph_command_text(event: dict) -> str:
-    metadata = event.get('metadata') if isinstance(event.get('metadata'), dict) else {}
-    for value in (metadata.get('command'), event.get('content'), event.get('title')):
-        text = str(value or '').strip()
-        if text:
-            return text
-    return ''
-
-
-def sanitized_context_graph_metadata(metadata: dict) -> dict:
-    sanitized: dict = {}
-    for key, value in dict(metadata or {}).items():
-        normalized_key = re.sub(r'[^a-z0-9]+', '_', str(key or '').strip().lower()).strip('_')
-        if not normalized_key or normalized_key in CONTEXT_GRAPH_METADATA_DENY_KEYS:
-            continue
-        canonical_key = CONTEXT_GRAPH_METADATA_ALLOW_KEYS.get(normalized_key)
-        if not canonical_key:
-            continue
-        sanitized[canonical_key] = value
-    return sanitized
-
-
-def context_graph_skip_result(raw: dict, reason: str, *, event_type: str = '', command: str = '') -> dict:
-    thread_id = str(raw.get('thread_id') or raw.get('threadId') or '').strip()
-    state = load_context_graph_thread_state(thread_id) if thread_id else {
-        'thread_id': thread_id,
-        'created_at': utc_now_iso(),
-        'updated_at': utc_now_iso(),
-        'revision': 0,
-        'events': [],
-    }
-    state['_context_graph_settings'] = load_context_graph_runtime_settings()
-    payload = {
-        'ok': True,
-        'skipped': True,
-        'reason': reason,
-        'event_type': event_type,
-        'thread': context_graph_thread_summary(state),
-        'snapshot': build_context_graph_snapshot_from_state(state),
-    }
-    if command:
-        payload['command'] = command
-    return payload
-
-
-def normalize_allowed_context_graph_event(raw: dict) -> tuple[dict | None, dict | None]:
-    event = normalize_context_event(raw)
-    event_type = normalize_context_event_type(event.get('event_type'))
-    if event_type not in CONTEXT_GRAPH_ALLOWED_EVENT_TYPES:
-        return None, context_graph_skip_result(raw, 'generic_events_disabled', event_type=event_type)
-    command = context_graph_command_text(event)
-    if not command:
-        return None, context_graph_skip_result(raw, 'command_required', event_type=event_type)
-    if not should_capture_context_graph_command(command):
-        return None, context_graph_skip_result(raw, 'command_not_allowlisted', event_type=event_type, command=command)
-    metadata = sanitized_context_graph_metadata(event.get('metadata') if isinstance(event.get('metadata'), dict) else {})
-    metadata['command'] = command
-    metadata['capture'] = 'command_only'
-    event['event_type'] = 'command'
-    event['title'] = context_graph_command_title(command)
-    event['content'] = command
-    event['metadata'] = metadata
-    return event, None
-
-
-def normalize_context_event(raw: dict) -> dict:
-    thread_id = str(raw.get('thread_id') or raw.get('threadId') or '').strip()
-    if not thread_id:
-        raise ValueError('thread_id is required')
-    event_type = normalize_context_event_type(raw.get('event_type') or raw.get('type') or raw.get('kind'))
-    timestamp = str(raw.get('timestamp') or '').strip() or utc_now_iso()
-    metadata = raw.get('metadata') if isinstance(raw.get('metadata'), dict) else {}
-    title = str(raw.get('title') or raw.get('label') or '').strip()
-    content = str(raw.get('content') or raw.get('summary') or raw.get('text') or '').strip()
-    if not title:
-        title = {
-            'user_message': 'User Message',
-            'assistant_message': 'Assistant Response',
-            'reasoning': 'Reasoning',
-            'plan': 'Plan',
-            'file_read': 'File Read',
-            'file_search': 'File Search',
-            'web_search': 'Web Search',
-            'web_result': 'Web Result',
-            'tool_call': 'Tool Call',
-            'tool_result': 'Tool Result',
-            'command': 'Command',
-            'file_change': 'File Change',
-            'memory_consult': 'Memory Consult',
-            'memory_write': 'Memory Write',
-            'instruction': 'Instruction',
-        }.get(event_type, event_type.replace('_', ' ').title())
-    seed = json.dumps({
-        'thread_id': thread_id,
-        'event_type': event_type,
-        'timestamp': timestamp,
-        'title': title,
-        'content': content,
-        'metadata': metadata,
-    }, sort_keys=True)
-    event_id = str(raw.get('id') or raw.get('event_id') or raw.get('eventId') or f'ctx-event:{hashlib.sha256(seed.encode("utf-8")).hexdigest()[:24]}')
-    return {
-        'id': event_id,
-        'thread_id': thread_id,
-        'event_type': event_type,
-        'title': title,
-        'content': content,
-        'timestamp': timestamp,
-        'status': str(raw.get('status') or '').strip(),
-        'agent': str(raw.get('agent') or '').strip(),
-        'app': str(raw.get('app') or '').strip(),
-        'run_id': str(raw.get('run_id') or raw.get('runId') or '').strip(),
-        'metadata': metadata,
-    }
-
-
-def load_context_graph_thread_state(thread_id: str) -> dict:
-    path = context_graph_thread_file(thread_id)
-    if not path.exists():
-        now = utc_now_iso()
-        return {
-            'thread_id': thread_id,
-            'created_at': now,
-            'updated_at': now,
-            'revision': 0,
-            'events': [],
-        }
-    try:
-        raw = json.loads(path.read_text(encoding='utf-8'))
-    except Exception:
-        now = utc_now_iso()
-        return {
-            'thread_id': thread_id,
-            'created_at': now,
-            'updated_at': now,
-            'revision': 0,
-            'events': [],
-        }
-    if not isinstance(raw, dict):
-        raw = {}
-    raw.setdefault('thread_id', thread_id)
-    raw.setdefault('created_at', utc_now_iso())
-    raw.setdefault('updated_at', raw.get('created_at') or utc_now_iso())
-    raw.setdefault('revision', 0)
-    events = raw.get('events')
-    raw['events'] = events if isinstance(events, list) else []
-    return raw
-
-
-def save_context_graph_thread_state(state: dict) -> None:
-    thread_id = str(state.get('thread_id') or '').strip()
-    if not thread_id:
-        raise ValueError('thread_id is required')
-    path = context_graph_thread_file(thread_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + '.tmp')
-    tmp_path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding='utf-8')
-    tmp_path.replace(path)
-
-
-def record_context_graph_event(raw: dict) -> dict:
-    event, skipped = normalize_allowed_context_graph_event(raw)
-    if skipped is not None:
-        return skipped
-    if event is None:
-        raise ValueError('context graph event could not be normalized')
-    with _CONTEXT_GRAPH_LOCK:
-        state = load_context_graph_thread_state(event['thread_id'])
-        state['events'] = [
-            existing for existing in list(state.get('events') or [])
-            if (
-                isinstance(existing, dict)
-                and str(existing.get('id') or '') != event['id']
-                and context_graph_is_renderable_event(existing)
-            )
-        ]
-        state['events'].append(event)
-        state['events'].sort(key=lambda item: str(item.get('timestamp') or ''))
-        state['revision'] = int(state.get('revision') or 0) + 1
-        state['updated_at'] = utc_now_iso()
-        save_context_graph_thread_state(state)
-    state['_context_graph_settings'] = load_context_graph_runtime_settings()
-    return {
-        'event': event,
-        'thread': context_graph_thread_summary(state),
-        'snapshot': build_context_graph_snapshot_from_state(state),
-    }
-
-
-def context_graph_thread_summary(state: dict) -> dict:
-    events = context_graph_allowed_command_events(state.get('events') or [])
-    thread_id = str(state.get('thread_id') or '')
-    return {
-        'thread_id': thread_id,
-        'revision': int(state.get('revision') or 0),
-        'event_count': len(events),
-        'created_at': str(state.get('created_at') or ''),
-        'updated_at': str(state.get('updated_at') or ''),
-        'latest_event': events[-1] if events else None,
-    }
-
-
-def list_context_graph_threads(limit: int = 40) -> list[dict]:
-    root = context_graph_root_dir() / 'threads'
-    if not root.exists():
-        return []
-    summaries: list[dict] = []
-    for path in root.glob('*.json'):
-        try:
-            raw = json.loads(path.read_text(encoding='utf-8'))
-        except Exception:
-            continue
-        if isinstance(raw, dict):
-            summaries.append(context_graph_thread_summary(raw))
-    summaries.sort(key=lambda item: str(item.get('updated_at') or ''), reverse=True)
-    return summaries[:max(1, limit)]
-
-
-def context_graph_event_title(event: dict) -> str:
-    return trimmed_excerpt(context_graph_command_text(event), 88)
-
-
-def context_graph_event_run_id(event: dict) -> str:
-    metadata = event.get('metadata') if isinstance(event.get('metadata'), dict) else {}
-    return str(
-        event.get('run_id')
-        or event.get('runId')
-        or metadata.get('turn_id')
-        or metadata.get('turnId')
-        or ''
-    ).strip()
-
-
-def context_graph_event_turn_key(event: dict, fallback_index: int) -> str:
-    run_id = context_graph_event_run_id(event)
-    if run_id:
-        return run_id
-    timestamp = str(event.get('timestamp') or event.get('created_at') or '').strip()
-    if timestamp:
-        return f'manual:{timestamp}'
-    return f'manual:{fallback_index}'
-
-
-def context_graph_turn_groups(events: list[dict]) -> list[dict]:
-    groups_by_key: dict[str, dict] = {}
-    ordered_keys: list[str] = []
-    for index, event in enumerate(events):
-        key = context_graph_event_turn_key(event, index)
-        if key not in groups_by_key:
-            groups_by_key[key] = {
-                'key': key,
-                'run_id': context_graph_event_run_id(event),
-                'events': [],
-                'first_timestamp': str(event.get('timestamp') or event.get('created_at') or '').strip(),
-                'latest_timestamp': '',
-            }
-            ordered_keys.append(key)
-        groups_by_key[key]['events'].append(event)
-        timestamp = str(event.get('timestamp') or event.get('created_at') or '').strip()
-        if timestamp:
-            groups_by_key[key]['latest_timestamp'] = timestamp
-    return [groups_by_key[key] for key in ordered_keys]
-
-
-def context_graph_is_turn_scoping_event(event: dict) -> bool:
-    event_type = normalize_context_event_type(event.get('event_type'))
-    if event_type not in {'command', 'shell_command'}:
-        return False
-    return should_capture_context_graph_command(context_graph_command_text(event))
-
-
-def context_graph_allowed_command_events(events: list[dict]) -> list[dict]:
-    return [
-        event for event in events
-        if isinstance(event, dict) and context_graph_is_turn_scoping_event(event)
-    ]
-
-
-def context_graph_current_turn_events(events: list[dict]) -> list[dict]:
-    candidate_events = [
-        event for event in events
-        if isinstance(event, dict) and context_graph_is_turn_scoping_event(event)
-    ]
-    latest_run_id = ''
-    for event in reversed(candidate_events):
-        if context_graph_is_turn_scoping_event(event):
-            latest_run_id = context_graph_event_run_id(event)
-            if latest_run_id:
-                break
-    if not latest_run_id:
-        return candidate_events
-    latest_run_start_index = 0
-    for index, event in enumerate(candidate_events):
-        if context_graph_is_turn_scoping_event(event) and context_graph_event_run_id(event) == latest_run_id:
-            latest_run_start_index = index
-            break
-    return [
-        event for event in candidate_events[latest_run_start_index:]
-        if not context_graph_event_run_id(event) or context_graph_event_run_id(event) == latest_run_id
-    ]
-
-
-def context_graph_is_renderable_event(event: dict) -> bool:
-    return context_graph_is_turn_scoping_event(event)
-
-
-def context_graph_render_key(event: dict) -> str:
-    metadata = event.get('metadata') if isinstance(event.get('metadata'), dict) else {}
-    tool_use_id = str(metadata.get('tool_use_id') or metadata.get('toolUseId') or '').strip()
-    if tool_use_id:
-        run_id = context_graph_event_run_id(event)
-        return f'tool:{run_id}:{tool_use_id}'
-    event_id = str(event.get('id') or event.get('event_id') or event.get('eventId') or '').strip()
-    if event_id:
-        return f'event:{event_id}'
-    return 'command:' + hashlib.sha256(context_graph_command_text(event).encode('utf-8')).hexdigest()[:24]
-
-
-def deduplicated_context_graph_render_events(events: list[dict]) -> list[dict]:
-    ordered_keys: list[str] = []
-    events_by_key: dict[str, dict] = {}
-    for event in events:
-        key = context_graph_render_key(event)
-        if key in events_by_key:
-            ordered_keys = [existing for existing in ordered_keys if existing != key]
-        ordered_keys.append(key)
-        events_by_key[key] = event
-    return [events_by_key[key] for key in ordered_keys]
-
-
-def context_graph_memory_node_from_item(item: dict | None) -> dict | None:
-    if not isinstance(item, dict):
-        return None
-    stable_key = str(item.get('stable_key') or item.get('stableKey') or item.get('entity_stable_key') or '').strip()
-    if not stable_key:
-        return None
-    kind = str(item.get('kind') or item.get('entity_kind') or '').strip()
-    label = str(item.get('title') or item.get('label') or item.get('entity_label') or stable_key).strip()
-    return {
-        'stable_key': stable_key,
-        'kind': kind or 'memory',
-        'label': label or stable_key,
-        'summary': str(kind or item.get('memory_type') or 'memory').strip(),
-        'updated_at': str(item.get('updated_at') or item.get('activity_at') or '').strip(),
-    }
-
-
-def context_graph_empty_memory_enrichment() -> dict:
-    return {'items': [], 'relations': []}
-
-
-def context_graph_memory_enrichment_from_item(item: dict, relations: list[dict]) -> dict:
-    center = context_graph_memory_node_from_item(item)
-    if center is None:
-        return context_graph_empty_memory_enrichment()
-    items: dict[str, dict] = {center['stable_key']: center}
-    rendered_relations: list[dict] = []
-    for relation in relations[:CONTEXT_GRAPH_MEMORY_RELATION_LIMIT]:
-        if not isinstance(relation, dict):
-            continue
-        related = context_graph_memory_node_from_item(relation)
-        if related is None:
-            continue
-        items[related['stable_key']] = related
-        direction = str(relation.get('direction') or 'outgoing').strip().lower()
-        if direction == 'incoming':
-            from_key, to_key = related['stable_key'], center['stable_key']
-        else:
-            from_key, to_key = center['stable_key'], related['stable_key']
-        rendered_relations.append({
-            'from': from_key,
-            'to': to_key,
-            'relation': str(relation.get('relation') or '').strip() or 'related_to',
-            'predicate': str(relation.get('predicate') or relation.get('relation') or '').strip() or 'related_to',
-            'fact_text': str(relation.get('fact_text') or '').strip(),
-            'fact_rating': relation.get('fact_rating'),
-        })
-    return {'items': list(items.values()), 'relations': rendered_relations}
-
-
-def context_graph_memory_enrichment_from_relationship_hits(hits: list[dict], candidates: list[dict]) -> dict:
-    items: dict[str, dict] = {}
-    for candidate in candidates:
-        node = context_graph_memory_node_from_item({
-            'stable_key': candidate.get('stable_key'),
-            'kind': candidate.get('kind'),
-            'label': candidate.get('title') or candidate.get('label'),
-            'summary': candidate.get('preview') or candidate.get('summary'),
-            'updated_at': candidate.get('updated_at') or candidate.get('activity_at'),
-        })
-        if node is not None:
-            items[node['stable_key']] = node
-    relations: list[dict] = []
-    for hit in hits[:CONTEXT_GRAPH_MEMORY_RELATION_LIMIT]:
-        if not isinstance(hit, dict):
-            continue
-        source_key = str(hit.get('source_stable_key') or '').strip()
-        target_key = str(hit.get('target_stable_key') or '').strip()
-        if not source_key or not target_key:
-            continue
-        items.setdefault(source_key, {
-            'stable_key': source_key,
-            'kind': 'memory',
-            'label': str(hit.get('source_label') or source_key).strip(),
-            'summary': 'memory',
-            'updated_at': str(hit.get('updated_at') or '').strip(),
-        })
-        items.setdefault(target_key, {
-            'stable_key': target_key,
-            'kind': 'memory',
-            'label': str(hit.get('target_label') or target_key).strip(),
-            'summary': 'memory',
-            'updated_at': str(hit.get('updated_at') or '').strip(),
-        })
-        relations.append({
-            'from': source_key,
-            'to': target_key,
-            'relation': str(hit.get('relation') or '').strip() or 'related_to',
-            'predicate': str(hit.get('predicate') or hit.get('relation') or '').strip() or 'related_to',
-            'fact_text': str(hit.get('fact_text') or '').strip(),
-            'fact_rating': hit.get('fact_rating'),
-        })
-    return {'items': list(items.values()), 'relations': relations}
-
-
-def context_graph_merge_memory_enrichments(enrichments: list[dict]) -> dict:
-    items: dict[str, dict] = {}
-    relations: dict[tuple[str, str, str, str], dict] = {}
-    for enrichment in enrichments:
-        if not isinstance(enrichment, dict):
-            continue
-        for item in enrichment.get('items') or []:
-            if not isinstance(item, dict):
-                continue
-            stable_key = str(item.get('stable_key') or '').strip()
-            if stable_key and stable_key not in items:
-                items[stable_key] = item
-        for relation in enrichment.get('relations') or []:
-            if not isinstance(relation, dict):
-                continue
-            relation_key = (
-                str(relation.get('from') or ''),
-                str(relation.get('to') or ''),
-                str(relation.get('relation') or ''),
-                str(relation.get('fact_text') or ''),
-            )
-            if relation_key not in relations:
-                relations[relation_key] = relation
-    return {
-        'items': list(items.values()),
-        'relations': list(relations.values())[:CONTEXT_GRAPH_MEMORY_RELATION_LIMIT],
-    }
-
-
-def context_graph_default_memory_context():
-    payload = {
-        'tool_path': str(Path(__file__).resolve().with_name('cli.py')),
-        'cwd': os.getcwd(),
-    }
-    return load_falkor_request_context(payload, include_embeddings_status=False)
-
-
-def context_graph_fetch_memory_enrichment_uncached(view: dict) -> dict:
-    if view.get('family') != 'memory':
-        return context_graph_empty_memory_enrichment()
-    stable_key = str(view.get('stable_key') or '').strip()
-    query = str(view.get('query') or '').strip()
-    if not stable_key and not query:
-        return context_graph_empty_memory_enrichment()
-    try:
-        _tool, module, _workspace, _embeddings_config, _embeddings_status, falkor = context_graph_default_memory_context()
-    except Exception:
-        return context_graph_empty_memory_enrichment()
-
-    subcommand = str(view.get('subcommand') or '').strip().lower()
-    min_fact_rating_raw = str(view.get('min_fact_rating') or '').strip()
-    min_fact_rating = None
-    if min_fact_rating_raw:
-        try:
-            min_fact_rating = float(min_fact_rating_raw)
-        except ValueError:
-            min_fact_rating = None
-
-    try:
-        if stable_key:
-            def fetch_direct(graph):
-                if subcommand == 'timeline':
-                    payload = module.fetch_timeline(graph, stable_key)
-                    item = payload.get('item') if isinstance(payload, dict) else {}
-                    relations = payload.get('events') if isinstance(payload, dict) else []
-                    return context_graph_memory_enrichment_from_item(item or {}, relations or [])
-                item = module.fetch_item(graph, stable_key)
-                return context_graph_memory_enrichment_from_item(item, list(item.get('relations') or []))
-
-            return run_falkor_operation(falkor, fetch_direct)
-
-        if query and subcommand in {'context', 'consult', 'search'}:
-            def fetch_query_relations(graph):
-                enrichments: list[dict] = []
-                candidates: list[dict] = []
-                if hasattr(module, 'fetch_relationship_matches'):
-                    hits, relationship_candidates, _elapsed = module.fetch_relationship_matches(
-                        graph,
-                        query,
-                        limit=CONTEXT_GRAPH_MEMORY_RELATION_LIMIT,
-                        min_fact_rating=min_fact_rating,
-                    )
-                    relationship_enrichment = context_graph_memory_enrichment_from_relationship_hits(hits, relationship_candidates)
-                    if relationship_enrichment.get('relations'):
-                        enrichments.append(relationship_enrichment)
-                    candidates.extend(relationship_candidates)
-                for fetch_name in ('fetch_exact_text_candidates', 'fetch_node_lexical', 'fetch_token_overlap_candidates'):
-                    fetcher = getattr(module, fetch_name, None)
-                    if not callable(fetcher):
-                        continue
-                    try:
-                        fetched, _elapsed = fetcher(graph, query, limit=CONTEXT_GRAPH_MEMORY_RELATION_LIMIT)
-                    except Exception:
-                        continue
-                    candidates.extend(fetched or [])
-                ranked: dict[str, dict] = {}
-                for candidate in candidates:
-                    if not isinstance(candidate, dict):
-                        continue
-                    stable_key = str(candidate.get('stable_key') or '').strip()
-                    if not stable_key or stable_key in ranked:
-                        continue
-                    ranked[stable_key] = candidate
-                sorter = getattr(module, 'sort_candidates', None)
-                candidate_list = list(ranked.values())
-                if callable(sorter):
-                    try:
-                        candidate_list = sorter(candidate_list)
-                    except Exception:
-                        candidate_list = sorted(candidate_list, key=lambda item: str(item.get('stable_key') or ''))
-                for candidate in candidate_list[:2]:
-                    stable_key = str(candidate.get('stable_key') or '').strip()
-                    if not stable_key:
-                        continue
-                    try:
-                        item = module.fetch_item(graph, stable_key)
-                    except (Exception, SystemExit):
-                        continue
-                    enrichments.append(context_graph_memory_enrichment_from_item(item, list(item.get('relations') or [])))
-                return context_graph_merge_memory_enrichments(enrichments)
-
-            return run_falkor_operation(falkor, fetch_query_relations)
-    except (Exception, SystemExit):
-        return context_graph_empty_memory_enrichment()
-    return context_graph_empty_memory_enrichment()
-
-
-def context_graph_memory_enrichment_for_command(command: str, view: dict) -> dict:
-    if view.get('family') != 'memory':
-        return context_graph_empty_memory_enrichment()
-    cache_key = hashlib.sha256(json.dumps({
-        'command': str(command or ''),
-        'view': {
-            'subcommand': view.get('subcommand'),
-            'stable_key': view.get('stable_key'),
-            'query': view.get('query'),
-            'min_fact_rating': view.get('min_fact_rating'),
-        },
-        'cwd': os.getcwd(),
-    }, sort_keys=True).encode('utf-8')).hexdigest()
-    now = time.monotonic()
-    cached = _CONTEXT_GRAPH_MEMORY_ENRICH_CACHE.get(cache_key)
-    if cached is not None and now - float(cached.get('cached_at') or 0.0) < CONTEXT_GRAPH_MEMORY_ENRICH_TTL_SECONDS:
-        return copy.deepcopy(cached.get('payload') or context_graph_empty_memory_enrichment())
-    payload = context_graph_fetch_memory_enrichment_uncached(view)
-    _CONTEXT_GRAPH_MEMORY_ENRICH_CACHE.clear()
-    _CONTEXT_GRAPH_MEMORY_ENRICH_CACHE[cache_key] = {
-        'cached_at': now,
-        'payload': copy.deepcopy(payload),
-    }
-    return payload
-
-
-def context_graph_thread_memory_writes_uncached(thread_id: str, *, since_at: str = "", limit: int = CONTEXT_GRAPH_MEMORY_WRITE_LIMIT) -> list[dict]:
-    if not str(thread_id or '').strip():
-        return []
-    try:
-        _tool, module, _workspace, _embeddings_config, _embeddings_status, falkor = context_graph_default_memory_context()
-    except Exception:
-        return []
-
-    try:
-        return run_falkor_operation(
-            falkor,
-            lambda graph: module.fetch_context_graph_thread_writes(
-                graph,
-                thread_id=str(thread_id or '').strip(),
-                since_at=str(since_at or '').strip(),
-                limit=max(1, min(int(limit), 12)),
-            ),
-        )
-    except (Exception, SystemExit):
-        return []
-
-
-def context_graph_thread_memory_writes(thread_id: str, *, since_at: str = "", limit: int = CONTEXT_GRAPH_MEMORY_WRITE_LIMIT) -> list[dict]:
-    thread_key = str(thread_id or '').strip()
-    if not thread_key:
-        return []
-    bounded_limit = max(1, min(int(limit), 12))
-    cache_key = hashlib.sha256(json.dumps({
-        'thread_id': thread_key,
-        'since_at': str(since_at or '').strip(),
-        'limit': bounded_limit,
-        'cwd': os.getcwd(),
-    }, sort_keys=True).encode('utf-8')).hexdigest()
-    now = time.monotonic()
-    cached = _CONTEXT_GRAPH_MEMORY_WRITE_CACHE.get(cache_key)
-    if cached is not None and now - float(cached.get('cached_at') or 0.0) < CONTEXT_GRAPH_MEMORY_WRITE_TTL_SECONDS:
-        return copy.deepcopy(cached.get('payload') or [])
-    payload = context_graph_thread_memory_writes_uncached(thread_key, since_at=since_at, limit=bounded_limit)
-    _CONTEXT_GRAPH_MEMORY_WRITE_CACHE.clear()
-    _CONTEXT_GRAPH_MEMORY_WRITE_CACHE[cache_key] = {
-        'cached_at': now,
-        'payload': copy.deepcopy(payload),
-    }
-    return payload
-
-
-def context_graph_write_since_at(events: list[dict], multi_turn: bool) -> str:
-    if multi_turn or not events:
-        return ''
-    for event in events:
-        timestamp = str(event.get('timestamp') or event.get('updated_at') or event.get('created_at') or '').strip()
-        if timestamp:
-            return timestamp
-    return ''
-
-
-def build_context_graph_snapshot(thread_id: str) -> dict:
-    with _CONTEXT_GRAPH_LOCK:
-        state = load_context_graph_thread_state(thread_id)
-    state['_context_graph_settings'] = load_context_graph_runtime_settings()
-    return build_context_graph_snapshot_from_state(state)
-
-
-def build_context_graph_snapshot_from_state(state: dict) -> dict:
-    thread_id = str(state.get('thread_id') or '')
-    settings = state.get('_context_graph_settings') if isinstance(state.get('_context_graph_settings'), dict) else {}
-    multi_turn = bool(settings.get('multi_turn'))
-    all_events = context_graph_allowed_command_events(state.get('events') or [])
-    current_turn_events = all_events if multi_turn else context_graph_current_turn_events(all_events)
-    renderable_events = deduplicated_context_graph_render_events([
-        event for event in current_turn_events if context_graph_is_renderable_event(event)
-    ])
-    events = renderable_events[-CONTEXT_GRAPH_MAX_RENDERED_COMMAND_EVENTS:]
-    turn_groups = context_graph_turn_groups(events) if multi_turn else []
-    uses_turn_focus = bool(multi_turn and turn_groups)
-    scope_key = 'multi-turn' if multi_turn else 'turn'
-    scope_label = 'Multi-Turn Context' if multi_turn else 'Current Turn'
-    public_scope_title = 'Multi-Turn Context' if multi_turn else 'Current Context'
-    root_id = stable_graph_identifier(f'context-graph:{scope_key}:{thread_id}')
-    # Completion/lifecycle records are intentionally not graph events; the graph is command-derived only.
-    is_complete = False
-    event_summary = f"{'Complete' if is_complete else 'In Progress'} - {len(events)} active event{'s' if len(events) != 1 else ''}"
-    if multi_turn and turn_groups:
-        event_summary += f" across {len(turn_groups)} turn{'s' if len(turn_groups) != 1 else ''}"
-    nodes: list[dict] = [] if uses_turn_focus else [{
-        'id': root_id,
-        'kind': 'turn_context',
-        'label': scope_label,
-        'summary': event_summary,
-        'stateFlags': ['complete'] if is_complete else ['current', 'in_progress'],
-        'isFocus': True,
-        'sourceKind': 'context_graph_thread',
-        'sourceRef': thread_id,
-        'turnScope': 'multi_turn' if multi_turn else 'current_turn',
-    }]
-    connections: list[dict] = []
-    seen_nodes: dict[str, int] = {} if uses_turn_focus else {'root': root_id}
-    seen_edges: set[str] = set()
-    focus_node_id = root_id
-
-    def add_node(
-        *,
-        key: str,
-        kind: str,
-        label: str,
-        summary: str | None,
-        state_flags: list[str],
-        source_kind: str | None,
-        source_ref: str | None,
-        visual_kind: str | None = None,
-        detail_chips: list[str] | None = None,
-        updated_at: str | None = None,
-        provenance: dict | None = None,
-        is_focus: bool = False,
-    ) -> int:
-        if key in seen_nodes:
-            node_id = seen_nodes[key]
-            for index, node in enumerate(nodes):
-                if node.get('id') == node_id:
-                    merged_flags = sorted(set(list(node.get('stateFlags') or []) + state_flags))
-                    merged_chips = list(node.get('detailChips') or [])
-                    for chip in detail_chips or []:
-                        if chip and chip not in merged_chips:
-                            merged_chips.append(chip)
-                    nodes[index] = {
-                        **node,
-                        'summary': node.get('summary') or summary,
-                        'stateFlags': merged_flags,
-                        'sourceKind': node.get('sourceKind') or source_kind,
-                        'sourceRef': node.get('sourceRef') or source_ref,
-                        'visualKind': node.get('visualKind') or visual_kind,
-                        'detailChips': merged_chips,
-                        'updatedAt': node.get('updatedAt') or updated_at,
-                        'provenance': node.get('provenance') or provenance,
-                        'isFocus': bool(node.get('isFocus')) or bool(is_focus),
-                    }
-                    break
-            return node_id
-        node_id = stable_graph_identifier(f'context-graph:node:{thread_id}:{key}')
-        seen_nodes[key] = node_id
-        node = {
-            'id': node_id,
-            'kind': kind,
-            'label': trimmed_excerpt(label, 88) or kind.replace('_', ' ').title(),
-            'summary': empty_to_none(summary),
-            'stateFlags': sorted(set(state_flags)),
-            'isFocus': bool(is_focus),
-            'sourceKind': source_kind,
-            'sourceRef': source_ref,
-        }
-        if visual_kind:
-            node['visualKind'] = visual_kind
-        if detail_chips:
-            node['detailChips'] = [chip for chip in detail_chips if chip][:4]
-        if updated_at:
-            node['updatedAt'] = updated_at
-        if provenance:
-            node['provenance'] = provenance
-        nodes.append(node)
-        return node_id
-
-    def add_edge(
-        relation: str,
-        from_node_id: int,
-        to_node_id: int,
-        explanation: str | None = None,
-        *,
-        predicate: str | None = None,
-        subject_label: str | None = None,
-        subject_kind: str | None = None,
-        object_label: str | None = None,
-        object_kind: str | None = None,
-        fact_text: str | None = None,
-        overlap_terms: list[str] | None = None,
-        is_explicit: bool = True,
-    ) -> None:
-        edge_key = f'{relation}:{from_node_id}:{to_node_id}'
-        if edge_key in seen_edges:
-            return
-        seen_edges.add(edge_key)
-        connections.append({
-            'id': stable_graph_identifier(f'context-graph:edge:{thread_id}:{edge_key}'),
-            'relation': relation,
-            'predicate': predicate or relation,
-            'fromNodeID': from_node_id,
-            'toNodeID': to_node_id,
-            'subjectLabel': subject_label,
-            'subjectKind': subject_kind,
-            'objectLabel': object_label,
-            'objectKind': object_kind,
-            'factText': fact_text,
-            'explanation': explanation or fact_text,
-            'overlapTerms': overlap_terms or [],
-            'isExplicit': is_explicit,
-            'predicateDefinition': None,
-        })
-
-    def add_memory_enrichment(command_node_id: int, command: str, view: dict) -> None:
-        enrichment = context_graph_memory_enrichment_for_command(command, view)
-        memory_nodes = enrichment.get('items') if isinstance(enrichment, dict) else []
-        memory_relations = enrichment.get('relations') if isinstance(enrichment, dict) else []
-        if not isinstance(memory_nodes, list):
-            memory_nodes = []
-        if not isinstance(memory_relations, list):
-            memory_relations = []
-        memory_node_ids: dict[str, int] = {}
-        memory_node_payloads: dict[str, dict] = {}
-        for item in memory_nodes[:CONTEXT_GRAPH_MEMORY_RELATION_LIMIT * 2 + 1]:
-            if not isinstance(item, dict):
-                continue
-            stable_key = str(item.get('stable_key') or '').strip()
-            if not stable_key:
-                continue
-            memory_node_payloads[stable_key] = item
-            memory_node_ids[stable_key] = add_node(
-                key=f'memory:{stable_key}',
-                kind='graph_memory',
-                label=str(item.get('label') or stable_key),
-                summary=str(item.get('summary') or item.get('kind') or 'memory'),
-                state_flags=['consulted'],
-                source_kind='autopsy_memory',
-                source_ref=stable_key,
-                visual_kind='graph_memory',
-                detail_chips=[str(item.get('kind') or 'memory')],
-                updated_at=str(item.get('updated_at') or ''),
-            )
-        stable_key = str(view.get('stable_key') or '').strip()
-        if stable_key and stable_key in memory_node_ids:
-            add_edge('read_memory', command_node_id, memory_node_ids[stable_key], 'Memory command target')
-        for relation in memory_relations[:CONTEXT_GRAPH_MEMORY_RELATION_LIMIT]:
-            if not isinstance(relation, dict):
-                continue
-            from_key = str(relation.get('from') or '').strip()
-            to_key = str(relation.get('to') or '').strip()
-            if from_key not in memory_node_ids or to_key not in memory_node_ids:
-                continue
-            relation_name = str(relation.get('relation') or 'related_to').strip() or 'related_to'
-            predicate = str(relation.get('predicate') or relation_name).strip() or relation_name
-            from_payload = memory_node_payloads.get(from_key) or {}
-            to_payload = memory_node_payloads.get(to_key) or {}
-            add_edge(
-                relation_name,
-                memory_node_ids[from_key],
-                memory_node_ids[to_key],
-                str(relation.get('fact_text') or '').strip() or None,
-                predicate=predicate,
-                subject_label=str(from_payload.get('label') or from_key),
-                subject_kind=str(from_payload.get('kind') or 'memory'),
-                object_label=str(to_payload.get('label') or to_key),
-                object_kind=str(to_payload.get('kind') or 'memory'),
-                fact_text=str(relation.get('fact_text') or '').strip() or None,
-                overlap_terms=[predicate],
-            )
-        if not stable_key and memory_node_ids:
-            for key, node_id in list(memory_node_ids.items())[:CONTEXT_GRAPH_MEMORY_RELATION_LIMIT]:
-                add_edge('retrieved', command_node_id, node_id, 'Matched by memory relation text')
-
-    def add_memory_write_nodes(parent_node_id: int) -> None:
-        writes = context_graph_thread_memory_writes(
-            thread_id,
-            since_at=context_graph_write_since_at(events, multi_turn),
-            limit=CONTEXT_GRAPH_MEMORY_WRITE_LIMIT,
-        )
-        if not isinstance(writes, list):
-            return
-        for write in writes[:CONTEXT_GRAPH_MEMORY_WRITE_LIMIT]:
-            if not isinstance(write, dict):
-                continue
-            stable_key = str(write.get('stable_key') or '').strip()
-            if not stable_key:
-                continue
-            kind = str(write.get('kind') or 'memory').strip() or 'memory'
-            repositories = [
-                str(repo).strip()
-                for repo in list(write.get('repositories') or [])
-                if str(repo).strip()
-            ]
-            chips = ['written', kind] + repositories[:2]
-            write_node_id = add_node(
-                key=f'memory_write:{stable_key}',
-                kind='memory_write',
-                label=str(write.get('title') or stable_key),
-                summary=str(write.get('summary') or kind),
-                state_flags=['current', 'written'],
-                source_kind='autopsy_memory',
-                source_ref=stable_key,
-                visual_kind='memory_write',
-                detail_chips=chips,
-                updated_at=str(write.get('updated_at') or ''),
-                provenance={
-                    'stable_key': stable_key,
-                    'source': str(write.get('source') or 'memory'),
-                    'memory_type': str(write.get('memory_type') or ''),
-                },
-            )
-            add_edge(
-                'wrote_memory',
-                write_node_id,
-                parent_node_id,
-                'Memory written in this context',
-                subject_label=str(write.get('title') or stable_key),
-                subject_kind=kind,
-                object_label='Current context',
-                object_kind='turn_context',
-            )
-
-    command_events = [
-        event for event in events
-        if normalize_context_event_type(event.get('event_type')) in {'command', 'shell_command'}
-    ]
-    parent_node_by_event_key: dict[str, int] = {}
-    latest_turn_key = turn_groups[-1].get('key') if turn_groups else ''
-    if multi_turn and turn_groups:
-        turn_node_ids: list[int] = []
-        latest_turn_node_id: int | None = None
-        for index, group in enumerate(turn_groups):
-            group_key = str(group.get('key') or f'turn:{index}').strip()
-            group_events = group.get('events') if isinstance(group.get('events'), list) else []
-            run_id = str(group.get('run_id') or '').strip()
-            is_latest_turn = group_key == latest_turn_key
-            turn_label = 'Current Turn' if is_latest_turn else f'Turn {index + 1}'
-            event_count = len(group_events)
-            chips = [f'{event_count} event{"s" if event_count != 1 else ""}']
-            if run_id:
-                chips.append(f'run: {context_graph_command_chip(run_id, 28)}')
-            turn_node_id = add_node(
-                key=f'turn:{group_key}',
-                kind='turn_context' if is_latest_turn else 'history_context',
-                label=turn_label,
-                summary=f"{event_count} captured command{'s' if event_count != 1 else ''}",
-                state_flags=['current', 'in_progress'] if is_latest_turn else ['complete'],
-                source_kind='context_graph_turn',
-                source_ref=run_id or group_key,
-                visual_kind=None if is_latest_turn else 'turn_group_context',
-                detail_chips=chips,
-                updated_at=str(group.get('latest_timestamp') or group.get('first_timestamp') or '').strip() or None,
-                provenance={
-                    'run_id': run_id,
-                    'turn_index': index + 1,
-                    'turn_count': len(turn_groups),
-                    'current': is_latest_turn,
-                },
-                is_focus=is_latest_turn,
-            )
-            turn_node_ids.append(turn_node_id)
-            if is_latest_turn:
-                latest_turn_node_id = turn_node_id
-                focus_node_id = turn_node_id
-            for event in group_events:
-                parent_node_by_event_key[context_graph_render_key(event)] = turn_node_id
-        if latest_turn_node_id:
-            for turn_node_id in turn_node_ids:
-                if turn_node_id != latest_turn_node_id:
-                    add_edge('previous_turn', turn_node_id, latest_turn_node_id, 'Previous turn retained for context')
-
-    if not is_complete and events:
-        reasoning_id = add_node(
-            key='active:reasoning',
-            kind='reasoning_context',
-            label='Reasoning',
-            summary='Turn in play',
-            state_flags=['current', 'in_progress'],
-            source_kind='context_graph_runtime',
-            source_ref='active_turn',
-        )
-        add_edge('reasoned_with', reasoning_id, parent_node_by_event_key.get(context_graph_render_key(events[-1]), root_id))
-
-    collapsed_commands_by_parent: dict[tuple[int, str], list[tuple[dict, str, dict, list[str], str]]] = {}
-
-    def add_command_event_node(event: dict, command: str, command_view: dict, state_flags: list[str], event_id: str, parent_node_id: int) -> int:
-        command_node_id = add_node(
-            key=f'command:{context_graph_render_key(event)}',
-            kind='command_context',
-            label=str(command_view.get('label') or context_graph_event_title(event)),
-            summary=str(command_view.get('summary') or '') or None,
-            state_flags=state_flags,
-            source_kind='context_graph_event',
-            source_ref=str(command_view.get('stable_key') or event_id),
-            visual_kind=str(command_view.get('visual_kind') or 'command_context'),
-            detail_chips=list(command_view.get('chips') or []),
-            provenance={'command': command, 'family': command_view.get('family')},
-        )
-        add_edge('consulted', command_node_id, parent_node_id)
-        return command_node_id
-
-    for event in command_events:
-        event_id = str(event.get('id') or event.get('event_id') or event.get('eventId') or context_graph_render_key(event)).strip()
-        state_flags = ['consulted']
-        status = normalize_context_event_type(event.get('status'))
-        if status in {'in_progress', 'running'}:
-            state_flags.append('in_progress')
-        elif status in {'blocked', 'error'}:
-            state_flags.append(status)
-        command = context_graph_command_text(event)
-        command_view = context_graph_command_view(command)
-        parent_node_id = parent_node_by_event_key.get(context_graph_render_key(event), root_id)
-        collapsed_group = context_graph_collapsed_command_group(command_view)
-        if collapsed_group:
-            collapsed_commands_by_parent.setdefault((parent_node_id, collapsed_group), []).append((event, command, command_view, state_flags, event_id))
-            continue
-        command_node_id = add_command_event_node(event, command, command_view, state_flags, event_id, parent_node_id)
-        if command_view.get('family') == 'memory':
-            add_memory_enrichment(command_node_id, command, command_view)
-
-    for (parent_node_id, collapsed_group), collapsed_commands in collapsed_commands_by_parent.items():
-        config = CONTEXT_GRAPH_COLLAPSED_COMMAND_GROUPS[collapsed_group]
-        command_count = len(collapsed_commands)
-        count_noun = str(config['count_noun'])
-        summary_prefix = str(config['summary_prefix'])
-        count_chip = f'{command_count} {count_noun}{"s" if command_count != 1 else ""}'
-        merged_flags: list[str] = []
-        merged_chips: list[str] = [count_chip]
-        commands: list[str] = []
-        event_ids: list[str] = []
-        for _event, command, command_view, state_flags, event_id in collapsed_commands:
-            commands.append(command)
-            event_ids.append(event_id)
-            for flag in state_flags:
-                if flag not in merged_flags:
-                    merged_flags.append(flag)
-            for chip in list(command_view.get('chips') or []):
-                if chip and chip not in merged_chips:
-                    merged_chips.append(chip)
-        summary_chips = [
-            chip for chip in merged_chips[1:]
-            if chip.startswith(('file: ', 'pattern: ', 'paths: ', 'target: ', 'stat', 'short'))
-        ][:5]
-        summary = f"{command_count} {summary_prefix}{'s' if command_count != 1 else ''}"
-        if summary_chips:
-            summary += '\n' + '\n'.join(summary_chips)
-        label = context_graph_collapsed_command_label(collapsed_group, command_count, config)
-        collapsed_node_id = add_node(
-            key=f'command:{collapsed_group}:collapsed:{parent_node_id}',
-            kind=collapsed_group,
-            label=label,
-            summary=summary,
-            state_flags=merged_flags or ['consulted'],
-            source_kind='context_graph_event',
-            source_ref=f"{config['source_ref']}:{parent_node_id}",
-            visual_kind=collapsed_group,
-            detail_chips=merged_chips,
-            provenance={
-                'family': config['family'],
-                'collapsed': True,
-                'command_count': command_count,
-                'commands': commands[:12],
-                'event_ids': event_ids[:12],
-            },
-        )
-        add_edge(str(config['relation']), collapsed_node_id, parent_node_id)
-
-    add_memory_write_nodes(focus_node_id)
-
-    thread_summary = context_graph_thread_summary(state)
-    thread_summary['event_count'] = len(events)
-    thread_summary['latest_event'] = events[-1] if events else None
-    thread_summary['turn_scope'] = 'multi_turn' if multi_turn else 'current_turn'
-
-    return {
-        'scopeTitle': public_scope_title,
-        'focusNodeID': focus_node_id,
-        'nodes': nodes,
-        'connections': connections,
-        'recentEpisodes': [],
-        'conflictSuggestions': [],
-        'thread': thread_summary,
-        'events': events[-80:],
-        'allEventCount': len(renderable_events),
-        'turnScope': 'multi_turn' if multi_turn else 'current_turn',
-    }
-
-
-def context_graph_viewer_static_root() -> Path | None:
-    override = str(os.environ.get('AUTOPSY_CONTEXT_GRAPH_STATIC_DIR') or '').strip()
-    if override:
-        path = Path(override).expanduser()
-        return path if path.exists() else None
-    try:
-        root = Path(str(resources.files('autopsy_memory.context_graph_viewer').joinpath('static')))
-        if root.exists():
-            return root
-    except Exception:
-        pass
-    direct_script_root = Path(__file__).resolve().parent / 'context_graph_viewer' / 'static'
-    if direct_script_root.exists():
-        return direct_script_root
-    return None
-
-
-def context_graph_thread_url(base_url: str, token: str, thread_id: str) -> str:
-    encoded_thread = quote_path_segment(thread_id)
-    return f'{base_url.rstrip("/")}/context-graph/threads/{encoded_thread}?token={token}'
-
-
-def quote_path_segment(value: str) -> str:
-    from urllib.parse import quote
-    return quote(str(value), safe='')
-
-
-def context_graph_index_html() -> bytes:
-    root = context_graph_viewer_static_root()
-    index_path = root / 'index.html' if root else None
-    if index_path and index_path.exists():
-        return index_path.read_bytes()
-    return b"""<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Autopsy Context Graph</title>
-    <style>
-      body { margin: 0; font: 14px system-ui, sans-serif; background: #f4f1ea; color: #1d2228; }
-      main { min-height: 100vh; display: grid; place-items: center; padding: 32px; box-sizing: border-box; }
-      section { max-width: 720px; border: 1px solid rgba(29,34,40,.14); background: rgba(255,255,255,.72); border-radius: 16px; padding: 24px; }
-      code { background: rgba(29,34,40,.08); padding: 2px 5px; border-radius: 5px; }
-    </style>
-  </head>
-  <body>
-    <main>
-      <section>
-        <h1>Autopsy Context Graph</h1>
-        <p>The bundled graph viewer assets are not built yet. Run the context graph app build or install a package that includes <code>autopsy_memory/context_graph_viewer/static</code>.</p>
-      </section>
-    </main>
-  </body>
-</html>"""
-
-
-def context_graph_static_asset(path: str) -> tuple[bytes, str] | None:
-    root = context_graph_viewer_static_root()
-    if root is None:
-        return None
-    relative = Path(unquote(path).lstrip('/'))
-    if relative.is_absolute() or '..' in relative.parts:
-        return None
-    target = (root / relative).resolve()
-    try:
-        root_resolved = root.resolve()
-    except Exception:
-        return None
-    if root_resolved not in target.parents and target != root_resolved:
-        return None
-    if not target.is_file():
-        return None
-    content_type = mimetypes.guess_type(str(target))[0] or 'application/octet-stream'
-    return target.read_bytes(), content_type
 
 
 def build_read_workflow(
@@ -2618,8 +887,29 @@ def consult_via_falkor(tool, workspace, embeddings_config, embeddings_status, fa
         current_only=bool(request.get('current_only', True)),
         as_of=request.get('as_of'),
     )
+    weak_signal_hits = (
+        list(response.get('relationship_hits') or [])
+        + list(response.get('relationship_candidate_hits') or [])
+        + list(response.get('lexical_only_hits') or [])
+        + list(response.get('entity_only_hits') or [])
+        + list(response.get('vector_only_hits') or [])
+    )
     read_guard = response.get('read_guard') if isinstance(response.get('read_guard'), dict) else {}
-    if not workflow_hits and int(read_guard.get('blocked_count') or 0) > 0:
+    if not workflow_hits and weak_signal_hits:
+        response['workflow'] = {
+            'status': 'weak_signals_only',
+            'coverage': 'weak',
+            'complete': False,
+            'next_step': 'refine_query',
+            'message': 'No reliable memory hits were found. Weak side-channel candidates are shown for debugging only.',
+            'suggested_next_steps': [
+                workflow_step(
+                    'refine-query',
+                    'Use a more specific query or inspect exact items before relying on weak side channels.',
+                )
+            ],
+        }
+    elif not workflow_hits and int(read_guard.get('blocked_count') or 0) > 0:
         response['workflow'] = {
             'status': 'unsafe_memory_quarantined',
             'coverage': 'blocked',
@@ -2781,6 +1071,43 @@ def require_falkor_context(payload: dict, *, include_embeddings_status: bool = T
     return context
 
 
+def falkor_start_failure_payload_for_worker(payload: dict, error: Exception) -> dict:
+    tool_path = str(payload.get('tool_path') or '').strip()
+    try:
+        settings = falkor_backend_settings() or {}
+    except Exception:
+        settings = {}
+
+    def fallback_payload() -> dict:
+        return {
+            'ok': False,
+            'backend': 'falkordb',
+            'mode': 'embedded' if settings.get('lite_path') else 'external',
+            'error': str(error),
+            'workflow': {
+                'status': 'runtime_unavailable',
+                'complete': False,
+                'next_step': 'fix_falkordb_runtime',
+                'message': 'Autopsy could not start or reach the FalkorDB runtime.',
+            },
+        }
+
+    if not tool_path:
+        return fallback_payload()
+    try:
+        module = load_falkor_module(tool_path)
+    except Exception:
+        return fallback_payload()
+    args = argparse.Namespace(
+        workspace=str(payload.get('workspace') or '') or None,
+        host=str(settings.get('host') or '127.0.0.1'),
+        port=int(settings.get('port') or 6381),
+        graph_name=str(settings.get('graph_name') or 'autopsy_memory'),
+        lite_path=str(settings.get('lite_path') or ''),
+    )
+    return module.falkor_start_failure_payload(args, error)
+
+
 def refresh_activity_snapshot_for_worker(module, falkor: dict, tool, workspace: dict) -> None:
     try:
         run_falkor_operation(
@@ -2801,8 +1128,95 @@ def handle_memory_consult(payload: dict) -> dict:
 
 def handle_memory_health(payload: dict) -> dict:
     request = payload.get('request') or {}
-    tool, _module, workspace, embeddings_config, _embeddings_status, falkor = require_falkor_context(payload, include_embeddings_status=False)
+    try:
+        tool, _module, workspace, embeddings_config, _embeddings_status, falkor = require_falkor_context(payload, include_embeddings_status=False)
+    except Exception as exc:
+        return falkor_start_failure_payload_for_worker(payload, exc)
     return health_via_falkor(tool, workspace, embeddings_config, falkor, request)
+
+
+def handle_memory_diagnostics(payload: dict) -> dict:
+    request = payload.get('request') or {}
+    tool_path = str(payload.get('tool_path') or '').strip()
+    if not tool_path:
+        raise ValueError('missing tool_path')
+    module = load_falkor_module(tool_path)
+    args = argparse.Namespace(
+        log=str(request.get('log') or 'all'),
+        limit=max(0, int(request.get('limit') or 10)),
+    )
+    return module.build_diagnostics_command_payload(args)
+
+
+def repair_embedded_snapshot_plan_safety_payload() -> dict:
+    return {
+        'plan_only': True,
+        'mutations_allowed': False,
+        'forced_dry_run': True,
+        'salvage_export_allowed': False,
+        'worker_cleanup_allowed': False,
+    }
+
+
+def handle_memory_repair_embedded_snapshot_plan(payload: dict) -> dict:
+    request = payload.get('request') or {}
+    tool_path = str(payload.get('tool_path') or '').strip()
+    if not tool_path:
+        raise ValueError('missing tool_path')
+    module = load_falkor_module(tool_path)
+    try:
+        settings = falkor_backend_settings() or {}
+    except Exception:
+        settings = {}
+    workspace = resolve_workspace_reference(
+        str(payload.get('workspace') or '').strip() or None,
+        str(payload.get('cwd') or os.getcwd()),
+    )
+    args = argparse.Namespace(
+        workspace=str(workspace.get('root_path') or '') or None,
+        host=str(settings.get('host') or '127.0.0.1'),
+        port=int(settings.get('port') or 6381),
+        graph_name=str(settings.get('graph_name') or 'autopsy_memory'),
+        lite_path=str(request.get('lite_path') or settings.get('lite_path') or ''),
+        dry_run=True,
+        yes=False,
+        accept_data_loss=False,
+        restore_backup=str(request.get('restore_backup') or ''),
+        restore_latest_backup=bool(request.get('restore_latest_backup')),
+        backup_limit=max(0, int_request_argument(request, 'backup_limit', 5)),
+        salvage_output='',
+        salvage_limit=0,
+        skip_salvage=True,
+        include_operational=bool(request.get('include_operational')),
+        skip_cleanup_workers=True,
+    )
+    safety = repair_embedded_snapshot_plan_safety_payload()
+    stderr = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(stderr):
+            repair_payload = module.build_embedded_snapshot_repair_payload(args)
+    except SystemExit as exc:
+        exit_code = exc.code if isinstance(exc.code, int) else 1
+        message = stderr.getvalue().strip() or str(exc) or 'Repair preview failed before plan generation.'
+        return {
+            'ok': False,
+            'command': 'repair-embedded-snapshot',
+            'dry_run': True,
+            'requires_confirmation': True,
+            'exit_code': exit_code,
+            'error': message,
+            'mcp_safety': safety,
+            'workflow': {
+                'status': 'repair_plan_unavailable',
+                'complete': False,
+                'next_step': 'adjust_repair_preview_request',
+                'message': message,
+            },
+        }
+    repair_payload['dry_run'] = True
+    repair_payload['requires_confirmation'] = True
+    repair_payload['mcp_safety'] = safety
+    return repair_payload
 
 
 def handle_memory_status(payload: dict) -> dict:
@@ -2848,6 +1262,150 @@ def handle_memory_observe(payload: dict) -> dict:
     )
 
 
+def handle_memory_consolidate_session(payload: dict) -> dict:
+    request = payload.get('request') or {}
+    tool, module, workspace, _embeddings_config, _embeddings_status, falkor = require_falkor_context(payload, include_embeddings_status=False)
+
+    def consolidate_session(graph):
+        response = module.build_consolidate_session_payload(
+            graph,
+            tool=tool,
+            workspace=workspace,
+            stable_key=str(request.get('stable_key') or ''),
+            kind=str(request.get('kind') or 'memory_note'),
+            title=str(request.get('title') or ''),
+            max_events=max(1, int(request.get('max_events') or 80)),
+            write=bool(request.get('write')),
+        )
+        if bool(request.get('write')) and str((response.get('workflow') or {}).get('status') or '') == 'ok':
+            module.refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
+        return response
+
+    return run_falkor_operation(falkor, consolidate_session)
+
+
+def handle_memory_import_session(payload: dict) -> dict:
+    request = payload.get('request') or {}
+    tool, module, workspace, _embeddings_config, _embeddings_status, falkor = require_falkor_context(payload, include_embeddings_status=False)
+
+    def import_session(graph):
+        response = module.build_import_session_payload(
+            graph,
+            tool=tool,
+            workspace=workspace,
+            path=str(request.get('path') or ''),
+            title=str(request.get('title') or ''),
+            source=str(request.get('source') or 'agent-jsonl'),
+            max_events=max(1, int(request.get('max_events') or 200)),
+            dry_run=bool(request.get('dry_run')),
+            repository_root_path=str(request.get('repository_root_path') or request.get('repo') or '') or None,
+        )
+        if not bool(request.get('dry_run')) and str((response.get('workflow') or {}).get('status') or '') == 'ok':
+            module.refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
+        return response
+
+    return run_falkor_operation(falkor, import_session)
+
+
+def handle_memory_feedback(payload: dict) -> dict:
+    request = payload.get('request') or {}
+    tool, module, workspace, _embeddings_config, _embeddings_status, falkor = require_falkor_context(payload, include_embeddings_status=False)
+
+    def record_feedback(graph):
+        stable_key = str(request.get('stable_key') or '')
+        if not module.lookup_node_by_stable_key(graph, stable_key):
+            return module.blocked_missing_memory_item_payload_for_graph(graph, stable_key=stable_key, operation='feedback')
+        rating = str(request.get('rating') or 'neutral').strip().lower()
+        if rating not in {'useful', 'not-useful', 'neutral'}:
+            raise ValueError('rating must be useful, not-useful, or neutral')
+        usage = module.record_memory_feedback(
+            graph,
+            stable_key,
+            rating=rating,
+            note=str(request.get('note') or ''),
+            source=str(request.get('source') or 'mcp'),
+        )
+        return {
+            'workspace': tool.workspace_payload(workspace),
+            'stable_key': stable_key,
+            'feedback': usage,
+            'workflow': {
+                'status': 'ok',
+                'complete': True,
+                'next_step': 'done',
+                'message': 'Memory feedback recorded.',
+            },
+        }
+
+    return run_falkor_operation(falkor, record_feedback)
+
+
+def handle_memory_snapshot(payload: dict) -> dict:
+    request = payload.get('request') or {}
+    tool, module, workspace, _embeddings_config, _embeddings_status, falkor = require_falkor_context(payload, include_embeddings_status=False)
+    return run_falkor_operation(
+        falkor,
+        lambda graph: module.build_snapshot_payload(
+            graph,
+            tool=tool,
+            workspace=workspace,
+            stable_key=str(request.get('stable_key') or ''),
+            limit=max(1, int(request.get('limit') or 20)),
+        ),
+    )
+
+
+def handle_memory_expire(payload: dict) -> dict:
+    request = payload.get('request') or {}
+    tool, module, workspace, _embeddings_config, _embeddings_status, falkor = require_falkor_context(payload, include_embeddings_status=False)
+
+    def expire_item(graph):
+        stable_key = str(request.get('stable_key') or '')
+        if not module.lookup_node_by_stable_key(graph, stable_key):
+            return module.blocked_missing_memory_item_payload_for_graph(graph, stable_key=stable_key, operation='expire')
+        response = module.expire_graph_item_payload(
+            graph,
+            tool=tool,
+            workspace=workspace,
+            stable_key=stable_key,
+            expires_at=str(request.get('expires_at') or ''),
+            reason=str(request.get('reason') or ''),
+            clear=bool(request.get('clear')),
+        )
+        module.refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
+        return response
+
+    return run_falkor_operation(falkor, expire_item)
+
+
+def handle_memory_pin(payload: dict) -> dict:
+    request = payload.get('request') or {}
+    tool, module, workspace, _embeddings_config, _embeddings_status, falkor = require_falkor_context(payload, include_embeddings_status=False)
+
+    def pin_item(graph):
+        stable_key = str(request.get('stable_key') or '')
+        if not module.lookup_node_by_stable_key(graph, stable_key):
+            return module.blocked_missing_memory_item_payload_for_graph(graph, stable_key=stable_key, operation='pin')
+        block_limit = request.get('block_limit') if request.get('block_limit') is not None else None
+        response = module.pin_graph_item_payload(
+            graph,
+            tool=tool,
+            workspace=workspace,
+            stable_key=stable_key,
+            label=str(request.get('label') or ''),
+            reason=str(request.get('reason') or ''),
+            description=str(request.get('description') or ''),
+            block_limit=int(block_limit) if block_limit is not None else None,
+            read_only=bool(request.get('read_only')) if request.get('read_only') is not None else None,
+            shared=bool(request.get('shared')) if request.get('shared') is not None else None,
+            clear=bool(request.get('clear')),
+        )
+        module.refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
+        return response
+
+    return run_falkor_operation(falkor, pin_item)
+
+
 def handle_memory_graph_search(payload: dict) -> dict:
     request = payload.get('request') or {}
     tool, _module, workspace, embeddings_config, _embeddings_status, falkor = require_falkor_context(payload)
@@ -2876,15 +1434,22 @@ def handle_memory_graph_search(payload: dict) -> dict:
 
 def handle_memory_graph_item(payload: dict) -> dict:
     request = payload.get('request') or {}
-    tool, _module, workspace, _embeddings_config, _embeddings_status, falkor = require_falkor_context(payload, include_embeddings_status=False)
-    return run_falkor_operation(
-        falkor,
-        lambda graph: falkor['module'].build_graph_item_detail_payload(
+    tool, module, workspace, _embeddings_config, _embeddings_status, falkor = require_falkor_context(payload, include_embeddings_status=False)
+
+    def item_detail(graph):
+        stable_key = str(request.get('stable_key') or '')
+        if not module.lookup_node_by_stable_key(graph, stable_key):
+            return module.blocked_missing_memory_item_payload_for_graph(graph, stable_key=stable_key, operation='item')
+        return module.build_graph_item_detail_payload(
             graph,
             tool=tool,
             workspace=workspace,
-            stable_key=str(request.get('stable_key') or ''),
-        ),
+            stable_key=stable_key,
+        )
+
+    return run_falkor_operation(
+        falkor,
+        item_detail,
     )
 
 
@@ -2924,7 +1489,10 @@ def handle_memory_graph_note_create(payload: dict) -> dict:
         title = str(request.get('title') or '')
         content = str(request.get('content') or '')
         relation_specs = module.relation_specs_from_mapping(request)
-        targets = module.relation_target_records(graph, relation_specs)
+        try:
+            targets = module.relation_target_records(graph, relation_specs)
+        except module.MissingRelationTargetsError as exc:
+            return module.blocked_relation_write_payload(error=exc, operation='create')
         write_quality = module.build_write_quality_payload(
             graph,
             kind=kind,
@@ -2984,6 +1552,9 @@ def handle_memory_graph_item_update(payload: dict) -> dict:
         kind = str(request.get('kind') or 'memory_note')
         title = str(request.get('title') or '')
         content = str(request.get('content') or '')
+        stable_key = str(request.get('stable_key') or '')
+        if not module.lookup_node_by_stable_key(graph, stable_key):
+            return module.blocked_missing_memory_item_payload_for_graph(graph, stable_key=stable_key, operation='update')
         write_quality = module.build_write_quality_payload(
             graph,
             kind=kind,
@@ -2993,7 +1564,6 @@ def handle_memory_graph_item_update(payload: dict) -> dict:
             no_relations_ok=bool(request.get('no_relations_ok')),
             allow_unsafe_memory=bool(request.get('allow_unsafe_memory')),
         )
-        stable_key = str(request.get('stable_key') or '')
         if module.write_quality_blocks_write(write_quality):
             return module.blocked_memory_write_payload(write_quality=write_quality, stable_key=stable_key, operation='update')
         response = module.update_graph_item_payload(
@@ -3042,17 +1612,19 @@ def handle_memory_graph_conflict_resolve(payload: dict) -> dict:
 def handle_memory_graph_item_delete(payload: dict) -> dict:
     request = payload.get('request') or {}
     tool, module, workspace, _embeddings_config, _embeddings_status, falkor = require_falkor_context(payload)
-    run_falkor_operation(
-        falkor,
-        lambda graph: (
-            module.delete_graph_item_payload(
-                graph,
-                stable_key=str(request.get('stable_key') or ''),
-            ),
-            module.refresh_activity_snapshot(graph, tool=tool, workspace=workspace),
-        ),
-    )
-    return {"deleted": True}
+
+    def delete_item(graph):
+        stable_key = str(request.get('stable_key') or '')
+        if not module.lookup_node_by_stable_key(graph, stable_key):
+            return module.blocked_missing_memory_item_payload_for_graph(graph, stable_key=stable_key, operation='delete')
+        module.delete_graph_item_payload(
+            graph,
+            stable_key=stable_key,
+        )
+        module.refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
+        return {"deleted": True, "stable_key": stable_key}
+
+    return run_falkor_operation(falkor, delete_item)
 
 
 def handle_memory_sync_workspace(payload: dict) -> dict:
@@ -3158,40 +1730,6 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == '/favicon.ico':
             self._write_bytes(204, b'', 'image/x-icon')
             return
-        if parsed.path.startswith('/context-graph/assets/'):
-            asset = context_graph_static_asset(parsed.path.removeprefix('/context-graph/'))
-            if asset is None:
-                self._write_json(404, {'error': 'not found'})
-                return
-            body, content_type = asset
-            self._write_bytes(200, body, content_type)
-            return
-        if parsed.path == '/context-graph' or parsed.path == '/context-graph/':
-            if not self._require_token():
-                return
-            self._write_bytes(200, context_graph_index_html(), 'text/html; charset=utf-8')
-            return
-        if parsed.path.startswith('/context-graph/threads/'):
-            if not self._require_token():
-                return
-            self._write_bytes(200, context_graph_index_html(), 'text/html; charset=utf-8')
-            return
-        if parsed.path.startswith('/context-graph/api/threads/') and parsed.path.endswith('/snapshot'):
-            if not self._require_token():
-                return
-            thread_id = unquote(parsed.path.removeprefix('/context-graph/api/threads/').removesuffix('/snapshot').strip('/'))
-            self._write_json(200, build_context_graph_snapshot(thread_id))
-            return
-        if parsed.path == '/context-graph/api/threads':
-            if not self._require_token():
-                return
-            limit_values = parse_qs(parsed.query).get('limit', ['40'])
-            try:
-                limit = max(1, int(limit_values[0]))
-            except Exception:
-                limit = 40
-            self._write_json(200, {'threads': list_context_graph_threads(limit=limit)})
-            return
         if not self._require_token():
             return
         if parsed.path == '/health':
@@ -3259,6 +1797,12 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == '/memory/health':
                 self._write_json(200, handle_memory_health(payload))
                 return
+            if parsed.path == '/memory/diagnostics':
+                self._write_json(200, handle_memory_diagnostics(payload))
+                return
+            if parsed.path == '/memory/repair-embedded-snapshot/plan':
+                self._write_json(200, handle_memory_repair_embedded_snapshot_plan(payload))
+                return
             if parsed.path == '/memory/status':
                 self._write_json(200, handle_memory_status(payload))
                 return
@@ -3273,6 +1817,24 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if parsed.path == '/memory/observe':
                 self._write_json(200, handle_memory_observe(payload))
+                return
+            if parsed.path == '/memory/consolidate-session':
+                self._write_json(200, handle_memory_consolidate_session(payload))
+                return
+            if parsed.path == '/memory/import-session':
+                self._write_json(200, handle_memory_import_session(payload))
+                return
+            if parsed.path == '/memory/feedback':
+                self._write_json(200, handle_memory_feedback(payload))
+                return
+            if parsed.path == '/memory/snapshot':
+                self._write_json(200, handle_memory_snapshot(payload))
+                return
+            if parsed.path == '/memory/expire':
+                self._write_json(200, handle_memory_expire(payload))
+                return
+            if parsed.path == '/memory/pin':
+                self._write_json(200, handle_memory_pin(payload))
                 return
             if parsed.path == '/memory/graph/search':
                 self._write_json(200, handle_memory_graph_search(payload))
@@ -3312,26 +1874,6 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if parsed.path == '/memory/threads/fork':
                 self._write_json(200, handle_memory_record_thread_fork(payload))
-                return
-            if parsed.path == '/context-graph/events':
-                request = payload.get('request') if isinstance(payload.get('request'), dict) else payload
-                result = record_context_graph_event(request)
-                event = result.get('event') if isinstance(result.get('event'), dict) else {}
-                thread = result.get('thread') if isinstance(result.get('thread'), dict) else {}
-                thread_id = str(event.get('thread_id') or thread.get('thread_id') or request.get('thread_id') or request.get('threadId') or '').strip()
-                result['url'] = context_graph_thread_url(
-                    f'http://{self.server.server_address[0]}:{self.server.server_port}',
-                    self.server.auth_token,
-                    thread_id,
-                )
-                self._write_json(200, result)
-                return
-            if parsed.path == '/context-graph/thread':
-                request = payload.get('request') if isinstance(payload.get('request'), dict) else payload
-                thread_id = str(request.get('thread_id') or request.get('threadId') or '').strip()
-                if not thread_id:
-                    raise ValueError('thread_id is required')
-                self._write_json(200, build_context_graph_snapshot(thread_id))
                 return
             self._write_json(404, {'error': 'not found'})
         except Exception as exc:

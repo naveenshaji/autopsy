@@ -31,7 +31,10 @@ class CommandHandlers:
     export: CommandHandler
     backup: CommandHandler
     restore: CommandHandler
+    compare_backups: CommandHandler
     health: CommandHandler
+    diagnostics: CommandHandler
+    repair_embedded_snapshot: CommandHandler
     activity: CommandHandler
     menubar: CommandHandler
     model_warmup: CommandHandler
@@ -41,10 +44,6 @@ class CommandHandlers:
     expire_item: CommandHandler
     pin_item: CommandHandler
     feedback: CommandHandler
-    codex_hook: CommandHandler
-    context_event: CommandHandler
-    context_graph_settings: CommandHandler
-    context_graph_url: CommandHandler
     import_session: CommandHandler
     consolidate_session: CommandHandler
     observe: CommandHandler
@@ -326,12 +325,44 @@ def build_parser(
         mode_group.add_argument("--replace", action="store_true", help="Delete restored keys before importing them. Requires --yes.")
         restore_parser.set_defaults(replace=False)
         restore_parser.add_argument("--dry-run", action="store_true", help="Validate and report the restore plan without writing to Falkor.")
+        restore_parser.add_argument("--offline", action="store_true", help="With --dry-run, validate the backup file without opening the memory runtime.")
         restore_parser.add_argument("--yes", action="store_true", help="Confirm destructive replace mode.")
         restore_parser.add_argument("--include-operational", action="store_true", help="Restore workspace/repository/thread/worktree/branch nodes.")
         restore_parser.set_defaults(func=handlers.restore)
 
+    compare_backups_parser = subparsers.add_parser(
+        "compare-backups",
+        aliases=["compare-exports"],
+        parents=[common],
+        help="Compare two Autopsy backup/export/salvage JSON files without opening FalkorDB.",
+    )
+    compare_backups_parser.add_argument("base", help="Base Autopsy JSON backup/export/salvage file.")
+    compare_backups_parser.add_argument("candidate", help="Candidate Autopsy JSON backup/export/salvage file to compare against the base.")
+    compare_backups_parser.add_argument("--include-operational", action="store_true", help="Include workspace/repository/thread/worktree/branch nodes in the comparison.")
+    compare_backups_parser.add_argument("--sample-limit", type=int, default=20, help="Maximum keys or relation signatures to include in each difference sample.")
+    compare_backups_parser.set_defaults(func=handlers.compare_backups)
+
     health_parser = subparsers.add_parser("health", parents=[common], help="Run a product health summary for the local memory layer.")
     health_parser.set_defaults(func=handlers.health)
+
+    diagnostics_parser = subparsers.add_parser("diagnostics", parents=[common], help="Show sanitized local diagnostic log summaries and recent events.")
+    diagnostics_parser.add_argument("--log", choices=["all", "memory-guard", "memory-relations"], default="all", help="Diagnostic log to inspect.")
+    diagnostics_parser.add_argument("--limit", type=int, default=10, help="Maximum recent sanitized events per selected log.")
+    diagnostics_parser.set_defaults(func=handlers.diagnostics)
+
+    repair_embedded_parser = subparsers.add_parser("repair-embedded-snapshot", parents=[common], help="Plan or repair an embedded FalkorDBLite snapshot rollback by quarantining stale files.")
+    repair_embedded_parser.add_argument("--dry-run", action="store_true", help="Report the repair plan without moving files. This is the default unless --yes and --accept-data-loss are both supplied.")
+    repair_embedded_parser.add_argument("--yes", action="store_true", help="Confirm moving stale embedded database files into a repair bundle.")
+    repair_embedded_parser.add_argument("--accept-data-loss", action="store_true", help="Acknowledge that quarantining a stale snapshot may lose writes newer than the selected backup.")
+    repair_embedded_parser.add_argument("--restore-backup", help="Optional Autopsy JSON backup to restore after quarantining the stale embedded files.")
+    repair_embedded_parser.add_argument("--restore-latest-backup", action="store_true", help="Restore the newest valid default Autopsy JSON backup after quarantining stale embedded files.")
+    repair_embedded_parser.add_argument("--backup-limit", type=int, default=5, help="Number of recent default backups to validate and show in the repair plan.")
+    repair_embedded_parser.add_argument("--salvage-output", help="Optional path for a read-only JSON export of the stale embedded snapshot before any quarantine.")
+    repair_embedded_parser.add_argument("--salvage-limit", type=int, default=0, help="Maximum number of items to include in --salvage-output. Default exports all matching items.")
+    repair_embedded_parser.add_argument("--skip-salvage", action="store_true", help="Skip the automatic stale-snapshot salvage export during confirmed repair.")
+    repair_embedded_parser.add_argument("--include-operational", action="store_true", help="When --restore-backup is used, restore workspace/repository/thread/worktree/branch nodes too.")
+    repair_embedded_parser.add_argument("--skip-cleanup-workers", action="store_true", help="Do not stop stale resident workers or excess RedisLite processes before moving files.")
+    repair_embedded_parser.set_defaults(func=handlers.repair_embedded_snapshot)
 
     activity_parser = subparsers.add_parser("activity", parents=[common], help="Show recent memory activity for lightweight UI clients.")
     activity_parser.add_argument("--limit", type=int, default=8, help="Default number of writes and consult events to return.")
@@ -420,48 +451,6 @@ def build_parser(
     feedback_parser.add_argument("--note", default="", help="Optional short note explaining the feedback.")
     feedback_parser.add_argument("--source", default="cli", help="Feedback source label.")
     feedback_parser.set_defaults(func=handlers.feedback)
-
-    codex_hook_parser = subparsers.add_parser("codex-hook", help="Record completed allowlisted Codex Bash command hooks for the live per-thread context graph.")
-    codex_hook_parser.add_argument("--thread-id", help="Override the hook session id used as the graph thread id.")
-    codex_hook_parser.add_argument("--json", action="store_true", help="Print the recorded event payload/result. Default is silent for hook use.")
-    codex_hook_parser.add_argument("--dry-run", action="store_true", help="Parse stdin and print the event request without recording it.")
-    codex_hook_parser.add_argument("--strict", action="store_true", help="Raise hook recording errors instead of failing open silently.")
-    codex_hook_parser.add_argument("--max-content-length", type=int, default=1200, help="Maximum graph card content length.")
-    codex_hook_parser.set_defaults(func=handlers.codex_hook)
-
-    context_event_parser = subparsers.add_parser("context-event", help="Record one allowlisted shell command for the live per-thread context graph.")
-    context_event_parser.add_argument("--thread-id", required=True, help="Agent thread/session id for the graph route.")
-    context_event_parser.add_argument("--type", dest="event_type", default="", help=argparse.SUPPRESS)
-    context_event_parser.add_argument("--title", default="", help=argparse.SUPPRESS)
-    context_event_parser.add_argument("--content", default="", help=argparse.SUPPRESS)
-    context_event_parser.add_argument("--command", dest="context_command", required=True, help="Shell command text to record; command output is never included. Non-allowlisted commands are skipped silently.")
-    context_event_parser.add_argument("--timestamp", default="", help="Optional ISO-8601 timestamp; defaults to now.")
-    context_event_parser.add_argument("--status", default="", help="Optional state flag such as in_progress, complete, blocked, or error.")
-    context_event_parser.add_argument("--agent", default="", help="Agent name or id.")
-    context_event_parser.add_argument("--app", default="", help="Harness or application name.")
-    context_event_parser.add_argument("--run-id", default="", help="Optional run id.")
-    context_event_parser.add_argument("--metadata", action="append", help=argparse.SUPPRESS)
-    context_event_parser.add_argument("--json", action="store_true", help="Print the recorded event payload/result. Default is silent for low-token graph capture.")
-    context_event_parser.set_defaults(func=handlers.context_event)
-
-    context_graph_settings_parser = subparsers.add_parser("context-graph-settings", help="Show or update live context graph capture settings.")
-    context_graph_settings_parser.add_argument("--mode", choices=("cli", "hooks"), help="Capture mode. CLI asks agents to call context-event; hooks uses Codex hooks.")
-    context_graph_settings_enabled = context_graph_settings_parser.add_mutually_exclusive_group()
-    context_graph_settings_enabled.add_argument("--enabled", action="store_true", help="Enable context graph capture.")
-    context_graph_settings_enabled.add_argument("--disabled", action="store_true", help="Disable context graph capture.")
-    context_graph_settings_scope = context_graph_settings_parser.add_mutually_exclusive_group()
-    context_graph_settings_scope.add_argument("--multi-turn", action="store_true", help="Show commands across turns in the context graph.")
-    context_graph_settings_scope.add_argument("--current-turn", action="store_true", help="Show only the latest turn in the context graph.")
-    context_graph_settings_parser.add_argument("--update-codex-instructions", action="store_true", help="Rewrite Codex global instructions and hook config after changing settings.")
-    context_graph_settings_parser.add_argument("--json", action="store_true", help="Print settings as JSON.")
-    context_graph_settings_parser.set_defaults(func=handlers.context_graph_settings)
-
-    context_graph_url_parser = subparsers.add_parser("context-graph-url", help="Print the local browser URL for a live context graph thread.")
-    context_graph_url_parser.add_argument("--thread-id", help="Agent thread/session id. In Codex hook mode, use --codex-current instead of supplying this manually.")
-    context_graph_url_parser.add_argument("--codex-current", action="store_true", help="Resolve the current Codex session id from trusted codex-hook state.")
-    context_graph_url_parser.add_argument("--json", action="store_true", help="Print structured JSON with worker and URL details.")
-    context_graph_url_parser.add_argument("--open", action="store_true", help="Open the graph URL in the default browser.")
-    context_graph_url_parser.set_defaults(func=handlers.context_graph_url)
 
     import_session_parser = subparsers.add_parser("import-session", parents=[common], help="Import an agent JSONL transcript as episodic timeline memory.")
     import_session_parser.add_argument("path", help="Path to a JSONL transcript file.")

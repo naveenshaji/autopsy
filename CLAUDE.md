@@ -30,7 +30,7 @@ When reading memory:
 - If `workflow.status` is `weak_signals_only`, treat side-channel candidates as debugging hints, not an answer.
 - If `workflow.status` is `needs_lineage_review`, inspect timeline or neighbors before relying on a stale or superseded memory.
 - Use `retrieval.items[].evidence` in `context` output to see why a memory was selected and what source episode/repo produced it.
-- Use `retrieval.graph_context.items[]` in `context` output for bounded related memories found through semantic graph neighbors.
+- Use `retrieval.related_memory.items[]` in `context` output for bounded related memories found through semantic graph neighbors.
 - Use `context_block` from JSON output, or `--format text`, when passing memory into an agent context window.
 - Use `item` for exact fact inspection.
 - Use `timeline` for supersession, invalidation, or stale facts.
@@ -46,6 +46,9 @@ When writing memory:
 - Use specific outcomes: `decision`, `attempt`, `observation`, `procedure`, `question`, `preference`, `plan`, `resolved-question`, or `reverted-attempt`.
 - Add at least one explicit semantic relation for durable writes: `--informed-by`, `--answers`, `--supersedes`, `--reverts`, `--depends-on`, `--implements`, `--constrains`, or `--refines`.
 - Relation flags are ontology-checked; use them between memory items, and target `--answers` at an open question.
+- Relation targets may be exact stable keys or unambiguous stable-key wrappers copied from Autopsy JSON, such as `sourceRef=graph-note:...` or `{"item":{"stableKey":"graph-note:..."}}`; Autopsy unwraps one clear key before lookup and fails closed when pasted text contains zero or multiple possible keys.
+- If a write returns a blocked JSON payload with `reason: "missing_relation_target"`, do not retry with `--no-relations-ok`; inspect the suggested `item`, `history`, or `search` commands and write a corrected relation.
+- If a stable-key command such as `item`, `timeline`, `neighbors --stable-key`, `snapshot`, `feedback`, `observe`, `consolidate-session`, update, delete, expire, or pin returns `reason: "missing_memory_item"`, do not recreate the key or retry as standalone; inspect the suggested `history` or `search` commands and choose an existing memory or write a new explicitly related outcome. If a selector command such as `neighbors --entity-id` returns the same reason, resolve a current stable key before retrying.
 - Use `--no-relations-ok` only when the memory is intentionally standalone and no semantic relation applies.
 - Use `--namespace` and entity-scope flags on writes when future reads should target a durable scoped container or user/agent/app/run/group partition.
 - Use `--fact-rating 0.0..1.0` on writes with semantic relation flags when later reads should filter weak relation facts.
@@ -55,6 +58,8 @@ When writing memory:
 For backup and restore:
 - Run `autopsy backup` before large memory-system changes.
 - Run `autopsy restore <backup.json> --dry-run` before any restore.
+- If restore dry-run reports `offline_validation: true`, the backup file is valid but target-graph effects were not computed; do not infer existing-key, new/update, or relation endpoint behavior from it.
+- Use `autopsy restore <backup.json> --dry-run --offline` when you only need file validation and should not touch the memory runtime.
 - Use `autopsy restore <backup.json> --replace --yes` only when intentionally replacing matching restored keys.
 
 For memory-system changes:

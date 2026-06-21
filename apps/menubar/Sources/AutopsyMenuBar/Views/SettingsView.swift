@@ -10,11 +10,6 @@ struct SettingsView: View {
                     Label("About", systemImage: "info.circle")
                 }
 
-            ContextGraphSettingsTab(store: store)
-                .tabItem {
-                    Label("Context Graph", systemImage: "point.3.connected.trianglepath.dotted")
-                }
-
             MemorySettingsTab(store: store)
                 .tabItem {
                     Label("Memory", systemImage: "brain.head.profile")
@@ -60,87 +55,6 @@ private struct AboutSettingsTab: View {
             return displayVersion
         }
         return "Local build"
-    }
-}
-
-private struct ContextGraphSettingsTab: View {
-    @ObservedObject var store: ActivityStore
-
-    var body: some View {
-        Form {
-            Section {
-                Toggle("Enable Context Graph", isOn: Binding(
-                    get: { store.contextGraphEnabled },
-                    set: { store.setContextGraphEnabled($0) }
-                ))
-                .disabled(store.isUpdatingContextGraphSettings)
-
-                Picker("Capture Mode", selection: Binding(
-                    get: { store.contextGraphMode },
-                    set: { store.setContextGraphMode($0) }
-                )) {
-                    Text("CLI").tag("cli")
-                    Text("Hooks").tag("hooks")
-                }
-                .pickerStyle(.segmented)
-                .disabled(!store.contextGraphEnabled || store.isUpdatingContextGraphSettings)
-
-                Toggle("Multi-turn Context", isOn: Binding(
-                    get: { store.contextGraphMultiTurn },
-                    set: { store.setContextGraphMultiTurn($0) }
-                ))
-                .disabled(!store.contextGraphEnabled || store.isUpdatingContextGraphSettings)
-            }
-
-            Section {
-                LabeledContent("Status") {
-                    HStack(spacing: 8) {
-                        if store.isUpdatingContextGraphSettings {
-                            ProgressView()
-                                .controlSize(.small)
-                        }
-                        Text(store.contextGraphStatusText)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-
-                if let path = store.contextGraphSettings?.path, !path.isEmpty {
-                    LabeledContent("Settings File") {
-                        Text(path)
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                            .textSelection(.enabled)
-                    }
-                }
-            }
-
-            Section {
-                Text(explanation)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .formStyle(.grouped)
-        .padding(24)
-        .onAppear {
-            store.refresh(includeLaunchAgent: true)
-        }
-    }
-
-    private var explanation: String {
-        if !store.contextGraphEnabled {
-            return "Disabled mode makes stale graph commands return a disabled setting response without recording events."
-        }
-        if store.contextGraphMode == "hooks" {
-            return "Hook mode is Codex-oriented. Stale context-event calls return a hook-mode response, and Codex instructions are rewritten to stop asking agents to call it."
-        }
-        if store.contextGraphMultiTurn {
-            return "Multi-turn mode keeps prior turn commands visible in the graph while still collapsing repeated file reads into a single node."
-        }
-        return "Current-turn mode keeps the graph focused on the latest run. Codex instructions open the graph in the in-app Browser instead of the macOS default browser."
     }
 }
 

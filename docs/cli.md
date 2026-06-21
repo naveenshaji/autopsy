@@ -28,7 +28,7 @@ autopsy install --skip-menubar
 autopsy install --smoke-test
 ```
 
-`install` is the normal first-run command. It installs managed global instruction blocks for supported agents and, on macOS, stages the menu bar app and installs the LaunchAgent that keeps it visible. The running menu bar app also keeps the resident Autopsy worker warm so context graph pages do not depend on agents rerunning `context-graph-url` to revive the local server. Repo-local instructions are opt-in with `--repo`.
+`install` is the normal first-run command. It installs managed global instruction blocks for supported agents and, on macOS, stages the menu bar app and installs the LaunchAgent that keeps it visible. The running menu bar app also keeps the resident Autopsy worker warm for local memory operations. Repo-local instructions are opt-in with `--repo`.
 
 Use `autopsy install --smoke-test` on a new machine or after a repair. It runs
 doctor, a current-state read, an abstention consult, and a temporary
@@ -53,6 +53,8 @@ autopsy init --smoke-test
 autopsy version
 autopsy doctor
 autopsy health
+autopsy diagnostics --limit 10
+autopsy repair-embedded-snapshot --dry-run
 autopsy status --current-only
 autopsy context --current-only --query "current task"
 autopsy context --current-only --format text --query "current task"
@@ -62,11 +64,15 @@ autopsy benchmark --sample-size 5 --include-sync
 autopsy menubar
 ```
 
-`health` is a lightweight product summary. It checks Falkor reachability, runtime dependencies, graph/index readiness, vector counts, backup freshness, and installed instruction state. It does not replace the benchmark gate.
+`health` is a lightweight product summary. It checks Falkor reachability, runtime dependencies, graph/index readiness, vector counts, backup freshness, installed instruction state, and local diagnostic log summaries. For non-empty memory graphs, the newest default backup must be valid and within the 24-hour freshness window; backups older than 7 days are reported as critical stale recovery risk. It does not replace the benchmark gate.
 
-`activity` is the lightweight JSON feed for UI clients. It returns recent memory writes, recent consult telemetry, attention items, and current status without exposing the graph-browser surface.
+`diagnostics` tails sanitized local JSONL diagnostic logs. Use `--log memory-guard` or `--log memory-relations` to inspect one log. Relation diagnostics include missing relation targets and missing memory item events; summarized event payloads are whitelisted so failed memory content, raw stable keys, relation request arrays, and candidate arrays are not printed.
 
-`menubar` stages the native macOS menu bar app as a small `.app` bundle and, in a normal GUI session, installs and kickstarts the supervised LaunchAgent. Current bundles launch without rebuilding; use `autopsy menubar --build` to build and stage without launching, `autopsy menubar --rebuild` to force a rebuild before launch, `autopsy menubar --install-launch-agent` to explicitly install the supervised login item, and `autopsy menubar --print-path` to inspect resolved app paths. Installed LaunchAgents run the app executable directly with `KeepAlive`, and the app silently checks the resident worker so local graph routes stay warm.
+`repair-embedded-snapshot` is for embedded FalkorDBLite rollback events reported by `health`, `status`, or `diagnostics --log memory-guard`. The default is a dry run that plans which stale database, settings, and guard files would be quarantined and lists recent validated default backup candidates with staleness risk relative to the guard timestamp. Use `--salvage-output <path>` to write a read-only JSON export from the stale embedded snapshot before any quarantine; Autopsy closes that loaded snapshot with NOSAVE and marks the export as stale-snapshot salvage metadata. Actual repair requires both `--yes` and `--accept-data-loss`; it first writes an automatic salvage export unless `--skip-salvage` is supplied, then moves the stale snapshot into an application-support backup bundle instead of lowering the guard in place. Add `--restore-backup <backup.json>` or `--restore-latest-backup` to import a validated semantic backup into the fresh embedded store after quarantine.
+
+`activity` is the lightweight JSON feed for UI clients. It returns recent memory writes, recent consult telemetry, attention items, and current status.
+
+`menubar` stages the native macOS menu bar app as a small `.app` bundle and, in a normal GUI session, installs and kickstarts the supervised LaunchAgent. Current bundles launch without rebuilding; use `autopsy menubar --build` to build and stage without launching, `autopsy menubar --rebuild` to force a rebuild before launch, `autopsy menubar --install-launch-agent` to explicitly install the supervised login item, and `autopsy menubar --print-path` to inspect resolved app paths. Installed LaunchAgents run the app executable directly with `KeepAlive`, and the app silently checks the resident worker so local memory routes stay warm.
 
 ## Retrieval
 
@@ -128,7 +134,7 @@ The JSON output includes deterministic `activation` scores and a `repair_plan` g
 
 `consult` records lightweight access telemetry for returned memories: `access_count`, `last_accessed_at`, `last_access_source`, and the last query snippet. Use `feedback` to add explicit `useful`, `not-useful`, or `neutral` ratings. Consult uses access and feedback as a bounded search-time ranking prior after normal relevance gates: reinforced or useful memories can move up, stale or negatively rated memories can move down, and the multiplier stays in a conservative 0.3x to 1.5x band so usage never becomes a hard filter. Audit uses the same signals as activation and retention evidence.
 
-Use `expire` for lifecycle management when a memory should leave current reads but remain available for history, audit, export, and point-in-time reconstruction. `autopsy expire <stable-key>` defaults to expiring now, `--expires-at <ISO-8601>` schedules or backdates the lifecycle boundary, `--reason` stores a short explanation, and `--clear` removes the expiration. `consult`, `context`, `search`, `recall`, and `status` omit expired memories from current reads, but `--as-of` before the expiration timestamp still includes them.
+Use `expire` for lifecycle management when a memory should leave current reads but remain available for history, audit, export, and point-in-time reconstruction. `autopsy expire <stable-key>` defaults to expiring now, `--expires-at <ISO-8601>` schedules or backdates the lifecycle boundary, `--reason` stores a short explanation, and `--clear` removes the expiration. `consult`, `context`, `search`, `recall`, and `status` omit expired memories from current reads, but `--as-of` before the expiration timestamp still includes them. Memory history events are archival by default: `history` can still inspect them, but they are lifecycle-marked so old snapshots do not become current memory.
 
 Use `pin` when a memory should behave like core memory rather than ordinary retrieval memory. `autopsy pin <stable-key>` stores pin metadata on the memory, and `context` includes pinned memories in a `Pinned Memory` section even when consult has no hits for the task query. `--label`, `--description`, and `--limit` turn the pin into a structured memory block: the context pack shows the block label, purpose, bounded value, and flags. `--read-only` blocks ordinary `update` writes until `autopsy pin <stable-key> --no-read-only` changes the block metadata; `--shared` marks blocks intended for shared agent or entity-scope use. `--clear` removes it from core context. Pinned memories still pass through the unsafe-memory read guard before agent-facing context is built.
 
@@ -176,13 +182,27 @@ autopsy export --output ~/Desktop/autopsy-memory-export.json
 autopsy export --include-operational --limit 100
 autopsy backup
 autopsy restore ~/Desktop/autopsy-memory-export.json --dry-run
+autopsy restore ~/Desktop/autopsy-memory-export.json --dry-run --offline
 autopsy restore ~/Desktop/autopsy-memory-export.json --merge
 autopsy restore ~/Desktop/autopsy-memory-export.json --replace --yes
+autopsy compare-backups ~/Desktop/autopsy-memory-export.json ~/Desktop/autopsy-stale-snapshot.json
+autopsy repair-embedded-snapshot --dry-run
+autopsy repair-embedded-snapshot --salvage-output ~/Desktop/autopsy-stale-snapshot.json
+autopsy repair-embedded-snapshot --yes --accept-data-loss
+autopsy repair-embedded-snapshot --yes --accept-data-loss --skip-salvage
+autopsy repair-embedded-snapshot --yes --accept-data-loss --restore-backup ~/Desktop/autopsy-memory-export.json
+autopsy repair-embedded-snapshot --yes --accept-data-loss --restore-latest-backup
 ```
 
-`export` writes semantic memory and in-graph relations as JSON. `backup` writes the same export shape to a timestamped file under the Autopsy application-support backups directory unless `--output` is provided.
+`export` writes semantic memory and in-graph relations as JSON. `backup` writes the same export shape to a timestamped file under the Autopsy application-support backups directory unless `--output` is provided. Successful semantic write commands and non-dry-run restores opportunistically create a default backup when the newest default backup is missing, invalid, or older than the freshness window; set `AUTOPSY_AUTO_BACKUP_AFTER_WRITE=0` to disable that automatic backup step.
 
 `restore` validates schema version 1 exports, defaults to safe merge mode, skips operational nodes unless `--include-operational` is set, and refuses replace mode unless `--yes` is provided. Replace mode deletes only matching keys present in the restore file before importing them; unrelated graph data is not wiped.
+
+Use `restore --dry-run --offline` when you only want file validation and do not want to open Falkor at all. When `restore --dry-run` cannot open the memory runtime, for example during an embedded rollback guard failure, it falls back to the same offline validation and returns `offline_validation: true`. In that mode graph-dependent counts such as existing items, new/update items, and relation endpoint effects are reported as unavailable; restore runtime health or use `repair-embedded-snapshot --restore-backup` before relying on those effects.
+
+`compare-backups` compares two schema version 1 backup/export/salvage files without opening FalkorDB. Use it during rollback recovery to compare a stale-snapshot salvage export against the newest valid backup; it reports stable keys only in each input, changed shared keys, relation differences, salvage guard metadata, and recovery guidance. `compare-exports` is an alias.
+
+`repair-embedded-snapshot` is not a restore replacement. Use it only when the embedded database guard reports `workflow.status: rollback_detected`; it quarantines stale local database files so a new embedded snapshot can start cleanly, then optionally merges a backup file. Its dry-run output includes `backup_candidates`; use `--backup-limit` to control how many default backups are validated and shown. Each valid candidate includes `recovery_risk`, so inspect stale backup windows before accepting data loss. Confirmed repair writes a stale-snapshot salvage export automatically before quarantine; use `--salvage-output` when you want to choose the path during dry-run, or `--skip-salvage` only when you intentionally do not want that extra importable recovery point.
 
 ## Agent Setup
 
@@ -217,6 +237,12 @@ autopsy capture-outcome \
 Durable writes are expected to include at least one semantic relation. Use `--no-relations-ok` only when a memory is intentionally standalone and no semantic relation applies; otherwise `write_quality.complete` is `false` with a `missing_semantic_relation` warning.
 
 Relation flags are ontology-checked before storage. The source and target must be memory items rather than operational workspace/repository/thread nodes, and `--answers` must point at an open question. Invalid source-predicate-target combinations fail before create/update mutation when Autopsy can preflight them.
+
+Relation targets may be pasted as an exact stable key or as an unambiguous wrapper copied from Autopsy JSON, such as `"graph-note:..."`, `` `graph-note:...` ``, `sourceRef=graph-note:...`, `{"sourceRef":"graph-note:..."}`, or `{"item":{"stableKey":"graph-note:..."}}`. Autopsy unwraps these before lookup. If pasted text contains zero or multiple possible stable keys, the target is left unchanged and the write fails with missing-target diagnostics instead of guessing.
+
+When a requested relation target does not exist, `capture-outcome` and `update` fail before mutating memory and emit a structured blocked JSON payload with `reason: "missing_relation_target"`, `retry_policy.retry_with_no_relations_ok: false`, relation diagnostics, and follow-up commands. Treat that as a lineage repair task, not a prompt to retry the same memory as standalone.
+
+When a stable-key command such as `item`, `timeline`, `neighbors --stable-key`, `snapshot`, `feedback`, `observe`, `consolidate-session`, update, delete, expire, or pin targets a missing item, the command fails with `reason: "missing_memory_item"` and `retry_policy.retry_as_create: false`; write and derived-write commands fail before mutation. Treat that as a stale-key or lineage problem: inspect the suggested `history` or `search` commands and select an existing memory or write a new explicitly related outcome. Selector misses, such as `neighbors --entity-id`, use the same reason with a `selector` object and should be retried only after resolving a current stable key.
 
 Use `--tag` on write commands to attach normalized memory tags, and on `update` to replace a memory's tags. Tags are lower-case slug-style values, are included in search text as `tag:<value>`, and round-trip through export/restore.
 

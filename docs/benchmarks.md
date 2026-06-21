@@ -19,7 +19,7 @@ The gate measures:
 - deterministic metadata filters for repo, cognitive memory type, kind, all-tag matching, first-class namespace matching, first-class entity-scope partitioning, typed user metadata comparisons, and advanced JSON boolean filter expressions
 - memory governance audit surface, activation/retention scoring, first-class procedural memory, evidence-preserving derived observations, derived-observation freshness drift detection, access/feedback signals, usage/feedback retrieval decay, conflict detection, memory-poisoning detection, sensitive-memory detection, write-time unsafe-memory blocking, read-time unsafe-memory quarantine, temporal as-of filtering, fact-edge validity windows, relation fact-rating filters, semantic relation ontology validation, old/new memory history events, soft-expiration lifecycle filtering, pinned core-memory context injection, structured memory-block labels/limits/read-only guards, and repair plans
 - session JSONL import/replay parsing and consolidation drafts
-- Falkor-native sync/graph health
+- Falkor-native sync/graph health and embedded CLI shutdown-detach behavior
 
 This is a product regression gate, not a public leaderboard.
 

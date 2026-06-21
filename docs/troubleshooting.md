@@ -82,6 +82,81 @@ brew reinstall autopsy-memory
 autopsy doctor
 ```
 
+Normal CLI commands detach from embedded FalkorDBLite instead of shutting down
+the Redis process, so concurrent local reads can share the same runtime. Use
+`autopsy doctor --cleanup-workers` when stale worker or RedisLite processes need
+explicit cleanup.
+
+If commands report `workflow.status: rollback_detected`, Autopsy found an
+embedded FalkorDBLite snapshot older than the durable guard sidecar and refused
+to read or write memory. Inspect the guard log first:
+
+```bash
+autopsy diagnostics --log memory-guard --limit 5
+autopsy repair-embedded-snapshot --dry-run
+```
+
+`autopsy health` also treats backup freshness as a readiness check for non-empty
+graphs. The newest default backup must be valid and within the 24-hour freshness
+window; backups older than 7 days are reported as critical stale recovery risk.
+When health reports `checks.backup_status` as `missing`, `invalid`, `stale`, or
+`critical_stale`, create a fresh backup after runtime health is restored and
+compare any stale-snapshot salvage before accepting data loss.
+Successful semantic write commands and non-dry-run restores create a fresh
+default backup automatically when the newest default backup is missing, invalid,
+or older than the freshness window. Disable this only for deliberate testing with
+`AUTOPSY_AUTO_BACKUP_AFTER_WRITE=0`.
+
+The dry run lists recent validated `backup_candidates`. Inspect each candidate's
+`recovery_risk`; a stale backup can be safer than opening the stale embedded DB,
+but it may still omit memory written after the backup timestamp. To repair,
+quarantine the stale embedded database files instead of lowering the guard:
+
+```bash
+autopsy repair-embedded-snapshot --salvage-output ~/Desktop/autopsy-stale-snapshot.json
+```
+
+The salvage export is read from the stale embedded snapshot and the loaded
+snapshot is closed with NOSAVE. Confirmed repair creates this importable
+salvage export automatically before quarantine; pass `--salvage-output` when
+you want to choose the path during dry-run, or `--skip-salvage` only when you
+intentionally do not want the extra recovery point.
+
+When a backup and salvage export both exist, compare them before choosing a
+restore path:
+
+```bash
+autopsy compare-backups <backup.json> ~/Desktop/autopsy-stale-snapshot.json
+```
+
+The comparison does not open FalkorDB. It reports item keys only in each file,
+changed shared keys, relation differences, and salvage guard metadata so you can
+decide whether to restore a backup first and merge reviewed salvage afterward.
+
+```bash
+autopsy repair-embedded-snapshot --yes --accept-data-loss
+```
+
+If you have a semantic backup to import after quarantine, restore it in the
+repair flow. While `workflow.status` is `rollback_detected`, ordinary
+`autopsy restore <backup.json> --dry-run --offline` validates the JSON file
+without opening Falkor at all. Plain `autopsy restore <backup.json> --dry-run`
+falls back to offline validation if the guard blocks runtime access, but it
+cannot compute existing-key counts, new/update counts, or relation endpoint
+effects against the guarded graph. `repair-embedded-snapshot --dry-run`
+validates recent default backup candidates, and `--restore-backup` validates the
+selected file before import.
+
+```bash
+autopsy repair-embedded-snapshot --yes --accept-data-loss --restore-backup <backup.json>
+```
+
+To use the newest valid default backup shown by the dry run:
+
+```bash
+autopsy repair-embedded-snapshot --yes --accept-data-loss --restore-latest-backup
+```
+
 If using external FalkorDB, set:
 
 ```bash

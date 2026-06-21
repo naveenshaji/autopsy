@@ -8,35 +8,6 @@
 - Adds a GitHub release bootstrap installer for macOS prerelease users when
   Homebrew cannot update or reinstall, and documents Homebrew tap trust recovery.
 
-## 0.1.26 - 2026-06-06
-
-Hardens Codex hook-mode context graph session resolution.
-
-- Makes Codex hook mode resolve graph URLs through fresh trusted hook session state with `autopsy context-graph-url --codex-current`.
-- Rejects manual `--thread-id` graph URL requests in hook mode and ignores environment thread-id fallbacks, preventing agents from inventing graph thread ids.
-- Adds a trusted `PreToolUse` hook state update path that records the current Codex session id without writing graph events.
-- Retries context, health, and benchmark commands once after stale embedded FalkorDB socket/runtime state.
-- Updates Codex instructions to keep graph URLs in the Codex in-app Browser and never fall back to fabricated ids.
-
-## 0.1.25 - 2026-06-06
-
-Fixes the Codex context graph launch instructions from v0.1.24.
-
-- Tells Codex to open context graph URLs through the Codex in-app Browser `iab` control path instead of `web.run`, macOS `open`, or the default Safari browser.
-- Adds a Homebrew formula updater fallback for transient GitHub archive wrapper 504s by retrying the equivalent `codeload.github.com` tarball.
-- Keeps local Homebrew current-formula validation compatible with either archive URL form.
-
-## 0.1.24 - 2026-06-06
-
-Adds the live context graph viewer and capture controls.
-
-- Ships the local web context graph viewer with draggable cards, rounded edges, neutral light/dark themes, dotted canvas, animated node arrivals, multi-turn layouts, and detailed scrollable inspectors.
-- Adds signed per-thread context graph URLs served by the Autopsy worker, with bundled static assets built during release and global installs.
-- Adds allowlisted command-only context capture through silent `context-event` and Codex hook ingestion, while skipping generic lifecycle/tool-result events and command output.
-- Adds context graph settings for enabling/disabling capture, choosing hooks versus CLI mode, and toggling multi-turn graph behavior.
-- Adds a standard macOS Settings window to the menu bar app with About, Context Graph, and Memory tabs.
-- Updates agent instructions so Codex opens graph URLs in the in-app browser and avoids unnecessary `context-event` calls when hook mode is active.
-
 ## 0.1.19 - 2026-06-02
 
 Fixes the Homebrew menu bar activity reader and small-screen detail behavior.

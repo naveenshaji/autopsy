@@ -13,18 +13,6 @@ Before substantial work:
 - Prefer `context` for pre-work grounding and `consult` over `search` when relying on memory.
 - Consult Autopsy again within the same turn when the question changes, retrieval is incomplete, lineage/staleness warnings appear, or a decision depends on memory not covered by the first read.
 
-Live context graph:
-- Context graph capture is configured for Codex hooks. Do not call `autopsy context-event`; `autopsy codex-hook` records the current Codex session id from trusted hook payloads and records allowlisted `PostToolUse` Bash command text automatically.
-- Do not choose, invent, derive, or manually pass a graph thread id in Codex hook mode.
-- Keep the graph visible for the whole Codex chat. At chat start, after resume or compaction, and before continuing substantial work if the Browser tab may have been closed, check whether this chat's Autopsy context graph is open in the Codex in-app Browser. If it is missing or stale, reopen it unless the user explicitly asked to hide it.
-- The Autopsy menu bar LaunchAgent keeps the local graph worker warm. Agents should not run hidden keepalive commands; only reopen the Browser tab when visibility is lost.
-- Get the graph URL with `autopsy context-graph-url --codex-current`. This resolves the real current Codex session id from trusted hook state. Do not pass `--thread-id`; if the command reports `no_current_codex_hook_session` or `stale_codex_hook_session`, do not retry with a fabricated id. Tell the user hooks are not trusted/observed yet, then retry after a trusted Codex tool call updates hook state.
-- Do not pass `--open`; it uses the macOS default browser. Open this URL in the Codex in-app Browser, not `web.run` and not macOS `open`: use the Browser plugin/control-in-app-browser path through `mcp__node_repl.js`, connect to the `iab` browser, set visibility to true, use the selected tab or create one, then call `tab.goto(URL)`.
-- Hook capture records only allowlisted command cards. It skips preflight, permission, lifecycle-only, prompt, non-Bash tool, compaction, subagent hooks, and non-allowlisted commands.
-- Capture only the exact shell command text for context fetched through allowlisted commands. Never write generic graph events such as `file_read`, `web_search`, `tool_result`, `memory_consult`, `memory_write`, `turn_completed`, or status-only lifecycle events; never synthesize separate nodes for what the command read, searched, returned, or changed; never include file contents, fetched snippets, search results, metadata, secrets, or any command output in graph events.
-- The context graph viewer may deterministically render semantic labels, chips, and memory relation nodes from captured command text and Autopsy's own memory graph; agents still write only the exact allowlisted command string.
-- Capture is allowlisted only for context-fetching commands: capture commands where every executable shell segment, including pipeline segments, starts with `autopsy status`, `autopsy context`, `autopsy consult`, `autopsy search`, `autopsy item`, `autopsy timeline`, `autopsy history`, `autopsy neighbors`, `git status`, `git diff`, `git show`, `git log`, `rg`, `nl`, or `sed`; a leading `cd ...` setup segment is allowed. Ignore build, test, lint, package, write, shell redirection, command substitution, background operators, multiline commands, and other action commands, even when chained with an allowlisted read command.
-
 For repo-specific work:
 - Use `autopsy consult --scope repo --repo <repo-root> --query "<query>"` when you only want memories from one repo.
 - Use `autopsy context --scope repo --repo <repo-root> --format text --query "<query>"` when you want a repo-filtered context block.
@@ -41,7 +29,7 @@ When reading memory:
 - If `workflow.status` is `weak_signals_only`, treat side-channel candidates as debugging hints, not an answer.
 - If `workflow.status` is `needs_lineage_review`, inspect timeline or neighbors before relying on a stale or superseded memory.
 - Use `retrieval.items[].evidence` in `context` output to see why a memory was selected and what source episode/repo produced it.
-- Use `retrieval.graph_context.items[]` in `context` output for bounded related memories found through semantic graph neighbors.
+- Use `retrieval.related_memory.items[]` in `context` output for bounded related memories found through semantic graph neighbors.
 - Use `context_block` from JSON output, or `--format text`, when passing memory into an agent context window.
 - Use `item` for exact fact inspection.
 - Use `timeline` for supersession, invalidation, or stale facts.
@@ -59,6 +47,9 @@ When writing memory:
 - Use specific outcomes: `decision`, `attempt`, `observation`, `procedure`, `question`, `preference`, `plan`, `resolved-question`, or `reverted-attempt`.
 - Add at least one explicit semantic relation for durable writes: `--informed-by`, `--answers`, `--supersedes`, `--reverts`, `--depends-on`, `--implements`, `--constrains`, or `--refines`.
 - Relation flags are ontology-checked; use them between memory items, and target `--answers` at an open question.
+- Relation targets may be exact stable keys or unambiguous stable-key wrappers copied from Autopsy JSON, such as `sourceRef=graph-note:...` or `{"item":{"stableKey":"graph-note:..."}}`; Autopsy unwraps one clear key before lookup and fails closed when pasted text contains zero or multiple possible keys.
+- If a write returns a blocked JSON payload with `reason: "missing_relation_target"`, do not retry with `--no-relations-ok`; inspect the suggested `item`, `history`, or `search` commands and write a corrected relation.
+- If a stable-key command such as `item`, `timeline`, `neighbors --stable-key`, `snapshot`, `feedback`, `observe`, `consolidate-session`, update, delete, expire, or pin returns `reason: "missing_memory_item"`, do not recreate the key or retry as standalone; inspect the suggested `history` or `search` commands and choose an existing memory or write a new explicitly related outcome. If a selector command such as `neighbors --entity-id` returns the same reason, resolve a current stable key before retrying.
 - Use `--no-relations-ok` only when the memory is intentionally standalone and no semantic relation applies.
 - Use `--tag`, `--namespace`, entity-scope flags, and `--metadata KEY=VALUE` on writes when future reads should target a durable container, scoped namespace, user/agent/app/run/group partition, or structured field.
 - Use `--relation-valid-at`, `--relation-invalid-at`, or `--relation-expires-at` when a new semantic relation is only true during a known time window.
@@ -69,6 +60,8 @@ When writing memory:
 For backup and restore:
 - Run `autopsy backup` before large memory-system changes.
 - Run `autopsy restore <backup.json> --dry-run` before any restore.
+- If restore dry-run reports `offline_validation: true`, the backup file is valid but target-graph effects were not computed; do not infer existing-key, new/update, or relation endpoint behavior from it.
+- Use `autopsy restore <backup.json> --dry-run --offline` when you only need file validation and should not touch the memory runtime.
 - Use `autopsy restore <backup.json> --replace --yes` only when intentionally replacing matching restored keys.
 
 For memory-system changes:
