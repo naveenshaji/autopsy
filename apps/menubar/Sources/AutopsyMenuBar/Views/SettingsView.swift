@@ -141,6 +141,8 @@ private struct SharedSettingsTab: View {
     @State private var personalRelation = "references"
     @State private var personalFact = ""
     @State private var personalRelationID = ""
+    @State private var personalContextIncludeArchived = false
+    @State private var personalContextIncludeRelations = true
     @State private var tokenUserID = ""
     @State private var tokenLabel = "menubar"
     @State private var revokeTokenID = ""
@@ -365,6 +367,21 @@ private struct SharedSettingsTab: View {
                     }
                     .disabled(sharedActionDisabled)
                 }
+
+                HStack {
+                    Toggle("Context Relations", isOn: $personalContextIncludeRelations)
+                    Toggle("Archived Targets", isOn: $personalContextIncludeArchived)
+                }
+
+                Button("Copy Linked Context") {
+                    store.copySharedServerPersonalContext(
+                        repoScope: personalLinkRepoScope,
+                        personalKey: personalLinkKey,
+                        includeArchived: personalContextIncludeArchived,
+                        includeRelations: personalContextIncludeRelations
+                    )
+                }
+                .disabled(sharedActionDisabled)
 
                 Divider()
 

@@ -630,6 +630,12 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    func copySharedServerPersonalContext(repoScope: String, personalKey: String, includeArchived: Bool, includeRelations: Bool) {
+        Task {
+            await copySharedPersonalContext(repoScope: repoScope, personalKey: personalKey, includeArchived: includeArchived, includeRelations: includeRelations)
+        }
+    }
+
     func unlinkSharedServerPersonalRelation(relationID: String, repoScope: String) {
         Task {
             await unlinkPersonalSharedMemory(relationID: relationID, repoScope: repoScope)
@@ -1265,6 +1271,44 @@ final class ActivityStore: ObservableObject {
             NSPasteboard.general.setString(output.trimmingCharacters(in: .whitespacesAndNewlines), forType: .string)
             lastActionMessage = "Personal links copied"
             clearLastActionMessageAfterDelay(expected: "Personal links copied")
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
+    }
+
+    private func copySharedPersonalContext(repoScope: String, personalKey: String, includeArchived: Bool, includeRelations: Bool) async {
+        guard !isManagingSharedAccess else { return }
+        isManagingSharedAccess = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingSharedAccess = false
+        }
+
+        do {
+            var arguments = [
+                "shared-server",
+                "personal-context",
+                "--repo-scope",
+                normalizedRepoScope(repoScope),
+                "--limit",
+                "8",
+            ]
+            let trimmedPersonalKey = personalKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedPersonalKey.isEmpty {
+                arguments += ["--personal-key", trimmedPersonalKey]
+            }
+            if includeArchived {
+                arguments.append("--include-archived")
+            }
+            if !includeRelations {
+                arguments.append("--no-relations")
+            }
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run(arguments)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(output.trimmingCharacters(in: .whitespacesAndNewlines), forType: .string)
+            lastActionMessage = "Linked context copied"
+            clearLastActionMessageAfterDelay(expected: "Linked context copied")
         } catch {
             sharedServerError = error.localizedDescription
         }
