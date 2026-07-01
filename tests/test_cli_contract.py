@@ -5693,7 +5693,35 @@ class AutopsyCLIContractTests(unittest.TestCase):
 
     def test_context_parser_accepts_budget_and_worker_bypass(self):
         parser = cli.build_parser()
-        args = parser.parse_args(["context", "--no-worker", "--query", "release", "--max-chars", "2400", "--format", "text", "--memory-type", "procedural", "--tag", "release", "--as-of", "2026-05-30T00:00:00Z"])
+        args = parser.parse_args([
+            "context",
+            "--no-worker",
+            "--query",
+            "release",
+            "--max-chars",
+            "2400",
+            "--format",
+            "text",
+            "--memory-type",
+            "procedural",
+            "--tag",
+            "release",
+            "--as-of",
+            "2026-05-30T00:00:00Z",
+            "--include-shared",
+            "--shared-query",
+            "team release",
+            "--shared-repo-scope",
+            "repo-a",
+            "--shared-graph-slug",
+            "team",
+            "--shared-server-config",
+            "/tmp/shared.json",
+            "--shared-limit",
+            "4",
+            "--shared-include-archived",
+            "--shared-no-relations",
+        ])
         self.assertEqual(args.command, "context")
         self.assertTrue(args.no_worker)
         self.assertEqual(args.query, "release")
@@ -5702,6 +5730,14 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(args.memory_type, ["procedural"])
         self.assertEqual(args.tag, ["release"])
         self.assertEqual(args.as_of, "2026-05-30T00:00:00Z")
+        self.assertTrue(args.include_shared)
+        self.assertEqual(args.shared_query, "team release")
+        self.assertEqual(args.shared_repo_scope, "repo-a")
+        self.assertEqual(args.shared_graph_slug, "team")
+        self.assertEqual(args.shared_server_config, "/tmp/shared.json")
+        self.assertEqual(args.shared_limit, 4)
+        self.assertTrue(args.shared_include_archived)
+        self.assertTrue(args.shared_no_relations)
 
     def test_audit_parser_accepts_scope_kind_and_limit(self):
         parser = cli.build_parser()
@@ -6740,6 +6776,103 @@ class AutopsyCLIContractTests(unittest.TestCase):
         worker_consult.assert_not_called()
         local_consult.assert_called_once()
         self.assertEqual(local_consult.call_args.kwargs["query"], "broad reliability query")
+
+    def test_context_command_can_include_source_attributed_shared_context(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["context", "--query", "needle", "--include-shared", "--shared-repo-scope", "repo-a", "--shared-limit", "3"])
+        tool = types.SimpleNamespace(STATUS_WINDOW_DAYS_DEFAULT=21, workspace_payload=cli.workspace_payload)
+        workspace = {"id": "/tmp/ws", "workspace_key": "/tmp/ws", "slug": "ws", "title": "ws", "root_path": "/tmp/ws"}
+        graph = types.SimpleNamespace(name="unit")
+        base_context = {
+            "query": "needle",
+            "context_budget": {"max_chars": 2000, "used_chars": 0, "truncated": False},
+            "agent_context": [],
+            "workflow": {"status": "ok", "coverage": "strong", "complete": True},
+        }
+        calls: list[tuple[str, str, dict[str, str] | None]] = []
+
+        def fake_shared_request(_config, path, *, method="GET", payload=None, timeout=5.0):
+            calls.append((path, method, payload))
+            return {
+                "graph_slug": "autopsy",
+                "repo": "repo-a",
+                "query": "needle",
+                "items": [
+                    {
+                        "stable_key": "shared:1",
+                        "kind": "observation",
+                        "title": "Shared One",
+                        "content": "needle from the shared graph",
+                        "repo": "repo-a",
+                        "source": {"type": "shared_server", "graph_slug": "autopsy", "repo": "repo-a"},
+                    }
+                ],
+                "relations": [
+                    {"id": "rel_1", "source_key": "shared:1", "target_key": "shared:2", "relation": "supports", "fact": "one supports two"}
+                ],
+                "context_block": "Autopsy Shared Context",
+            }
+
+        with (
+            mock.patch.object(cli, "open_workspace_graph", return_value=(tool, workspace, {}, graph)),
+            mock.patch.object(cli, "build_status_payload", return_value={"items": [], "workflow": {"complete": True}}),
+            mock.patch.object(cli, "build_consult_filters", return_value={}),
+            mock.patch.object(cli, "filter_status_payload_by_metadata", side_effect=lambda _graph, payload, _filters: payload),
+            mock.patch.object(cli, "build_consult_payload", return_value={"route": "hybrid", "hits": [], "items": []}),
+            mock.patch.object(cli, "build_related_memory_payload_for_consult", return_value={"items": []}),
+            mock.patch.object(cli, "context_stable_keys_from_payloads", return_value=[]),
+            mock.patch.object(cli, "fetch_context_lineage", return_value={}),
+            mock.patch.object(cli, "build_context_pack_payload", return_value=base_context),
+            mock.patch.object(cli, "load_shared_server_config", return_value={"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_shared_request),
+            mock.patch.object(cli, "refresh_activity_snapshot", return_value={}),
+        ):
+            payload = cli.build_context_command_payload(args)
+
+        self.assertEqual(payload["shared_context"]["status"], "ok")
+        self.assertEqual(payload["shared_context"]["items"][0]["stable_key"], "shared:1")
+        self.assertIn("Shared Context", payload["context_block"])
+        self.assertIn("[shared:1] shared observation: Shared One", payload["context_block"])
+        self.assertIn("Shared Context Relations", payload["context_block"])
+        self.assertIn("shared:1 -supports-> shared:2", payload["context_block"])
+        self.assertEqual(calls[0][0], "/v1/shared-graphs/autopsy/context?repo=repo-a&query=needle&limit=3")
+
+    def test_context_command_shared_context_errors_are_nonfatal(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["context", "--query", "needle", "--include-shared", "--shared-repo-scope", "repo-a"])
+        tool = types.SimpleNamespace(STATUS_WINDOW_DAYS_DEFAULT=21, workspace_payload=cli.workspace_payload)
+        workspace = {"id": "/tmp/ws", "workspace_key": "/tmp/ws", "slug": "ws", "title": "ws", "root_path": "/tmp/ws"}
+        graph = types.SimpleNamespace(name="unit")
+        base_context = {
+            "query": "needle",
+            "context_budget": {"max_chars": 2000, "used_chars": 0, "truncated": False},
+            "agent_context": [],
+            "workflow": {"status": "ok", "coverage": "strong", "complete": True},
+        }
+
+        def denied_request(_config, path, *, method="GET", payload=None, timeout=5.0):
+            raise urllib.error.HTTPError(path, 403, "Forbidden", {}, io.BytesIO(b'{"detail":"read access denied"}'))
+
+        with (
+            mock.patch.object(cli, "open_workspace_graph", return_value=(tool, workspace, {}, graph)),
+            mock.patch.object(cli, "build_status_payload", return_value={"items": [], "workflow": {"complete": True}}),
+            mock.patch.object(cli, "build_consult_filters", return_value={}),
+            mock.patch.object(cli, "filter_status_payload_by_metadata", side_effect=lambda _graph, payload, _filters: payload),
+            mock.patch.object(cli, "build_consult_payload", return_value={"route": "hybrid", "hits": [], "items": []}),
+            mock.patch.object(cli, "build_related_memory_payload_for_consult", return_value={"items": []}),
+            mock.patch.object(cli, "context_stable_keys_from_payloads", return_value=[]),
+            mock.patch.object(cli, "fetch_context_lineage", return_value={}),
+            mock.patch.object(cli, "build_context_pack_payload", return_value=base_context),
+            mock.patch.object(cli, "load_shared_server_config", return_value={"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}),
+            mock.patch.object(cli, "shared_server_request", side_effect=denied_request),
+            mock.patch.object(cli, "refresh_activity_snapshot", return_value={}),
+        ):
+            payload = cli.build_context_command_payload(args)
+
+        self.assertEqual(payload["workflow"]["status"], "ok")
+        self.assertEqual(payload["shared_context"]["status"], "error")
+        self.assertIn("read access denied", payload["shared_context"]["error"])
+        self.assertIn("shared context unavailable", payload["context_block"])
 
     def test_context_pack_includes_related_memory_neighborhood(self):
         class Tool:

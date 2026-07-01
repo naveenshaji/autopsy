@@ -196,6 +196,14 @@ def build_parser(
     context_parser.add_argument("--section-limit", type=int, default=3, help="Maximum items per current-state section.")
     context_parser.add_argument("--recent-days", type=int, default=status_window_days_default)
     context_parser.add_argument("--max-chars", type=int, default=6000, help="Approximate character budget for agent_context entries.")
+    context_parser.add_argument("--include-shared", action="store_true", help="Also fetch source-attributed context from the configured shared memory server.")
+    context_parser.add_argument("--shared-query", help="Query text for shared memory context. Defaults to the local context query.")
+    context_parser.add_argument("--shared-repo-scope", help="Exact shared-server repo scope for --include-shared. Defaults to --repo or the current repository.")
+    context_parser.add_argument("--shared-graph-slug", help="Shared graph slug for --include-shared. Defaults to the configured graph.")
+    context_parser.add_argument("--shared-server-config", dest="shared_server_config", help="Path to the local shared-server config JSON for --include-shared.")
+    context_parser.add_argument("--shared-limit", type=int, default=8, help="Maximum shared memories to retrieve with --include-shared.")
+    context_parser.add_argument("--shared-include-archived", action="store_true", help="With --include-shared, include archived shared memories.")
+    context_parser.add_argument("--shared-no-relations", action="store_true", help="With --include-shared, omit adjacent shared graph relations.")
     context_parser.add_argument(
         "--format",
         choices=("json", "text"),

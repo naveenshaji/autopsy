@@ -68,6 +68,7 @@ autopsy repair-embedded-snapshot --dry-run
 autopsy status --current-only
 autopsy context --current-only --query "current task"
 autopsy context --current-only --format text --query "current task"
+autopsy context --current-only --include-shared --shared-repo-scope /path/to/repo --format text --query "current task"
 autopsy audit --current-only
 autopsy activity
 autopsy shared-server health
@@ -97,6 +98,14 @@ autopsy menubar
 `repair-embedded-snapshot` is for embedded FalkorDBLite rollback events reported by `health`, `status`, or `diagnostics --log memory-guard`. The default is a dry run that plans which stale database, settings, and guard files would be quarantined and lists recent validated default backup candidates with staleness risk relative to the guard timestamp or guard generation. Its `backup_candidates.recovery_summary.best_candidate` ranks valid backups by recovery evidence, so a guard-covered backup can outrank a newer timestamp-only backup. Use `--salvage-output <path>` to write a read-only JSON export from the stale embedded snapshot before any quarantine; Autopsy closes that loaded snapshot with NOSAVE and marks the export as stale-snapshot salvage metadata. Actual repair requires both `--yes` and `--accept-data-loss`; it first writes an automatic salvage export unless `--skip-salvage` is supplied, then moves the stale snapshot into an application-support backup bundle instead of lowering the guard in place. Add `--restore-backup <backup.json>` or `--restore-latest-backup` to import a validated semantic backup into the fresh embedded store after quarantine.
 
 `activity` is the lightweight JSON feed for UI clients. It returns recent memory writes, recent consult telemetry, attention items, and current status.
+
+`context --include-shared` keeps local and shared provenance separate while
+building one agent-ready context pack. The shared block is opt-in, source
+attributed as `shared_server`, and non-fatal: if the shared server is missing or
+denies access, local context still renders with a shared-context error entry.
+Use `--shared-repo-scope`, `--shared-query`, `--shared-limit`,
+`--shared-include-archived`, and `--shared-no-relations` to control the shared
+side of the retrieval.
 
 `shared-server` configures and inspects the Autopsy shared memory server used for
 team graphs. `shared-server configure --from-owner-config` imports the private

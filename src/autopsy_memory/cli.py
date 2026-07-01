@@ -4583,6 +4583,17 @@ def shared_server_graph_slug_from_args(args: argparse.Namespace, config: dict[st
     return str(getattr(args, "graph_slug", None) or config.get("graph_slug") or "autopsy").strip()
 
 
+def shared_context_graph_slug_from_args(args: argparse.Namespace, config: dict[str, Any]) -> str:
+    return str(getattr(args, "shared_graph_slug", None) or config.get("graph_slug") or "autopsy").strip()
+
+
+def shared_context_repo_scope_from_args(args: argparse.Namespace) -> str:
+    exact_scope = str(getattr(args, "shared_repo_scope", None) or "").strip()
+    if exact_scope:
+        return exact_scope
+    return shared_server_repo_scope_from_args(args)
+
+
 def shared_server_path(graph_slug: str, suffix: str) -> str:
     return f"/v1/shared-graphs/{urllib.parse.quote(graph_slug, safe='')}{suffix}"
 
@@ -4602,6 +4613,145 @@ def build_shared_server_publish_payload(item: dict[str, Any], *, repo: str) -> d
             "autopsy_updated_at": item.get("updated_at"),
         },
     }
+
+
+def build_shared_context_command_payload(args: argparse.Namespace, query: str) -> dict[str, Any] | None:
+    if not bool(getattr(args, "include_shared", False)):
+        return None
+    config_path = getattr(args, "shared_server_config", None)
+    config = load_shared_server_config(config_path)
+    redacted_config = redacted_shared_server_config(config, path=config_path)
+    shared_query = str(getattr(args, "shared_query", None) or query or "").strip()
+    repo = shared_context_repo_scope_from_args(args)
+    base_payload: dict[str, Any] = {
+        "enabled": True,
+        "status": "missing_config" if not config else "pending",
+        "shared_server": redacted_config,
+        "repo": repo,
+        "query": shared_query,
+        "items": [],
+        "relations": [],
+        "context_block": "",
+    }
+    if not config or not redacted_config.get("configured"):
+        base_payload["error"] = "shared server is not configured"
+        return base_payload
+    graph_slug = shared_context_graph_slug_from_args(args, config)
+    base_payload["graph_slug"] = graph_slug
+    try:
+        shared_payload = shared_server_request(
+            config,
+            shared_server_context_path(
+                graph_slug,
+                repo,
+                query_text=shared_query,
+                limit=int(getattr(args, "shared_limit", 8) or 8),
+                include_archived=bool(getattr(args, "shared_include_archived", False)),
+                include_relations=not bool(getattr(args, "shared_no_relations", False)),
+            ),
+            timeout=15,
+        )
+    except urllib.error.HTTPError as exc:
+        base_payload["status"] = "error"
+        base_payload["error"] = shared_server_http_error_message(exc)
+        return base_payload
+    except Exception as exc:
+        base_payload["status"] = "error"
+        base_payload["error"] = str(exc)
+        return base_payload
+    if not isinstance(shared_payload, dict):
+        base_payload["status"] = "error"
+        base_payload["error"] = "shared server returned a non-object payload"
+        return base_payload
+    merged = {**base_payload, **shared_payload}
+    merged["enabled"] = True
+    merged["status"] = "ok"
+    merged["shared_server"] = redacted_config
+    return merged
+
+
+def attach_shared_context_to_context_payload(payload: dict[str, Any], shared_context: dict[str, Any] | None) -> dict[str, Any]:
+    if not shared_context:
+        return payload
+    payload["shared_context"] = shared_context
+    budget = payload.get("context_budget") if isinstance(payload.get("context_budget"), dict) else {}
+    max_chars = int(budget.get("max_chars") or 6000)
+    used_chars = int(budget.get("used_chars") or 0)
+    truncated = bool(budget.get("truncated"))
+    entries = payload.get("agent_context")
+    if not isinstance(entries, list):
+        entries = []
+        payload["agent_context"] = entries
+    status = str(shared_context.get("status") or "").strip()
+    if status and status != "ok":
+        error = summary_snippet(str(shared_context.get("error") or status), limit=300)
+        used_chars, was_truncated = append_context_entry(
+            entries,
+            {
+                "section": "shared_context",
+                "priority": 1,
+                "text": f"shared context unavailable: {error}",
+            },
+            max_chars=max_chars,
+            used_chars=used_chars,
+        )
+        truncated = truncated or was_truncated
+    else:
+        graph_slug = str(shared_context.get("graph_slug") or "").strip()
+        repo = str(shared_context.get("repo") or "").strip()
+        for item in list(shared_context.get("items") or [])[:8]:
+            if not isinstance(item, dict):
+                continue
+            stable_key = str(item.get("stable_key") or "")
+            title = summary_snippet(str(item.get("title") or ""), limit=160)
+            content = summary_snippet(str(item.get("content") or ""), limit=420)
+            kind = str(item.get("kind") or "shared_memory")
+            source = item.get("source") if isinstance(item.get("source"), dict) else {}
+            source_graph = str(source.get("graph_slug") or graph_slug)
+            source_repo = str(source.get("repo") or repo)
+            text = f"shared {kind}: {title}"
+            if content:
+                text = f"{text} - {content}"
+            text = f"{text} [source: shared_server graph={source_graph} repo={source_repo}]"
+            used_chars, was_truncated = append_context_entry(
+                entries,
+                {
+                    "section": "shared_context",
+                    "priority": 1,
+                    "stable_key": stable_key,
+                    "text": text,
+                },
+                max_chars=max_chars,
+                used_chars=used_chars,
+            )
+            truncated = truncated or was_truncated
+        for relation in list(shared_context.get("relations") or [])[:8]:
+            if not isinstance(relation, dict):
+                continue
+            source_key = str(relation.get("source_key") or "")
+            target_key = str(relation.get("target_key") or "")
+            label = str(relation.get("relation") or "related_to")
+            fact = summary_snippet(str(relation.get("fact") or ""), limit=220)
+            text = f"shared relation: {source_key} -{label}-> {target_key}"
+            if fact:
+                text = f"{text}: {fact}"
+            used_chars, was_truncated = append_context_entry(
+                entries,
+                {
+                    "section": "shared_context_relations",
+                    "priority": 2,
+                    "stable_key": source_key or target_key,
+                    "text": text,
+                },
+                max_chars=max_chars,
+                used_chars=used_chars,
+            )
+            truncated = truncated or was_truncated
+    if budget:
+        budget["used_chars"] = min(used_chars, max_chars)
+        budget["truncated"] = truncated
+    payload["context_block"] = render_context_block(payload)
+    return payload
 
 
 def cmd_shared_server(args: argparse.Namespace) -> None:
@@ -10467,6 +10617,8 @@ def context_block_section_title(section: str) -> str:
         "procedures": "Procedures",
         "observations": "Observations",
         "retrieved_memory": "Retrieved Memory",
+        "shared_context": "Shared Context",
+        "shared_context_relations": "Shared Context Relations",
         "weak_signals": "Weak Signals",
         "related_memory": "Related Memory",
         "relations": "Relations",
@@ -15624,6 +15776,7 @@ def build_context_command_payload(args: argparse.Namespace) -> dict[str, Any]:
         lineage=lineage,
         related_memory=related_memory,
     )
+    payload = attach_shared_context_to_context_payload(payload, build_shared_context_command_payload(args, query))
     if query:
         refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
     return payload
