@@ -4328,6 +4328,36 @@ def shared_server_request(
         return json.loads(response.read().decode("utf-8"))
 
 
+def shared_server_http_error_message(exc: urllib.error.HTTPError) -> str:
+    detail = str(exc.reason or "").strip()
+    with contextlib.suppress(Exception):
+        raw = exc.read().decode("utf-8").strip()
+        if raw:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict) and parsed.get("detail"):
+                detail = str(parsed.get("detail"))
+            else:
+                detail = raw
+    return f"HTTP {exc.code}: {detail or exc.reason}"
+
+
+def shared_server_request_or_fail(
+    config: dict[str, Any],
+    path: str,
+    *,
+    method: str = "GET",
+    payload: dict[str, Any] | None = None,
+    timeout: float = 5.0,
+) -> dict[str, Any]:
+    try:
+        return shared_server_request(config, path, method=method, payload=payload, timeout=timeout)
+    except urllib.error.HTTPError as exc:
+        fail(f"shared server request failed: {shared_server_http_error_message(exc)}")
+    except Exception as exc:
+        fail(f"shared server request failed: {exc}")
+    raise AssertionError("unreachable")
+
+
 def build_shared_server_status_payload(*, check_remote: bool = False, config_path: str | None = None) -> dict[str, Any]:
     config = load_shared_server_config(config_path)
     payload = redacted_shared_server_config(config, path=config_path)
@@ -4369,6 +4399,66 @@ def build_shared_server_status_payload(*, check_remote: bool = False, config_pat
     return payload
 
 
+def shared_server_grants_path(graph_slug: str, repo: str | None) -> str:
+    suffix = "/grants"
+    if repo and repo != "*":
+        suffix = f"{suffix}?{urllib.parse.urlencode({'repo': repo})}"
+    return shared_server_path(graph_slug, suffix)
+
+
+def summarize_shared_server_grants(items: list[dict[str, Any]]) -> dict[str, Any]:
+    role_counts: dict[str, int] = {}
+    repos: set[str] = set()
+    for item in items:
+        role = str(item.get("role") or "unknown")
+        role_counts[role] = role_counts.get(role, 0) + 1
+        repo = str(item.get("repo") or "")
+        if repo:
+            repos.add(repo)
+    return {
+        "grants_count": len(items),
+        "role_counts": role_counts,
+        "repos": sorted(repos)[:20],
+    }
+
+
+def build_shared_server_team_status_payload(*, config_path: str | None = None, repo: str | None = None) -> dict[str, Any]:
+    config = load_shared_server_config(config_path)
+    payload = build_shared_server_status_payload(check_remote=True, config_path=config_path)
+    team: dict[str, Any] = {
+        "repo": repo or "*",
+        "can_list_users": False,
+        "can_list_grants": False,
+    }
+    payload["team"] = team
+    if not payload.get("configured") or not config:
+        return payload
+    graph_slug = shared_server_graph_slug_from_args(argparse.Namespace(graph_slug=None), config)
+    me = payload.get("me") if isinstance(payload.get("me"), dict) else {}
+    if bool(me.get("is_admin")):
+        try:
+            users_payload = shared_server_request(config, "/v1/users", timeout=10)
+        except urllib.error.HTTPError as exc:
+            team["users_error"] = shared_server_http_error_message(exc)
+        except Exception as exc:
+            team["users_error"] = str(exc)
+        else:
+            users = users_payload.get("items") if isinstance(users_payload.get("items"), list) else []
+            team["can_list_users"] = True
+            team["users_count"] = len(users)
+    try:
+        grants_payload = shared_server_request(config, shared_server_grants_path(graph_slug, repo), timeout=10)
+    except urllib.error.HTTPError as exc:
+        team["grants_error"] = shared_server_http_error_message(exc)
+    except Exception as exc:
+        team["grants_error"] = str(exc)
+    else:
+        grants = grants_payload.get("items") if isinstance(grants_payload.get("items"), list) else []
+        team["can_list_grants"] = True
+        team.update(summarize_shared_server_grants(grants))
+    return payload
+
+
 def require_shared_server_config(config_path: str | None = None) -> dict[str, Any]:
     config = load_shared_server_config(config_path)
     if not config or not redacted_shared_server_config(config, path=config_path).get("configured"):
@@ -4377,6 +4467,9 @@ def require_shared_server_config(config_path: str | None = None) -> dict[str, An
 
 
 def shared_server_repo_scope_from_args(args: argparse.Namespace) -> str:
+    exact_scope = str(getattr(args, "repo_scope", None) or "").strip()
+    if exact_scope:
+        return exact_scope
     repo = repository_path_from_args(args)
     if repo:
         return str(Path(repo).expanduser().resolve(strict=False))
@@ -4453,6 +4546,93 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
     config = require_shared_server_config(config_path)
     graph_slug = shared_server_graph_slug_from_args(args, config)
     repo = shared_server_repo_scope_from_args(args)
+    if action == "team-status":
+        print(json.dumps(build_shared_server_team_status_payload(config_path=config_path, repo=repo), indent=2))
+        return
+    if action == "users":
+        payload = shared_server_request_or_fail(config, "/v1/users", timeout=10)
+        print(json.dumps(payload, indent=2))
+        return
+    if action == "create-user":
+        email = str(getattr(args, "email", "") or "").strip()
+        if not email:
+            fail("shared-server create-user requires --email", 2)
+        payload = shared_server_request_or_fail(
+            config,
+            "/v1/users",
+            method="POST",
+            payload={"email": email, "name": str(getattr(args, "name", "") or "")},
+            timeout=10,
+        )
+        print(json.dumps(payload, indent=2))
+        return
+    if action == "tokens":
+        user_id = str(getattr(args, "user_id", "") or "").strip()
+        if not user_id:
+            fail("shared-server tokens requires --user-id", 2)
+        payload = shared_server_request_or_fail(
+            config,
+            f"/v1/users/{urllib.parse.quote(user_id, safe='')}/tokens",
+            timeout=10,
+        )
+        print(json.dumps(payload, indent=2))
+        return
+    if action == "create-token":
+        user_id = str(getattr(args, "user_id", "") or "").strip()
+        if not user_id:
+            fail("shared-server create-token requires --user-id", 2)
+        payload = shared_server_request_or_fail(
+            config,
+            f"/v1/users/{urllib.parse.quote(user_id, safe='')}/tokens",
+            method="POST",
+            payload={"label": str(getattr(args, "label", "") or "default")},
+            timeout=10,
+        )
+        print(json.dumps(payload, indent=2))
+        return
+    if action == "grants":
+        payload = shared_server_request_or_fail(config, shared_server_grants_path(graph_slug, repo), timeout=10)
+        print(json.dumps(payload, indent=2))
+        return
+    if action == "grant":
+        user_id = str(getattr(args, "user_id", "") or "").strip()
+        role = str(getattr(args, "role", "") or "").strip()
+        if not user_id or not role:
+            fail("shared-server grant requires --user-id and --role", 2)
+        payload = shared_server_request_or_fail(
+            config,
+            "/v1/grants",
+            method="POST",
+            payload={"user_id": user_id, "graph_slug": graph_slug, "repo": repo, "role": role},
+            timeout=10,
+        )
+        print(json.dumps(payload, indent=2))
+        return
+    if action == "revoke-token":
+        token_id = str(getattr(args, "stable_key", "") or "").strip()
+        if not token_id:
+            fail("shared-server revoke-token requires a token id", 2)
+        payload = shared_server_request_or_fail(
+            config,
+            f"/v1/tokens/{urllib.parse.quote(token_id, safe='')}/revoke",
+            method="POST",
+            timeout=10,
+        )
+        print(json.dumps(payload, indent=2))
+        return
+    if action == "revoke-grant":
+        user_id = str(getattr(args, "user_id", "") or "").strip()
+        if not user_id:
+            fail("shared-server revoke-grant requires --user-id", 2)
+        payload = shared_server_request_or_fail(
+            config,
+            "/v1/grants/revoke",
+            method="POST",
+            payload={"user_id": user_id, "graph_slug": graph_slug, "repo": repo},
+            timeout=10,
+        )
+        print(json.dumps(payload, indent=2))
+        return
     if action == "list":
         query = urllib.parse.urlencode(
             {
@@ -4460,7 +4640,7 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
                 "limit": max(1, min(int(getattr(args, "limit", 50) or 50), 500)),
             }
         )
-        payload = shared_server_request(config, shared_server_path(graph_slug, f"/memories?{query}"), timeout=10)
+        payload = shared_server_request_or_fail(config, shared_server_path(graph_slug, f"/memories?{query}"), timeout=10)
         print(json.dumps(payload, indent=2))
         return
     if action == "publish":
@@ -4473,7 +4653,7 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
             return
         item = fetch_item(graph, stable_key)
         remote_payload = build_shared_server_publish_payload(item, repo=repo)
-        published = shared_server_request(
+        published = shared_server_request_or_fail(
             config,
             shared_server_path(graph_slug, "/memories"),
             method="PUT",
@@ -4493,7 +4673,7 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         relation = str(getattr(args, "relation", "") or "").strip()
         if not personal_key or not shared_key or not relation:
             fail("shared-server link requires personal_key, shared_key, and --relation", 2)
-        linked = shared_server_request(
+        linked = shared_server_request_or_fail(
             config,
             shared_server_path(graph_slug, "/personal-relations"),
             method="POST",

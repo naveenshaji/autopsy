@@ -71,6 +71,9 @@ autopsy context --current-only --format text --query "current task"
 autopsy audit --current-only
 autopsy activity
 autopsy shared-server health
+autopsy shared-server team-status
+autopsy shared-server users
+autopsy shared-server grants --repo-scope /path/to/repo
 autopsy benchmark --sample-size 5 --include-sync
 autopsy menubar
 ```
@@ -90,10 +93,18 @@ owner token file created by `autopsy-server` bootstrap into
 permissions. `shared-server health` checks the remote `/health` and `/v1/me`
 endpoints and always redacts the bearer token from output. The `activity` feed
 includes redacted `shared_server` state so the macOS menu bar can show and check
-shared-memory connectivity. `shared-server publish <stable-key> --repo <repo>`
-copies a local memory item into the configured shared graph, `shared-server list
---repo <repo>` lists repo-scoped shared memories, and `shared-server link
-<personal-key> <shared-key> --repo <repo> --relation <name>` creates a private
+shared-memory connectivity. `shared-server team-status` summarizes users and
+repo grants for menu bar clients without echoing token material. Admins can use
+`shared-server users`, `create-user --email <email>`, `tokens --user-id <id>`,
+`create-token --user-id <id> --label <label>`, `grants --repo-scope <repo>`,
+`grant --user-id <id> --role reader|writer|owner --repo-scope <repo>`,
+`revoke-token <token-id>`, and `revoke-grant --user-id <id> --repo-scope <repo>`
+to manage shared access. `--repo` resolves a local repo path; `--repo-scope`
+passes an exact shared-server scope such as a repo URL, stable repo id, or `*`.
+`shared-server publish <stable-key> --repo <repo>` copies a local memory item
+into the configured shared graph, `shared-server list --repo <repo>` lists
+repo-scoped shared memories, and `shared-server link <personal-key>
+<shared-key> --repo <repo> --relation <name>` creates a private
 personal-to-shared relation without uploading the personal graph.
 
 `menubar` stages the native macOS menu bar app as a small `.app` bundle and, in a normal GUI session, installs and kickstarts the supervised LaunchAgent. Current bundles launch without rebuilding; use `autopsy menubar --build` to build and stage without launching, `autopsy menubar --rebuild` to force a rebuild before launch, `autopsy menubar --install-launch-agent` to explicitly install the supervised login item, and `autopsy menubar --print-path` to inspect resolved app paths. Installed LaunchAgents run the app executable directly with `KeepAlive`, and the app silently checks the resident worker so local memory routes stay warm.

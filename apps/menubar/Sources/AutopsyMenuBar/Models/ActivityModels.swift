@@ -29,6 +29,7 @@ struct SharedServerPayload: Decodable {
     var remoteOK: Bool?
     var error: String?
     var me: SharedServerUserPayload?
+    var team: SharedServerTeamPayload?
 
     enum CodingKeys: String, CodingKey {
         case configured
@@ -41,6 +42,7 @@ struct SharedServerPayload: Decodable {
         case remoteOK = "remote_ok"
         case error
         case me
+        case team
     }
 }
 
@@ -55,6 +57,28 @@ struct SharedServerUserPayload: Decodable {
         case email
         case name
         case isAdmin = "is_admin"
+    }
+}
+
+struct SharedServerTeamPayload: Decodable {
+    var repo: String?
+    var canListUsers: Bool?
+    var canListGrants: Bool?
+    var usersCount: Int?
+    var grantsCount: Int?
+    var roleCounts: [String: Int]?
+    var usersError: String?
+    var grantsError: String?
+
+    enum CodingKeys: String, CodingKey {
+        case repo
+        case canListUsers = "can_list_users"
+        case canListGrants = "can_list_grants"
+        case usersCount = "users_count"
+        case grantsCount = "grants_count"
+        case roleCounts = "role_counts"
+        case usersError = "users_error"
+        case grantsError = "grants_error"
     }
 }
 

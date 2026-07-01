@@ -145,6 +145,27 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(args.shared_server_action, "configure")
         self.assertEqual(args.from_owner_config, "")
 
+    def test_shared_server_parser_accepts_team_access_controls(self):
+        parser = cli.build_parser()
+        grant_args = parser.parse_args([
+            "shared-server",
+            "grant",
+            "--user-id",
+            "usr_1",
+            "--role",
+            "writer",
+            "--repo-scope",
+            "repo-a",
+        ])
+        revoke_args = parser.parse_args(["shared-server", "revoke-token", "tok_1"])
+
+        self.assertEqual(grant_args.shared_server_action, "grant")
+        self.assertEqual(grant_args.user_id, "usr_1")
+        self.assertEqual(grant_args.role, "writer")
+        self.assertEqual(grant_args.repo_scope, "repo-a")
+        self.assertEqual(revoke_args.shared_server_action, "revoke-token")
+        self.assertEqual(revoke_args.stable_key, "tok_1")
+
     def test_shared_server_config_is_written_private_and_redacted(self):
         parser = cli.build_parser()
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -201,6 +222,39 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["repo"], "/repo/autopsy")
         self.assertEqual(payload["metadata"]["topic"], "shared")
         self.assertEqual(payload["metadata"]["autopsy_local_entity_id"], 42)
+
+    def test_shared_server_team_status_summarizes_remote_access_without_tokens(self):
+        config = {
+            "base_url": "https://autopsy-server.fly.dev",
+            "graph_slug": "autopsy",
+            "user_id": "usr_1",
+            "token": "secret-token",
+        }
+
+        def fake_request(_config, path, **_kwargs):
+            if path == "/health":
+                return {"ok": True}
+            if path == "/v1/me":
+                return {"id": "usr_1", "email": "owner@example.com", "name": "Owner", "is_admin": True}
+            if path == "/v1/users":
+                return {"items": [{"id": "usr_1"}, {"id": "usr_2"}]}
+            if path == "/v1/shared-graphs/autopsy/grants?repo=repo-a":
+                return {
+                    "items": [
+                        {"user_id": "usr_1", "repo": "repo-a", "role": "owner"},
+                        {"user_id": "usr_2", "repo": "repo-a", "role": "reader"},
+                    ]
+                }
+            raise AssertionError(path)
+
+        with mock.patch.object(cli, "load_shared_server_config", return_value=config), mock.patch.object(cli, "shared_server_request", side_effect=fake_request):
+            payload = cli.build_shared_server_team_status_payload(repo="repo-a")
+
+        self.assertTrue(payload["remote_ok"])
+        self.assertEqual(payload["team"]["users_count"], 2)
+        self.assertEqual(payload["team"]["grants_count"], 2)
+        self.assertEqual(payload["team"]["role_counts"], {"owner": 1, "reader": 1})
+        self.assertNotIn("secret-token", json.dumps(payload))
 
     def test_restore_offline_requires_dry_run(self):
         parser = cli.build_parser()

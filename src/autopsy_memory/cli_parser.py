@@ -378,16 +378,37 @@ def build_parser(
     shared_server_parser.add_argument(
         "shared_server_action",
         nargs="?",
-        choices=("status", "configure", "health", "publish", "list", "link"),
+        choices=(
+            "status",
+            "configure",
+            "health",
+            "team-status",
+            "users",
+            "create-user",
+            "tokens",
+            "create-token",
+            "grants",
+            "grant",
+            "revoke-token",
+            "revoke-grant",
+            "publish",
+            "list",
+            "link",
+        ),
         default="status",
-        help="Show config, configure, check health, publish local memory, list shared memory, or link personal memory to shared memory.",
+        help="Configure, check, administer shared access, publish local memory, list shared memory, or link personal memory to shared memory.",
     )
-    shared_server_parser.add_argument("stable_key", nargs="?", help="Local memory stable key for publish, or personal stable key for link.")
+    shared_server_parser.add_argument("stable_key", nargs="?", help="Primary id: stable key for publish/link or token id for revoke-token.")
     shared_server_parser.add_argument("target_key", nargs="?", help="Shared memory stable key for link.")
     shared_server_parser.add_argument("--config", dest="shared_server_config", help="Path to the local shared-server config JSON.")
     shared_server_parser.add_argument("--base-url", help="Shared server base URL, for example https://autopsy-server.fly.dev.")
     shared_server_parser.add_argument("--graph-slug", help="Shared graph slug. Defaults to autopsy when configuring.")
-    shared_server_parser.add_argument("--user-id", help="Optional server user id to store with the config.")
+    shared_server_parser.add_argument("--user-id", help="Server user id for config, token, or grant operations.")
+    shared_server_parser.add_argument("--email", help="Email for shared-server create-user.")
+    shared_server_parser.add_argument("--name", default="", help="Display name for shared-server create-user.")
+    shared_server_parser.add_argument("--label", default="default", help="Token label for shared-server create-token.")
+    shared_server_parser.add_argument("--role", choices=("reader", "writer", "owner"), help="Grant role for shared-server grant.")
+    shared_server_parser.add_argument("--repo-scope", help="Exact shared-server repo scope. Overrides --repo path resolution for shared-server operations.")
     shared_server_parser.add_argument("--token", help="Bearer token for shared memory server access. Stored in a 0600 local config file.")
     shared_server_parser.add_argument("--relation", help="Relation name for shared-server link.")
     shared_server_parser.add_argument("--fact", default="", help="Optional relation fact text for shared-server link.")

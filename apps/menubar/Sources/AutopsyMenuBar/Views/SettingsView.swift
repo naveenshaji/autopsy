@@ -85,6 +85,15 @@ private struct MemorySettingsTab: View {
                 if !store.sharedServerGraphSlug.isEmpty {
                     LabeledContent("Graph", value: store.sharedServerGraphSlug)
                 }
+                if !store.sharedServerUserText.isEmpty {
+                    LabeledContent("User", value: store.sharedServerUserText)
+                }
+                if !store.sharedServerUsersText.isEmpty {
+                    LabeledContent("Team Users", value: store.sharedServerUsersText)
+                }
+                if !store.sharedServerGrantsText.isEmpty {
+                    LabeledContent("Repo Grants", value: store.sharedServerGrantsText)
+                }
                 HStack {
                     Button("Use Owner Config") {
                         store.configureSharedServerFromOwnerConfig()
@@ -93,6 +102,11 @@ private struct MemorySettingsTab: View {
 
                     Button("Check Server") {
                         store.checkSharedServer()
+                    }
+                    .disabled(store.isCheckingSharedServer)
+
+                    Button("Refresh Team") {
+                        store.refreshSharedServerTeam()
                     }
                     .disabled(store.isCheckingSharedServer)
                 }

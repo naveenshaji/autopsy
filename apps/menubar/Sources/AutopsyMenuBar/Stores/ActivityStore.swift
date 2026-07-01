@@ -224,6 +224,43 @@ final class ActivityStore: ObservableObject {
         currentSharedServer?.graphSlug ?? ""
     }
 
+    var sharedServerUserText: String {
+        guard let me = currentSharedServer?.me else { return "" }
+        if let email = me.email, !email.isEmpty {
+            return email
+        }
+        return me.id ?? ""
+    }
+
+    var sharedServerUsersText: String {
+        guard let team = currentSharedServer?.team else { return "" }
+        if let count = team.usersCount {
+            return "\(count)"
+        }
+        if let error = team.usersError, !error.isEmpty {
+            return error.clippedForMenuBar(limit: 28)
+        }
+        return ""
+    }
+
+    var sharedServerGrantsText: String {
+        guard let team = currentSharedServer?.team else { return "" }
+        if let count = team.grantsCount {
+            if let roleCounts = team.roleCounts, !roleCounts.isEmpty {
+                let roles = roleCounts
+                    .sorted { $0.key < $1.key }
+                    .map { "\($0.key): \($0.value)" }
+                    .joined(separator: ", ")
+                return "\(count) (\(roles))"
+            }
+            return "\(count)"
+        }
+        if let error = team.grantsError, !error.isEmpty {
+            return error.clippedForMenuBar(limit: 28)
+        }
+        return ""
+    }
+
     var shouldShowOnboardingPrompt: Bool {
         (hasEmptyMemoryState || instructionStatus != nil) && !hasPriorMemory && !hasInstalledInstructions
     }
@@ -504,6 +541,12 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    func refreshSharedServerTeam() {
+        Task {
+            await loadSharedServerTeamStatus()
+        }
+    }
+
     func copyInstructions() {
         Task {
             await copyInstructionsToPasteboard()
@@ -662,6 +705,25 @@ final class ActivityStore: ObservableObject {
             let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: checkRemote ? 20 : 10).run([
                 "shared-server",
                 command,
+            ])
+            sharedServerStatus = try JSONDecoder().decode(SharedServerPayload.self, from: Data(output.utf8))
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
+    }
+
+    private func loadSharedServerTeamStatus() async {
+        guard !isCheckingSharedServer else { return }
+        isCheckingSharedServer = true
+        sharedServerError = nil
+        defer {
+            isCheckingSharedServer = false
+        }
+
+        do {
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 25).run([
+                "shared-server",
+                "team-status",
             ])
             sharedServerStatus = try JSONDecoder().decode(SharedServerPayload.self, from: Data(output.utf8))
         } catch {
