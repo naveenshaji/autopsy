@@ -4420,6 +4420,11 @@ def shared_server_invitation_path(graph_slug: str) -> str:
     return shared_server_path(graph_slug, "/invitations")
 
 
+def shared_server_token_revoke_path(graph_slug: str, token_id: str) -> str:
+    quoted_token_id = urllib.parse.quote(token_id, safe="")
+    return shared_server_path(graph_slug, f"/tokens/{quoted_token_id}/revoke")
+
+
 def summarize_shared_server_grants(items: list[dict[str, Any]]) -> dict[str, Any]:
     role_counts: dict[str, int] = {}
     repos: set[str] = set()
@@ -4654,12 +4659,25 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         token_id = str(getattr(args, "stable_key", "") or "").strip()
         if not token_id:
             fail("shared-server revoke-token requires a token id", 2)
-        payload = shared_server_request_or_fail(
-            config,
-            f"/v1/tokens/{urllib.parse.quote(token_id, safe='')}/revoke",
-            method="POST",
-            timeout=10,
-        )
+        try:
+            payload = shared_server_request(
+                config,
+                f"/v1/tokens/{urllib.parse.quote(token_id, safe='')}/revoke",
+                method="POST",
+                timeout=10,
+            )
+        except urllib.error.HTTPError as exc:
+            if exc.code != 403:
+                fail(f"shared server request failed: {shared_server_http_error_message(exc)}")
+            payload = shared_server_request_or_fail(
+                config,
+                shared_server_token_revoke_path(graph_slug, token_id),
+                method="POST",
+                payload={"repo": repo},
+                timeout=10,
+            )
+        except Exception as exc:
+            fail(f"shared server request failed: {exc}")
         print(json.dumps(payload, indent=2))
         return
     if action == "revoke-grant":

@@ -76,6 +76,7 @@ autopsy shared-server users
 autopsy shared-server grants --repo-scope /path/to/repo
 autopsy shared-server audit --repo-scope /path/to/repo
 autopsy shared-server invite --email dev@example.com --role writer --repo-scope /path/to/repo
+autopsy shared-server revoke-token tok_123 --repo-scope /path/to/repo
 autopsy benchmark --sample-size 5 --include-sync
 autopsy menubar
 ```
@@ -104,14 +105,17 @@ one-time token in one audited operation. Global admins can also use
 `create-token --user-id <id> --label <label>`, `grants --repo-scope <repo>`,
 `grant --user-id <id> --role reader|writer|owner --repo-scope <repo>`,
 `revoke-token <token-id>`, and `revoke-grant --user-id <id> --repo-scope <repo>`
-to manage shared access. `shared-server audit --repo-scope <repo>` lists scoped
-server audit events for graph owners or admins. `--repo` resolves a local repo
-path; `--repo-scope` passes an exact shared-server scope such as a repo URL,
-stable repo id, or `*`. `shared-server publish <stable-key> --repo <repo>`
-copies a local memory item into the configured shared graph, `shared-server list
---repo <repo>` lists repo-scoped shared memories, and `shared-server link
-<personal-key> <shared-key> --repo <repo> --relation <name>` creates a private
-personal-to-shared relation without uploading the personal graph.
+to manage shared access. `revoke-token` first uses the global-admin endpoint and
+falls back to graph-scoped revocation, so graph owners can clean up invite-issued
+tokens for repos they own without global token access. `shared-server audit
+--repo-scope <repo>` lists scoped server audit events for graph owners or admins.
+`--repo` resolves a local repo path; `--repo-scope` passes an exact shared-server
+scope such as a repo URL, stable repo id, or `*`. `shared-server publish
+<stable-key> --repo <repo>` copies a local memory item into the configured shared
+graph, `shared-server list --repo <repo>` lists repo-scoped shared memories, and
+`shared-server link <personal-key> <shared-key> --repo <repo> --relation <name>`
+creates a private personal-to-shared relation without uploading the personal
+graph.
 
 `menubar` stages the native macOS menu bar app as a small `.app` bundle and, in a normal GUI session, installs and kickstarts the supervised LaunchAgent. Current bundles launch without rebuilding; use `autopsy menubar --build` to build and stage without launching, `autopsy menubar --rebuild` to force a rebuild before launch, `autopsy menubar --install-launch-agent` to explicitly install the supervised login item, and `autopsy menubar --print-path` to inspect resolved app paths. Installed LaunchAgents run the app executable directly with `KeepAlive`, and the app silently checks the resident worker so local memory routes stay warm.
 

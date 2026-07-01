@@ -582,6 +582,12 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    func revokeSharedServerToken(tokenID: String, repoScope: String) {
+        Task {
+            await revokeSharedToken(tokenID: tokenID, repoScope: repoScope)
+        }
+    }
+
     func copySharedServerAudit(repoScope: String) {
         Task {
             await copySharedAudit(repoScope: repoScope)
@@ -882,13 +888,21 @@ final class ActivityStore: ObservableObject {
                 "--label",
                 trimmedLabel.isEmpty ? "menubar-invite" : trimmedLabel,
             ])
-            guard let token = jsonObject(from: output)?["token"] as? String, !token.isEmpty else {
+            let invitePayload = jsonObject(from: output)
+            guard let token = invitePayload?["token"] as? String, !token.isEmpty else {
                 throw CLIError.failed("shared server did not return an invite token")
             }
+            let tokenRecord = invitePayload?["token_record"] as? [String: Any]
+            let tokenID = tokenRecord?["id"] as? String
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(token, forType: .string)
-            lastActionMessage = "Invite token copied"
-            clearLastActionMessageAfterDelay(expected: "Invite token copied")
+            if let tokenID, !tokenID.isEmpty {
+                lastActionMessage = "Invite token copied; ID \(tokenID)"
+                clearLastActionMessageAfterDelay(expected: "Invite token copied; ID \(tokenID)")
+            } else {
+                lastActionMessage = "Invite token copied"
+                clearLastActionMessageAfterDelay(expected: "Invite token copied")
+            }
             await loadSharedServerTeamStatus()
         } catch {
             sharedServerError = error.localizedDescription
@@ -948,6 +962,24 @@ final class ActivityStore: ObservableObject {
         } catch {
             sharedServerError = error.localizedDescription
         }
+    }
+
+    private func revokeSharedToken(tokenID: String, repoScope: String) async {
+        let trimmedTokenID = tokenID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTokenID.isEmpty else {
+            sharedServerError = "Token ID required"
+            return
+        }
+        await runSharedAccessCommand(
+            [
+                "shared-server",
+                "revoke-token",
+                trimmedTokenID,
+                "--repo-scope",
+                normalizedRepoScope(repoScope),
+            ],
+            successMessage: "Shared token revoked"
+        )
     }
 
     private func copySharedAudit(repoScope: String) async {

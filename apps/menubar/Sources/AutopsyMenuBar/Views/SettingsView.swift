@@ -124,6 +124,8 @@ private struct SharedSettingsTab: View {
     @State private var grantRole = "reader"
     @State private var tokenUserID = ""
     @State private var tokenLabel = "menubar"
+    @State private var revokeTokenID = ""
+    @State private var revokeTokenRepoScope = ""
     @State private var auditRepoScope = ""
 
     private let roles = ["reader", "writer", "owner"]
@@ -225,6 +227,17 @@ private struct SharedSettingsTab: View {
                     store.issueSharedServerToken(userID: tokenUserID, label: tokenLabel)
                 }
                 .disabled(sharedActionDisabled || tokenUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                Divider()
+
+                TextField("Revoke Token ID", text: $revokeTokenID)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Token Repo Scope", text: $revokeTokenRepoScope)
+                    .textFieldStyle(.roundedBorder)
+                Button("Revoke Token") {
+                    store.revokeSharedServerToken(tokenID: revokeTokenID, repoScope: revokeTokenRepoScope)
+                }
+                .disabled(sharedActionDisabled || revokeTokenID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
                 Divider()
 

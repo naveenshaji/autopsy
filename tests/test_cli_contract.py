@@ -7,6 +7,7 @@ import sys
 import tempfile
 import types
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -197,6 +198,39 @@ class AutopsyCLIContractTests(unittest.TestCase):
 
     def test_shared_server_invitation_path_is_graph_scoped(self):
         self.assertEqual(cli.shared_server_invitation_path("autopsy"), "/v1/shared-graphs/autopsy/invitations")
+
+    def test_shared_server_token_revoke_path_is_graph_scoped(self):
+        self.assertEqual(cli.shared_server_token_revoke_path("autopsy", "tok/1"), "/v1/shared-graphs/autopsy/tokens/tok%2F1/revoke")
+
+    def test_shared_server_revoke_token_falls_back_to_graph_scope_on_403(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["shared-server", "revoke-token", "tok/1", "--repo-scope", "repo-a"])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        calls: list[tuple[str, str, dict[str, str] | None]] = []
+
+        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
+            calls.append((path, method, payload))
+            if path == "/v1/tokens/tok%2F1/revoke":
+                raise urllib.error.HTTPError(path, 403, "Forbidden", {}, io.BytesIO(b'{"detail":"admin access required"}'))
+            return {"id": "tok/1", "revoked": True}
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        payload = json.loads(stream.getvalue())
+        self.assertEqual(payload["id"], "tok/1")
+        self.assertEqual(
+            calls,
+            [
+                ("/v1/tokens/tok%2F1/revoke", "POST", None),
+                ("/v1/shared-graphs/autopsy/tokens/tok%2F1/revoke", "POST", {"repo": "repo-a"}),
+            ],
+        )
 
     def test_shared_server_config_is_written_private_and_redacted(self):
         parser = cli.build_parser()
