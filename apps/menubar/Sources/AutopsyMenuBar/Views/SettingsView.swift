@@ -125,6 +125,12 @@ private struct SharedSettingsTab: View {
     @State private var sharedMemoryStableKey = ""
     @State private var sharedMemoryRepoScope = ""
     @State private var sharedMemoryReason = ""
+    @State private var personalLinkKey = ""
+    @State private var personalSharedKey = ""
+    @State private var personalLinkRepoScope = ""
+    @State private var personalRelation = "references"
+    @State private var personalFact = ""
+    @State private var personalRelationID = ""
     @State private var tokenUserID = ""
     @State private var tokenLabel = "menubar"
     @State private var revokeTokenID = ""
@@ -132,6 +138,7 @@ private struct SharedSettingsTab: View {
     @State private var auditRepoScope = ""
 
     private let roles = ["reader", "writer", "owner"]
+    private let relationOptions = ["references", "depends_on", "informed_by", "implements", "answers", "refines"]
 
     var body: some View {
         Form {
@@ -236,6 +243,60 @@ private struct SharedSettingsTab: View {
                 }
             }
 
+            Section("Personal Links") {
+                TextField("Personal Stable Key", text: $personalLinkKey)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Shared Stable Key", text: $personalSharedKey)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Repo Scope", text: $personalLinkRepoScope)
+                    .textFieldStyle(.roundedBorder)
+                Picker("Relation", selection: $personalRelation) {
+                    ForEach(relationOptions, id: \.self) { relation in
+                        Text(relation).tag(relation)
+                    }
+                }
+                .pickerStyle(.menu)
+                TextField("Fact", text: $personalFact)
+                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    Button("Link") {
+                        store.linkSharedServerPersonalMemory(
+                            personalKey: personalLinkKey,
+                            sharedKey: personalSharedKey,
+                            repoScope: personalLinkRepoScope,
+                            relation: personalRelation,
+                            fact: personalFact
+                        )
+                    }
+                    .disabled(
+                        sharedActionDisabled
+                            || personalLinkKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            || personalSharedKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    )
+
+                    Button("Copy Links") {
+                        store.copySharedServerPersonalLinks(
+                            repoScope: personalLinkRepoScope,
+                            personalKey: personalLinkKey,
+                            sharedKey: personalSharedKey
+                        )
+                    }
+                    .disabled(sharedActionDisabled)
+                }
+
+                Divider()
+
+                TextField("Relation ID", text: $personalRelationID)
+                    .textFieldStyle(.roundedBorder)
+                Button("Unlink") {
+                    store.unlinkSharedServerPersonalRelation(
+                        relationID: personalRelationID,
+                        repoScope: personalLinkRepoScope
+                    )
+                }
+                .disabled(sharedActionDisabled || personalRelationID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+
             Section("Advanced Repo Access") {
                 TextField("User ID", text: $grantUserID)
                     .textFieldStyle(.roundedBorder)
@@ -318,6 +379,12 @@ private struct SharedSettingsTab: View {
             }
             if auditRepoScope.isEmpty {
                 auditRepoScope = store.sharedServerDefaultRepoScope
+            }
+            if sharedMemoryRepoScope.isEmpty {
+                sharedMemoryRepoScope = store.sharedServerDefaultRepoScope
+            }
+            if personalLinkRepoScope.isEmpty {
+                personalLinkRepoScope = store.sharedServerDefaultRepoScope
             }
             store.refreshSharedServerTeam()
         }

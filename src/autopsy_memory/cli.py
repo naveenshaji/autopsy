@@ -4441,6 +4441,29 @@ def shared_server_memory_lifecycle_path(graph_slug: str, action: str) -> str:
     return shared_server_path(graph_slug, f"/memories/{action}")
 
 
+def shared_server_personal_relations_path(
+    graph_slug: str,
+    repo: str,
+    *,
+    limit: int,
+    personal_key: str = "",
+    shared_key: str = "",
+) -> str:
+    query: dict[str, Any] = {
+        "repo": repo,
+        "limit": max(1, min(int(limit), 500)),
+    }
+    if personal_key:
+        query["personal_key"] = personal_key
+    if shared_key:
+        query["shared_key"] = shared_key
+    return shared_server_path(graph_slug, f"/personal-relations?{urllib.parse.urlencode(query)}")
+
+
+def shared_server_personal_relation_revoke_path(graph_slug: str) -> str:
+    return shared_server_path(graph_slug, "/personal-relations/revoke")
+
+
 def summarize_shared_server_grants(items: list[dict[str, Any]]) -> dict[str, Any]:
     role_counts: dict[str, int] = {}
     repos: set[str] = set()
@@ -4722,6 +4745,33 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         )
         print(json.dumps(payload, indent=2))
         return
+    if action == "personal-links":
+        payload = shared_server_request_or_fail(
+            config,
+            shared_server_personal_relations_path(
+                graph_slug,
+                repo,
+                limit=int(getattr(args, "limit", 50) or 50),
+                personal_key=str(getattr(args, "personal_key", "") or getattr(args, "stable_key", "") or "").strip(),
+                shared_key=str(getattr(args, "shared_key", "") or getattr(args, "target_key", "") or "").strip(),
+            ),
+            timeout=10,
+        )
+        print(json.dumps(payload, indent=2))
+        return
+    if action == "unlink":
+        relation_id = str(getattr(args, "stable_key", "") or "").strip()
+        if not relation_id:
+            fail("shared-server unlink requires a personal relation id", 2)
+        payload = shared_server_request_or_fail(
+            config,
+            shared_server_personal_relation_revoke_path(graph_slug),
+            method="POST",
+            payload={"id": relation_id, "repo": repo},
+            timeout=10,
+        )
+        print(json.dumps(payload, indent=2))
+        return
     if action in {"archive", "restore"}:
         stable_key = str(getattr(args, "stable_key", "") or "").strip()
         if not stable_key:
@@ -4760,8 +4810,8 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         }, indent=2))
         return
     if action == "link":
-        personal_key = str(getattr(args, "stable_key", "") or "").strip()
-        shared_key = str(getattr(args, "target_key", "") or "").strip()
+        personal_key = str(getattr(args, "stable_key", "") or getattr(args, "personal_key", "") or "").strip()
+        shared_key = str(getattr(args, "target_key", "") or getattr(args, "shared_key", "") or "").strip()
         relation = str(getattr(args, "relation", "") or "").strip()
         if not personal_key or not shared_key or not relation:
             fail("shared-server link requires personal_key, shared_key, and --relation", 2)

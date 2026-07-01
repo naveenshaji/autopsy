@@ -76,5 +76,8 @@ Run checks:
 - Codex, Claude Code, Gemini CLI, OpenCode, Cursor, GitHub Copilot, and Windsurf instruction status with install actions.
 - First-run setup prompt when no memory or agent instructions exist.
 - Homebrew update check/update action.
+- Shared memory Settings controls for server health, graph-owner invites,
+  repo grants, token cleanup, audit copy, shared memory archive/restore, and
+  private personal-to-shared link create/list/unlink.
 - Attention items when available.
 - Quit action.
