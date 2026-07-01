@@ -22,6 +22,7 @@ final class ActivityStore: ObservableObject {
     @Published var sharedServerStatus: SharedServerPayload?
     @Published var sharedServerError: String?
     @Published var isCheckingSharedServer = false
+    @Published var isManagingSharedAccess = false
     @Published var softwareUpdateStatus: SoftwareUpdateStatus?
     @Published var softwareUpdateError: String?
     @Published var isCheckingForSoftwareUpdates = false
@@ -222,6 +223,10 @@ final class ActivityStore: ObservableObject {
 
     var sharedServerGraphSlug: String {
         currentSharedServer?.graphSlug ?? ""
+    }
+
+    var sharedServerDefaultRepoScope: String {
+        workspacePath.isEmpty ? "*" : workspacePath
     }
 
     var sharedServerUserText: String {
@@ -547,6 +552,36 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    func createSharedServerUser(email: String, name: String) {
+        Task {
+            await createSharedUser(email: email, name: name)
+        }
+    }
+
+    func grantSharedServerAccess(userID: String, repoScope: String, role: String) {
+        Task {
+            await grantSharedAccess(userID: userID, repoScope: repoScope, role: role)
+        }
+    }
+
+    func revokeSharedServerAccess(userID: String, repoScope: String) {
+        Task {
+            await revokeSharedAccess(userID: userID, repoScope: repoScope)
+        }
+    }
+
+    func issueSharedServerToken(userID: String, label: String) {
+        Task {
+            await issueSharedToken(userID: userID, label: label)
+        }
+    }
+
+    func copySharedServerAudit(repoScope: String) {
+        Task {
+            await copySharedAudit(repoScope: repoScope)
+        }
+    }
+
     func copyInstructions() {
         Task {
             await copyInstructionsToPasteboard()
@@ -753,6 +788,179 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    private func createSharedUser(email: String, name: String) async {
+        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedEmail.isEmpty else {
+            sharedServerError = "Email required"
+            return
+        }
+        guard !isManagingSharedAccess else { return }
+        isManagingSharedAccess = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingSharedAccess = false
+        }
+
+        do {
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run([
+                "shared-server",
+                "create-user",
+                "--email",
+                trimmedEmail,
+                "--name",
+                name.trimmingCharacters(in: .whitespacesAndNewlines),
+            ])
+            if let userID = jsonObject(from: output)?["id"] as? String, !userID.isEmpty {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(userID, forType: .string)
+                lastActionMessage = "Shared user ID copied"
+                clearLastActionMessageAfterDelay(expected: "Shared user ID copied")
+            } else {
+                lastActionMessage = "Shared user created"
+            }
+            await loadSharedServerTeamStatus()
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
+    }
+
+    private func grantSharedAccess(userID: String, repoScope: String, role: String) async {
+        let trimmedUserID = userID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedUserID.isEmpty else {
+            sharedServerError = "User ID required"
+            return
+        }
+        await runSharedAccessCommand(
+            [
+                "shared-server",
+                "grant",
+                "--user-id",
+                trimmedUserID,
+                "--role",
+                role,
+                "--repo-scope",
+                normalizedRepoScope(repoScope),
+            ],
+            successMessage: "Shared grant updated"
+        )
+    }
+
+    private func revokeSharedAccess(userID: String, repoScope: String) async {
+        let trimmedUserID = userID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedUserID.isEmpty else {
+            sharedServerError = "User ID required"
+            return
+        }
+        await runSharedAccessCommand(
+            [
+                "shared-server",
+                "revoke-grant",
+                "--user-id",
+                trimmedUserID,
+                "--repo-scope",
+                normalizedRepoScope(repoScope),
+            ],
+            successMessage: "Shared grant revoked"
+        )
+    }
+
+    private func issueSharedToken(userID: String, label: String) async {
+        let trimmedUserID = userID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedUserID.isEmpty else {
+            sharedServerError = "User ID required"
+            return
+        }
+        guard !isManagingSharedAccess else { return }
+        isManagingSharedAccess = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingSharedAccess = false
+        }
+
+        do {
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run([
+                "shared-server",
+                "create-token",
+                "--user-id",
+                trimmedUserID,
+                "--label",
+                label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "menubar" : label.trimmingCharacters(in: .whitespacesAndNewlines),
+            ])
+            guard let token = jsonObject(from: output)?["token"] as? String, !token.isEmpty else {
+                throw CLIError.failed("shared server did not return a token")
+            }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(token, forType: .string)
+            lastActionMessage = "Shared token copied"
+            clearLastActionMessageAfterDelay(expected: "Shared token copied")
+            await loadSharedServerTeamStatus()
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
+    }
+
+    private func copySharedAudit(repoScope: String) async {
+        guard !isManagingSharedAccess else { return }
+        isManagingSharedAccess = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingSharedAccess = false
+        }
+
+        do {
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run([
+                "shared-server",
+                "audit",
+                "--repo-scope",
+                normalizedRepoScope(repoScope),
+                "--limit",
+                "50",
+            ])
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(output.trimmingCharacters(in: .whitespacesAndNewlines), forType: .string)
+            lastActionMessage = "Shared audit copied"
+            clearLastActionMessageAfterDelay(expected: "Shared audit copied")
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
+    }
+
+    private func runSharedAccessCommand(_ arguments: [String], successMessage: String) async {
+        guard !isManagingSharedAccess else { return }
+        isManagingSharedAccess = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingSharedAccess = false
+        }
+
+        do {
+            _ = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run(arguments)
+            lastActionMessage = successMessage
+            await loadSharedServerTeamStatus()
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
+    }
+
+    private func normalizedRepoScope(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? sharedServerDefaultRepoScope : trimmed
+    }
+
+    private func jsonObject(from output: String) -> [String: Any]? {
+        guard let data = output.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let dictionary = object as? [String: Any]
+        else {
+            return nil
+        }
+        return dictionary
+    }
+
     private func updateLaunchAgent(enabled: Bool) async {
         isManagingLaunchAgent = true
         launchAgentError = nil
@@ -842,17 +1050,17 @@ final class ActivityStore: ObservableObject {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
             lastActionMessage = "Instructions copied"
-            clearCopiedInstructionsMessageAfterDelay()
+            clearLastActionMessageAfterDelay(expected: "Instructions copied")
         } catch {
             instructionStatusError = error.localizedDescription
         }
     }
 
-    private func clearCopiedInstructionsMessageAfterDelay() {
+    private func clearLastActionMessageAfterDelay(expected: String) {
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             await MainActor.run {
-                guard self?.lastActionMessage == "Instructions copied" else { return }
+                guard self?.lastActionMessage == expected else { return }
                 self?.lastActionMessage = nil
             }
         }

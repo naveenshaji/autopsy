@@ -14,8 +14,13 @@ struct SettingsView: View {
                 .tabItem {
                     Label("Memory", systemImage: "brain.head.profile")
                 }
+
+            SharedSettingsTab(store: store)
+                .tabItem {
+                    Label("Shared", systemImage: "person.2")
+                }
         }
-        .frame(width: 560, height: 360)
+        .frame(width: 640, height: 560)
     }
 }
 
@@ -78,41 +83,6 @@ private struct MemorySettingsTab: View {
             }
 
             Section {
-                LabeledContent("Shared Memory", value: store.sharedServerStatusText)
-                if !store.sharedServerEndpoint.isEmpty {
-                    LabeledContent("Endpoint", value: store.sharedServerEndpoint)
-                }
-                if !store.sharedServerGraphSlug.isEmpty {
-                    LabeledContent("Graph", value: store.sharedServerGraphSlug)
-                }
-                if !store.sharedServerUserText.isEmpty {
-                    LabeledContent("User", value: store.sharedServerUserText)
-                }
-                if !store.sharedServerUsersText.isEmpty {
-                    LabeledContent("Team Users", value: store.sharedServerUsersText)
-                }
-                if !store.sharedServerGrantsText.isEmpty {
-                    LabeledContent("Repo Grants", value: store.sharedServerGrantsText)
-                }
-                HStack {
-                    Button("Use Owner Config") {
-                        store.configureSharedServerFromOwnerConfig()
-                    }
-                    .disabled(store.isCheckingSharedServer)
-
-                    Button("Check Server") {
-                        store.checkSharedServer()
-                    }
-                    .disabled(store.isCheckingSharedServer)
-
-                    Button("Refresh Team") {
-                        store.refreshSharedServerTeam()
-                    }
-                    .disabled(store.isCheckingSharedServer)
-                }
-            }
-
-            Section {
                 HStack {
                     Button("Install Agent Instructions") {
                         store.installAllInstructions()
@@ -139,5 +109,144 @@ private struct MemorySettingsTab: View {
         .onAppear {
             store.refresh(includeLaunchAgent: true)
         }
+    }
+}
+
+private struct SharedSettingsTab: View {
+    @ObservedObject var store: ActivityStore
+    @State private var newUserEmail = ""
+    @State private var newUserName = ""
+    @State private var grantUserID = ""
+    @State private var grantRepoScope = ""
+    @State private var grantRole = "reader"
+    @State private var tokenUserID = ""
+    @State private var tokenLabel = "menubar"
+    @State private var auditRepoScope = ""
+
+    private let roles = ["reader", "writer", "owner"]
+
+    var body: some View {
+        Form {
+            Section {
+                LabeledContent("Shared Memory", value: store.sharedServerStatusText)
+                if !store.sharedServerEndpoint.isEmpty {
+                    LabeledContent("Endpoint", value: store.sharedServerEndpoint)
+                }
+                if !store.sharedServerGraphSlug.isEmpty {
+                    LabeledContent("Graph", value: store.sharedServerGraphSlug)
+                }
+                if !store.sharedServerUserText.isEmpty {
+                    LabeledContent("User", value: store.sharedServerUserText)
+                }
+                if !store.sharedServerUsersText.isEmpty {
+                    LabeledContent("Team Users", value: store.sharedServerUsersText)
+                }
+                if !store.sharedServerGrantsText.isEmpty {
+                    LabeledContent("Repo Grants", value: store.sharedServerGrantsText)
+                }
+                HStack {
+                    Button("Use Owner Config") {
+                        store.configureSharedServerFromOwnerConfig()
+                    }
+                    .disabled(sharedActionDisabled)
+
+                    Button("Check Server") {
+                        store.checkSharedServer()
+                    }
+                    .disabled(sharedActionDisabled)
+
+                    Button("Refresh Team") {
+                        store.refreshSharedServerTeam()
+                    }
+                    .disabled(sharedActionDisabled)
+                }
+            }
+
+            Section("Users") {
+                TextField("Email", text: $newUserEmail)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Name", text: $newUserName)
+                    .textFieldStyle(.roundedBorder)
+                Button("Create User") {
+                    store.createSharedServerUser(email: newUserEmail, name: newUserName)
+                }
+                .disabled(sharedActionDisabled || newUserEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+
+            Section("Repo Access") {
+                TextField("User ID", text: $grantUserID)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Repo Scope", text: $grantRepoScope)
+                    .textFieldStyle(.roundedBorder)
+                Picker("Role", selection: $grantRole) {
+                    ForEach(roles, id: \.self) { role in
+                        Text(role.capitalized).tag(role)
+                    }
+                }
+                .pickerStyle(.segmented)
+                HStack {
+                    Button("Grant") {
+                        store.grantSharedServerAccess(userID: grantUserID, repoScope: grantRepoScope, role: grantRole)
+                    }
+                    .disabled(sharedActionDisabled || grantUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                    Button("Revoke") {
+                        store.revokeSharedServerAccess(userID: grantUserID, repoScope: grantRepoScope)
+                    }
+                    .disabled(sharedActionDisabled || grantUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+
+            Section("Tokens And Audit") {
+                TextField("Token User ID", text: $tokenUserID)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Token Label", text: $tokenLabel)
+                    .textFieldStyle(.roundedBorder)
+                Button("Issue Token") {
+                    store.issueSharedServerToken(userID: tokenUserID, label: tokenLabel)
+                }
+                .disabled(sharedActionDisabled || tokenUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                Divider()
+
+                TextField("Audit Repo Scope", text: $auditRepoScope)
+                    .textFieldStyle(.roundedBorder)
+                Button("Copy Audit") {
+                    store.copySharedServerAudit(repoScope: auditRepoScope)
+                }
+                .disabled(sharedActionDisabled)
+            }
+
+            if let message = store.lastActionMessage, !message.isEmpty {
+                Section {
+                    Text(message)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if let message = store.sharedServerError, !message.isEmpty {
+                Section {
+                    Text(message)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .padding(24)
+        .onAppear {
+            if grantRepoScope.isEmpty {
+                grantRepoScope = store.sharedServerDefaultRepoScope
+            }
+            if auditRepoScope.isEmpty {
+                auditRepoScope = store.sharedServerDefaultRepoScope
+            }
+            store.refreshSharedServerTeam()
+        }
+    }
+
+    private var sharedActionDisabled: Bool {
+        store.isCheckingSharedServer || store.isManagingSharedAccess
     }
 }
