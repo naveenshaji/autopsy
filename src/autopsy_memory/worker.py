@@ -34,7 +34,7 @@ _WORKER_DEFAULT_IDLE_TIMEOUT_SECONDS = 3600.0
 _WORKER_DEFAULT_OWNERSHIP_CHECK_SECONDS = 5.0
 DIRECT_RETRIEVAL_REASONS = {'lexical', 'exact', 'token_overlap', 'entity_overlap', 'graph_relation'}
 
-APP_SUPPORT_DIR_DEFAULT = Path.home() / 'Library' / 'Application Support' / 'Autopsy'
+APP_SUPPORT_DIR_DEFAULT = Path(os.environ.get('AUTOPSY_APP_SUPPORT_DIR') or Path.home() / 'Library' / 'Application Support' / 'Autopsy')
 FALKORDB_LITE_PATH_DEFAULT = APP_SUPPORT_DIR_DEFAULT / 'FalkorDB' / 'autopsy-memory.db'
 GLOBAL_MEMORY_SETTINGS_DEFAULT = APP_SUPPORT_DIR_DEFAULT / 'Config' / 'memory-settings.json'
 UNIFIED_MEMORY_ROOT_DEFAULT = APP_SUPPORT_DIR_DEFAULT / 'MemoryRoot'

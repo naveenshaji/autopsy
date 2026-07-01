@@ -40,7 +40,7 @@ Use this checklist before tagging or publishing Autopsy Memory.
 
 - Version in `pyproject.toml` matches `src/autopsy_memory/__init__.py`.
 - README install commands work from a clean checkout.
-- CLI entrypoints exist: `autopsy`, `autopsy-memory-worker`, and `autopsy-memory-mcp`.
+- CLI entrypoints exist: `autopsy`, `autopsy-dev`, `autopsy-memory-worker`, and `autopsy-memory-mcp`.
 - `LICENSE` contains the Apache License, Version 2.0.
 - Package metadata and Homebrew formula license fields use `Apache-2.0`.
 - If publishing through the owned Homebrew tap, copy `Formula/autopsy-memory.rb` to `naveenshaji/homebrew-autopsy`.

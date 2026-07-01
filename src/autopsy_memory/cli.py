@@ -2304,7 +2304,11 @@ def falkor_start_failure_payload(args: argparse.Namespace, error: Exception) -> 
     if is_rollback:
         rollback_payload = rollback_state if isinstance(rollback_state, dict) else {}
         recovery_reference_at = str(rollback_payload.get("sidecar_updated_at") or "")
-        backup = latest_backup_status(recovery_reference_at=recovery_reference_at)
+        backup = latest_backup_status(
+            recovery_reference_at=recovery_reference_at,
+            recovery_reference_generation=memory_database_guard_generation(rollback_payload.get("sidecar_generation")),
+            recovery_reference_graph_name=str(rollback_payload.get("graph_name") or ""),
+        )
         payload["backup"] = backup
         payload["backup_health"] = backup_freshness_status(backup, item_count=1)
         payload["workflow"] = {
@@ -14477,6 +14481,43 @@ def benchmark_falkor_native(graph, *, include_sync: bool, sync_payload: dict[str
     return benchmark_attribute("falkor_native", checks)
 
 
+def benchmark_write_recovery_contract() -> dict[str, Any]:
+    prewrite_fresh = auto_backup_write_recovery(
+        {
+            "enabled": True,
+            "status": "skipped",
+            "reason": "latest_backup_fresh",
+            "latest": "/tmp/prewrite.json",
+            "backup_health": {"status": "fresh", "ok": True},
+        }
+    )
+    postwrite_created = auto_backup_write_recovery(
+        {
+            "enabled": True,
+            "status": "created",
+            "reason": "benchmark",
+            "post_write_recovery_point": True,
+            "written": "/tmp/postwrite.json",
+            "validation": {"valid": True},
+        }
+    )
+    checks = [
+        {
+            "name": "preexisting_fresh_backup_not_write_recovery",
+            "passed": not bool(prewrite_fresh.get("backup_complete"))
+            and str(prewrite_fresh.get("backup_next_step") or "") == "run_autopsy_backup",
+            "recovery": prewrite_fresh,
+        },
+        {
+            "name": "validated_post_write_backup_is_recovery",
+            "passed": bool(postwrite_created.get("backup_complete"))
+            and str(postwrite_created.get("backup_next_step") or "") == "done",
+            "recovery": postwrite_created,
+        },
+    ]
+    return benchmark_attribute("write_recovery_contract", checks)
+
+
 def build_benchmark_payload(
     graph,
     *,
@@ -14554,6 +14595,7 @@ def build_benchmark_payload(
     ]
     if not skip_write_probe:
         attributes.append(benchmark_writes_and_relations(graph, tool=tool, workspace=workspace))
+    attributes.append(benchmark_write_recovery_contract())
     attributes.append(benchmark_falkor_native(graph, include_sync=include_sync, sync_payload=sync_payload))
     overall = round(sum(float(attribute.get("score") or 0.0) for attribute in attributes) / max(len(attributes), 1), 1)
     quality_gate = benchmark_quality_gate(attributes, overall_score=overall)
@@ -16435,6 +16477,40 @@ def cmd_pin_item(args: argparse.Namespace) -> None:
     print_write_payload(payload)
 
 
+def export_memory_guard_state(graph) -> dict[str, Any] | None:
+    lite_path = getattr(graph, "_autopsy_guard_lite_path", None)
+    graph_name = str(getattr(graph, "_autopsy_guard_graph_name", None) or getattr(graph, "name", "") or "").strip()
+    if not lite_path or not graph_name or not memory_database_guard_enabled():
+        return None
+    try:
+        state = memory_database_guard_state(
+            memory_guard_raw_graph(graph),
+            lite_path,
+            graph_name=graph_name,
+        )
+    except Exception as exc:
+        return {
+            "policy": MEMORY_DATABASE_GUARD_POLICY,
+            "available": False,
+            "graph_name": graph_name,
+            "lite_path": str(Path(lite_path).expanduser()),
+            "error": str(exc),
+        }
+    return {
+        "policy": MEMORY_DATABASE_GUARD_POLICY,
+        "available": True,
+        "ok": bool(state.get("ok")),
+        "lite_path": str(state.get("lite_path") or Path(lite_path).expanduser()),
+        "graph_name": str(state.get("graph_name") or graph_name),
+        "graph_generation": memory_database_guard_generation(state.get("graph_generation")),
+        "sidecar_generation": memory_database_guard_generation(state.get("sidecar_generation")),
+        "sidecar_generation_source": str(state.get("sidecar_generation_source") or ""),
+        "sidecar_database_generation": memory_database_guard_generation(state.get("sidecar_database_generation")),
+        "sidecar_path": str(state.get("sidecar_path") or memory_database_guard_sidecar_path(lite_path)),
+        "sidecar_updated_at": str(state.get("sidecar_updated_at") or ""),
+    }
+
+
 def export_memory_payload(
     graph,
     *,
@@ -16554,7 +16630,7 @@ def export_memory_payload(
             }
             for row in structural_rows
         ]
-    return {
+    payload = {
         "schema_version": 1,
         "exported_at": utc_now_iso(),
         "autopsy_version": package_version(),
@@ -16570,6 +16646,10 @@ def export_memory_payload(
             "structural_edges": len(structural_edges),
         },
     }
+    guard_state = export_memory_guard_state(graph)
+    if guard_state:
+        payload["guard"] = guard_state
+    return payload
 
 
 def write_payload(payload: dict[str, Any], output: str | None = None) -> None:
@@ -16640,14 +16720,6 @@ def maybe_auto_backup_after_write(graph, workspace: dict[str, Any], *, reason: s
     latest = latest_backup_status()
     item_count = semantic_backup_item_count(graph)
     health = backup_freshness_status(latest, item_count=item_count)
-    if bool(health.get("ok")):
-        return {
-            "enabled": True,
-            "status": "skipped",
-            "reason": "latest_backup_fresh",
-            "latest": latest.get("latest"),
-            "backup_health": health,
-        }
     output = default_backup_output_path()
     try:
         payload = export_memory_payload(
@@ -16662,6 +16734,7 @@ def maybe_auto_backup_after_write(graph, workspace: dict[str, Any], *, reason: s
             "enabled": True,
             "status": "created" if valid else "invalid",
             "reason": reason,
+            "post_write_recovery_point": True,
             "written": str(output),
             "bytes": output.stat().st_size,
             "previous_latest": latest.get("latest"),
@@ -16698,9 +16771,8 @@ def auto_backup_write_recovery(auto_backup: dict[str, Any]) -> dict[str, Any]:
         next_step = "done"
         message = f"Write recovery is covered by a fresh validated backup at {auto_backup.get('written')}."
     elif status == "skipped" and reason == "latest_backup_fresh":
-        complete = True
-        next_step = "done"
-        message = "Write recovery is covered by the latest fresh validated backup."
+        next_step = "run_autopsy_backup"
+        message = "A pre-existing fresh backup does not prove this write is recoverable; run autopsy backup to create a post-write recovery point."
     elif status == "invalid":
         error = str(validation.get("error") or "restore validation failed")
         message = f"Auto-backup was written but failed restore validation: {error}."
@@ -17333,7 +17405,7 @@ def restore_input_summary_or_error(path_value: str, *, include_operational: bool
         normalized_structural_edges = normalized_restore_structural_edges(payload)
     except SystemExit as exc:
         return {**base, "schema_version": schema_version, "error": f"restore_validation_failed: {exc.code}"}
-    return {
+    summary = {
         **base,
         "valid": True,
         "schema_version": schema_version,
@@ -17348,6 +17420,33 @@ def restore_input_summary_or_error(path_value: str, *, include_operational: bool
             "input_structural_edges": len(normalized_structural_edges),
         },
         "skipped_items": skipped_items[:20],
+    }
+    guard = restore_guard_summary(payload.get("guard") if isinstance(payload.get("guard"), dict) else {})
+    if guard:
+        summary["guard"] = guard
+    return summary
+
+
+def restore_guard_summary(guard: dict[str, Any]) -> dict[str, Any]:
+    if not guard:
+        return {}
+    return {
+        key: value
+        for key, value in {
+            "policy": guard.get("policy"),
+            "available": guard.get("available"),
+            "ok": guard.get("ok"),
+            "lite_path": guard.get("lite_path"),
+            "graph_name": guard.get("graph_name"),
+            "graph_generation": memory_database_guard_generation(guard.get("graph_generation")),
+            "sidecar_generation": memory_database_guard_generation(guard.get("sidecar_generation")),
+            "sidecar_generation_source": guard.get("sidecar_generation_source"),
+            "sidecar_database_generation": memory_database_guard_generation(guard.get("sidecar_database_generation")),
+            "sidecar_path": guard.get("sidecar_path"),
+            "sidecar_updated_at": guard.get("sidecar_updated_at"),
+            "error": guard.get("error"),
+        }.items()
+        if value not in {None, ""}
     }
 
 
@@ -17639,7 +17738,68 @@ def cmd_compare_backups(args: argparse.Namespace) -> None:
     print(json.dumps(payload, indent=2))
 
 
-def backup_recovery_risk(record: dict[str, Any], *, reference_at: str) -> dict[str, Any]:
+def backup_record_guard_generation(record: dict[str, Any]) -> int:
+    guard = record.get("guard") if isinstance(record.get("guard"), dict) else {}
+    generation = memory_database_guard_generation(guard.get("graph_generation"))
+    if generation:
+        return generation
+    return memory_database_guard_generation(guard.get("sidecar_generation"))
+
+
+def backup_record_guard_graph_name(record: dict[str, Any]) -> str:
+    guard = record.get("guard") if isinstance(record.get("guard"), dict) else {}
+    return str(guard.get("graph_name") or "").strip()
+
+
+def backup_recovery_risk(
+    record: dict[str, Any],
+    *,
+    reference_at: str,
+    reference_generation: int | None = None,
+    reference_graph_name: str = "",
+) -> dict[str, Any]:
+    reference_generation_value = memory_database_guard_generation(reference_generation)
+    backup_generation = backup_record_guard_generation(record)
+    reference_graph = str(reference_graph_name or "").strip()
+    backup_graph = backup_record_guard_graph_name(record)
+    if reference_graph and backup_graph and reference_graph != backup_graph:
+        return {
+            "status": "graph_mismatch",
+            "level": "high",
+            "reference_at": reference_at,
+            "reference_graph_name": reference_graph,
+            "backup_graph_name": backup_graph,
+            "reference_generation": reference_generation_value,
+            "backup_generation": backup_generation,
+            "stale": True,
+            "message": "Backup was created for a different guarded graph than the rollback target.",
+        }
+    if reference_generation_value and backup_generation:
+        if backup_generation >= reference_generation_value:
+            return {
+                "status": "covers_guard_generation",
+                "level": "none",
+                "reference_at": reference_at,
+                "reference_graph_name": reference_graph or backup_graph,
+                "reference_generation": reference_generation_value,
+                "backup_generation": backup_generation,
+                "stale": False,
+                "coverage": "guard_generation",
+                "message": "Backup guard generation is at or newer than the rollback guard generation.",
+            }
+        gap = reference_generation_value - backup_generation
+        return {
+            "status": "generation_gap",
+            "level": "high" if gap > 25 else "medium" if gap > 5 else "low",
+            "reference_at": reference_at,
+            "reference_graph_name": reference_graph or backup_graph,
+            "reference_generation": reference_generation_value,
+            "backup_generation": backup_generation,
+            "missing_generations": gap,
+            "stale": True,
+            "coverage": "guard_generation",
+            "message": f"Backup guard generation is {gap} generation(s) behind the rollback guard generation.",
+        }
     reference_dt = parse_iso_datetime(reference_at)
     backup_at = str(record.get("exported_at") or record.get("modified_at") or "").strip()
     backup_dt = parse_iso_datetime(backup_at)
@@ -17648,6 +17808,9 @@ def backup_recovery_risk(record: dict[str, Any], *, reference_at: str) -> dict[s
             "status": "unknown",
             "reference_at": reference_at,
             "backup_at": backup_at,
+            "reference_generation": reference_generation_value,
+            "backup_generation": backup_generation or None,
+            "coverage": "timestamp_only",
             "message": "Backup staleness could not be computed from available timestamps.",
         }
     staleness_seconds = int((reference_dt - backup_dt).total_seconds())
@@ -17656,7 +17819,10 @@ def backup_recovery_risk(record: dict[str, Any], *, reference_at: str) -> dict[s
             "status": "fresh_or_newer",
             "reference_at": reference_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "backup_at": backup_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "reference_generation": reference_generation_value,
+            "backup_generation": backup_generation or None,
             "stale": False,
+            "coverage": "timestamp_only",
             "staleness_seconds": 0,
             "staleness_hours": 0.0,
             "staleness_days": 0.0,
@@ -17670,7 +17836,10 @@ def backup_recovery_risk(record: dict[str, Any], *, reference_at: str) -> dict[s
         "level": level,
         "reference_at": reference_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "backup_at": backup_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "reference_generation": reference_generation_value,
+        "backup_generation": backup_generation or None,
         "stale": True,
+        "coverage": "timestamp_only",
         "staleness_seconds": staleness_seconds,
         "staleness_hours": staleness_hours,
         "staleness_days": staleness_days,
@@ -17678,12 +17847,150 @@ def backup_recovery_risk(record: dict[str, Any], *, reference_at: str) -> dict[s
     }
 
 
-def attach_backup_recovery_risk(record: dict[str, Any], *, reference_at: str) -> dict[str, Any]:
+def attach_backup_recovery_risk(
+    record: dict[str, Any],
+    *,
+    reference_at: str,
+    reference_generation: int | None = None,
+    reference_graph_name: str = "",
+) -> dict[str, Any]:
     if not bool(record.get("valid")):
         return record
     annotated = dict(record)
-    annotated["recovery_risk"] = backup_recovery_risk(annotated, reference_at=reference_at)
+    annotated["recovery_risk"] = backup_recovery_risk(
+        annotated,
+        reference_at=reference_at,
+        reference_generation=reference_generation,
+        reference_graph_name=reference_graph_name,
+    )
     return annotated
+
+
+def backup_recovery_candidate_sort_key(candidate: dict[str, Any]) -> tuple[int, int, str]:
+    if not bool(candidate.get("valid")):
+        return (90, 0, str(candidate.get("path") or ""))
+    risk = candidate.get("recovery_risk") if isinstance(candidate.get("recovery_risk"), dict) else {}
+    status = str(risk.get("status") or "")
+    if status == "covers_guard_generation":
+        return (0, 0, str(candidate.get("path") or ""))
+    if status == "fresh_or_newer":
+        return (1, 0, str(candidate.get("path") or ""))
+    if status == "generation_gap":
+        return (2, int(risk.get("missing_generations") or 999_999), str(candidate.get("path") or ""))
+    if status == "stale":
+        return (3, int(risk.get("staleness_seconds") or 999_999_999), str(candidate.get("path") or ""))
+    if status == "unknown":
+        return (4, 0, str(candidate.get("path") or ""))
+    if status == "graph_mismatch":
+        return (5, 0, str(candidate.get("path") or ""))
+    return (6, 0, str(candidate.get("path") or ""))
+
+
+def backup_recovery_candidate_brief(candidate: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not candidate:
+        return None
+    brief = {
+        "path": candidate.get("path"),
+        "valid": bool(candidate.get("valid")),
+        "exported_at": candidate.get("exported_at"),
+        "modified_at": candidate.get("modified_at"),
+        "age_seconds": candidate.get("age_seconds"),
+        "counts": candidate.get("counts"),
+    }
+    if isinstance(candidate.get("guard"), dict):
+        brief["guard"] = candidate["guard"]
+    if isinstance(candidate.get("recovery_risk"), dict):
+        brief["recovery_risk"] = candidate["recovery_risk"]
+    if candidate.get("error"):
+        brief["error"] = candidate.get("error")
+    return brief
+
+
+def backup_recovery_candidate_message(status: str) -> str:
+    if status == "covers_guard_generation":
+        return "Best backup candidate covers the rollback guard generation."
+    if status == "fresh_or_newer":
+        return "Best backup candidate is timestamp-fresh relative to the rollback guard, but has no guard-generation proof."
+    if status == "generation_gap":
+        return "Best backup candidate has guard metadata but is behind the rollback guard generation."
+    if status == "stale":
+        return "Best backup candidate is timestamp-only stale relative to the rollback guard."
+    if status == "graph_mismatch":
+        return "Valid backups exist, but the best ranked candidate targets a different guarded graph."
+    if status == "unknown":
+        return "Valid backups exist, but recovery risk could not be computed from available metadata."
+    if status == "valid_without_recovery_risk":
+        return "Valid backups exist, but no recovery reference was supplied for ranking."
+    return "No valid backup candidate is available for automatic recovery ranking."
+
+
+def backup_recovery_candidate_next_steps(status: str) -> list[str]:
+    if status == "covers_guard_generation":
+        return [
+            "Dry-run or restore the best candidate after comparing any stale-snapshot salvage.",
+            "Prefer this candidate over timestamp-only backups unless compare-backups shows missing reviewed data.",
+        ]
+    if status == "fresh_or_newer":
+        return [
+            "Use compare-backups against stale-snapshot salvage before relying on timestamp-only freshness.",
+            "After recovery, create a new post-write backup with guard generation metadata.",
+        ]
+    if status == "generation_gap":
+        return [
+            "Compare this backup with stale-snapshot salvage before accepting data loss.",
+            "Inspect missing_generations to estimate how much guarded history may be absent.",
+        ]
+    if status == "stale":
+        return [
+            "Treat this as a last-known semantic backup, not proof that all guarded writes are present.",
+            "Export and compare stale-snapshot salvage before restoring.",
+        ]
+    if status in {"graph_mismatch", "unknown"}:
+        return [
+            "Inspect backup_candidates manually and compare with stale-snapshot salvage before choosing a restore input.",
+        ]
+    return ["Create or locate a valid Autopsy backup before using repair restore options."]
+
+
+def backup_recovery_candidate_summary(candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    valid_candidates = [candidate for candidate in candidates if bool(candidate.get("valid"))]
+    risk_status_counts: dict[str, int] = {}
+    coverage_counts: dict[str, int] = {}
+    for candidate in valid_candidates:
+        risk = candidate.get("recovery_risk") if isinstance(candidate.get("recovery_risk"), dict) else {}
+        status = str(risk.get("status") or "valid_without_recovery_risk")
+        coverage = str(risk.get("coverage") or "none")
+        risk_status_counts[status] = risk_status_counts.get(status, 0) + 1
+        coverage_counts[coverage] = coverage_counts.get(coverage, 0) + 1
+    best_candidate = min(valid_candidates, key=backup_recovery_candidate_sort_key) if valid_candidates else None
+    best_risk = best_candidate.get("recovery_risk") if isinstance((best_candidate or {}).get("recovery_risk"), dict) else {}
+    best_status = (
+        str(best_risk.get("status") or "valid_without_recovery_risk")
+        if best_candidate
+        else "no_valid_candidates"
+    )
+    confidence = {
+        "covers_guard_generation": "exact",
+        "fresh_or_newer": "timestamp",
+        "generation_gap": "partial",
+        "stale": "stale",
+        "unknown": "unknown",
+        "graph_mismatch": "unsafe",
+        "valid_without_recovery_risk": "unranked",
+        "no_valid_candidates": "none",
+    }.get(best_status, "unknown")
+    return {
+        "candidate_count": len(candidates),
+        "valid_count": len(valid_candidates),
+        "invalid_count": len(candidates) - len(valid_candidates),
+        "risk_status_counts": risk_status_counts,
+        "coverage_counts": coverage_counts,
+        "status": best_status,
+        "confidence": confidence,
+        "best_candidate": backup_recovery_candidate_brief(best_candidate),
+        "message": backup_recovery_candidate_message(best_status),
+        "suggested_next_steps": backup_recovery_candidate_next_steps(best_status),
+    }
 
 
 def backup_candidate_by_path(backup_candidates: dict[str, Any], path_value: str) -> dict[str, Any] | None:
@@ -17694,7 +18001,14 @@ def backup_candidate_by_path(backup_candidates: dict[str, Any], path_value: str)
     return None
 
 
-def embedded_snapshot_backup_candidates(*, limit: int, include_operational: bool, recovery_reference_at: str = "") -> dict[str, Any]:
+def embedded_snapshot_backup_candidates(
+    *,
+    limit: int,
+    include_operational: bool,
+    recovery_reference_at: str = "",
+    recovery_reference_generation: int | None = None,
+    recovery_reference_graph_name: str = "",
+) -> dict[str, Any]:
     backup_dir = APP_SUPPORT_DIR_DEFAULT / "Backups"
     max_candidates = max(0, int(limit or 0))
     backups = sorted(
@@ -17716,14 +18030,22 @@ def embedded_snapshot_backup_candidates(*, limit: int, include_operational: bool
             })
         except OSError as exc:
             record["stat_error"] = str(exc)
-        if recovery_reference_at:
-            record = attach_backup_recovery_risk(record, reference_at=recovery_reference_at)
+        if recovery_reference_at or recovery_reference_generation:
+            record = attach_backup_recovery_risk(
+                record,
+                reference_at=recovery_reference_at,
+                reference_generation=recovery_reference_generation,
+                reference_graph_name=recovery_reference_graph_name,
+            )
         candidates.append(record)
     return {
         "directory": str(backup_dir),
         "count": len(backups),
         "limit": max_candidates,
         "recovery_reference_at": recovery_reference_at,
+        "recovery_reference_generation": memory_database_guard_generation(recovery_reference_generation),
+        "recovery_reference_graph_name": str(recovery_reference_graph_name or ""),
+        "recovery_summary": backup_recovery_candidate_summary(candidates),
         "candidates": candidates,
     }
 
@@ -17855,6 +18177,8 @@ def build_embedded_snapshot_repair_payload(args: argparse.Namespace) -> dict[str
         limit=int(getattr(args, "backup_limit", 5) or 0),
         include_operational=bool(getattr(args, "include_operational", False)),
         recovery_reference_at=recovery_reference_at,
+        recovery_reference_generation=sidecar_generation,
+        recovery_reference_graph_name=graph_name,
     )
     restore_backup, restore_backup_source = embedded_snapshot_selected_restore_backup(args, backup_candidates)
     restore_summary = restore_input_summary(restore_backup, include_operational=bool(getattr(args, "include_operational", False))) if restore_backup else None
@@ -17862,8 +18186,13 @@ def build_embedded_snapshot_repair_payload(args: argparse.Namespace) -> dict[str
         selected_candidate = backup_candidate_by_path(backup_candidates, restore_backup)
         if isinstance(selected_candidate, dict) and isinstance(selected_candidate.get("recovery_risk"), dict):
             restore_summary["recovery_risk"] = selected_candidate["recovery_risk"]
-        elif recovery_reference_at:
-            restore_summary["recovery_risk"] = backup_recovery_risk(restore_summary, reference_at=recovery_reference_at)
+        elif recovery_reference_at or sidecar_generation:
+            restore_summary["recovery_risk"] = backup_recovery_risk(
+                restore_summary,
+                reference_at=recovery_reference_at,
+                reference_generation=sidecar_generation,
+                reference_graph_name=graph_name,
+            )
     explicit_repair = bool(getattr(args, "yes", False)) and bool(getattr(args, "accept_data_loss", False))
     dry_run = bool(getattr(args, "dry_run", False)) or not explicit_repair
     any_files = any(bool(record.get("exists")) for record in file_records)
@@ -18020,7 +18349,12 @@ def cmd_repair_embedded_snapshot(args: argparse.Namespace) -> None:
     print(json.dumps(payload, indent=2))
 
 
-def latest_backup_status(*, recovery_reference_at: str = "") -> dict[str, Any]:
+def latest_backup_status(
+    *,
+    recovery_reference_at: str = "",
+    recovery_reference_generation: int | None = None,
+    recovery_reference_graph_name: str = "",
+) -> dict[str, Any]:
     backup_dir = APP_SUPPORT_DIR_DEFAULT / "Backups"
     if not backup_dir.exists():
         return {"directory": str(backup_dir), "latest": None, "count": 0, "valid": False}
@@ -18047,8 +18381,15 @@ def latest_backup_status(*, recovery_reference_at: str = "") -> dict[str, Any]:
         "counts": summary.get("counts"),
         "validation_error": summary.get("error"),
     })
-    if recovery_reference_at and bool(summary.get("valid")):
-        payload["recovery_risk"] = backup_recovery_risk(summary, reference_at=recovery_reference_at)
+    if isinstance(summary.get("guard"), dict):
+        payload["guard"] = summary["guard"]
+    if (recovery_reference_at or recovery_reference_generation) and bool(summary.get("valid")):
+        payload["recovery_risk"] = backup_recovery_risk(
+            summary,
+            reference_at=recovery_reference_at,
+            reference_generation=recovery_reference_generation,
+            reference_graph_name=recovery_reference_graph_name,
+        )
     return payload
 
 

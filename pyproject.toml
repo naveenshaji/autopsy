@@ -43,6 +43,7 @@ all = [
 
 [project.scripts]
 autopsy = "autopsy_memory.cli:main"
+autopsy-dev = "autopsy_memory.dev_cli:main"
 autopsy-memory-worker = "autopsy_memory.worker:main"
 autopsy-memory-mcp = "autopsy_memory.mcp_bridge:main"
 

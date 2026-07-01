@@ -102,15 +102,20 @@ window; backups older than 7 days are reported as critical stale recovery risk.
 When health reports `checks.backup_status` as `missing`, `invalid`, `stale`, or
 `critical_stale`, create a fresh backup after runtime health is restored and
 compare any stale-snapshot salvage before accepting data loss.
-Successful semantic write commands and non-dry-run restores create a fresh
-default backup automatically when the newest default backup is missing, invalid,
-or older than the freshness window. Disable this only for deliberate testing with
+Successful semantic write commands and non-dry-run restores create a validated
+post-write default backup automatically, even when a previous backup is still
+fresh. New backups include the embedded guard graph generation when Autopsy can
+inspect it, so rollback repair can prefer exact generation coverage over
+timestamp-only freshness. Disable this only for deliberate testing with
 `AUTOPSY_AUTO_BACKUP_AFTER_WRITE=0`.
 
 The dry run lists recent validated `backup_candidates`. Inspect each candidate's
-`recovery_risk`; a stale backup can be safer than opening the stale embedded DB,
-but it may still omit memory written after the backup timestamp. To repair,
-quarantine the stale embedded database files instead of lowering the guard:
+`recovery_risk`; `covers_guard_generation` is stronger evidence than timestamp
+freshness, while `generation_gap` or timestamp-only stale results may omit memory
+written after the backup. The `backup_candidates.recovery_summary.best_candidate`
+field ranks valid backups by recovery evidence so an older guard-covered backup
+can outrank a newer timestamp-only backup. To repair, quarantine the stale
+embedded database files instead of lowering the guard:
 
 ```bash
 autopsy repair-embedded-snapshot --salvage-output ~/Desktop/autopsy-stale-snapshot.json

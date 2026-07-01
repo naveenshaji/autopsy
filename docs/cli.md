@@ -18,6 +18,16 @@ LaunchAgent in a normal macOS GUI session, runs `doctor`, and starts background
 model warmup. The Homebrew formula requires macOS 14 Sonoma or newer on Apple
 Silicon.
 
+Use `autopsy` for real memory. Use `autopsy-dev` for source-tree development and
+local experiments. `autopsy-dev` runs the same CLI code but defaults
+`AUTOPSY_APP_SUPPORT_DIR`, `AUTOPSY_UNIFIED_MEMORY_ROOT`, and
+`AUTOPSY_FALKORDB_LITE_PATH` to
+`~/Library/Application Support/AutopsyDev`, so development writes, embedded
+FalkorDB snapshots, and worker settings cannot collide with the Homebrew-managed
+production memory store. If you intentionally need to point `autopsy-dev` at the
+production store, set `AUTOPSY_DEV_ALLOW_PRODUCTION_MEMORY=1`; otherwise it
+refuses production paths.
+
 ## First-Run Setup
 
 ```bash
@@ -68,7 +78,7 @@ autopsy menubar
 
 `diagnostics` tails sanitized local JSONL diagnostic logs. Use `--log memory-guard` or `--log memory-relations` to inspect one log. Relation diagnostics include missing relation targets and missing memory item events; summarized event payloads are whitelisted so failed memory content, raw stable keys, relation request arrays, and candidate arrays are not printed.
 
-`repair-embedded-snapshot` is for embedded FalkorDBLite rollback events reported by `health`, `status`, or `diagnostics --log memory-guard`. The default is a dry run that plans which stale database, settings, and guard files would be quarantined and lists recent validated default backup candidates with staleness risk relative to the guard timestamp. Use `--salvage-output <path>` to write a read-only JSON export from the stale embedded snapshot before any quarantine; Autopsy closes that loaded snapshot with NOSAVE and marks the export as stale-snapshot salvage metadata. Actual repair requires both `--yes` and `--accept-data-loss`; it first writes an automatic salvage export unless `--skip-salvage` is supplied, then moves the stale snapshot into an application-support backup bundle instead of lowering the guard in place. Add `--restore-backup <backup.json>` or `--restore-latest-backup` to import a validated semantic backup into the fresh embedded store after quarantine.
+`repair-embedded-snapshot` is for embedded FalkorDBLite rollback events reported by `health`, `status`, or `diagnostics --log memory-guard`. The default is a dry run that plans which stale database, settings, and guard files would be quarantined and lists recent validated default backup candidates with staleness risk relative to the guard timestamp or guard generation. Its `backup_candidates.recovery_summary.best_candidate` ranks valid backups by recovery evidence, so a guard-covered backup can outrank a newer timestamp-only backup. Use `--salvage-output <path>` to write a read-only JSON export from the stale embedded snapshot before any quarantine; Autopsy closes that loaded snapshot with NOSAVE and marks the export as stale-snapshot salvage metadata. Actual repair requires both `--yes` and `--accept-data-loss`; it first writes an automatic salvage export unless `--skip-salvage` is supplied, then moves the stale snapshot into an application-support backup bundle instead of lowering the guard in place. Add `--restore-backup <backup.json>` or `--restore-latest-backup` to import a validated semantic backup into the fresh embedded store after quarantine.
 
 `activity` is the lightweight JSON feed for UI clients. It returns recent memory writes, recent consult telemetry, attention items, and current status.
 
@@ -202,7 +212,7 @@ Use `restore --dry-run --offline` when you only want file validation and do not 
 
 `compare-backups` compares two schema version 1 backup/export/salvage files without opening FalkorDB. Use it during rollback recovery to compare a stale-snapshot salvage export against the newest valid backup; it reports stable keys only in each input, changed shared keys, relation differences, salvage guard metadata, and recovery guidance. `compare-exports` is an alias.
 
-`repair-embedded-snapshot` is not a restore replacement. Use it only when the embedded database guard reports `workflow.status: rollback_detected`; it quarantines stale local database files so a new embedded snapshot can start cleanly, then optionally merges a backup file. Its dry-run output includes `backup_candidates`; use `--backup-limit` to control how many default backups are validated and shown. Each valid candidate includes `recovery_risk`, so inspect stale backup windows before accepting data loss. Confirmed repair writes a stale-snapshot salvage export automatically before quarantine; use `--salvage-output` when you want to choose the path during dry-run, or `--skip-salvage` only when you intentionally do not want that extra importable recovery point.
+`repair-embedded-snapshot` is not a restore replacement. Use it only when the embedded database guard reports `workflow.status: rollback_detected`; it quarantines stale local database files so a new embedded snapshot can start cleanly, then optionally merges a backup file. Its dry-run output includes `backup_candidates`; use `--backup-limit` to control how many default backups are validated and shown. Each valid candidate includes `recovery_risk`, and `recovery_summary.best_candidate` ranks candidates by guard-generation coverage before timestamp-only freshness. Inspect stale backup windows and compare salvage before accepting data loss. Confirmed repair writes a stale-snapshot salvage export automatically before quarantine; use `--salvage-output` when you want to choose the path during dry-run, or `--skip-salvage` only when you intentionally do not want that extra importable recovery point.
 
 ## Agent Setup
 

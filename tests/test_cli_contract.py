@@ -13,6 +13,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import autopsy_memory
 from autopsy_memory import cli
+from autopsy_memory import dev_cli
 from autopsy_memory import doctor
 from autopsy_memory import metadata
 from autopsy_memory import mcp_bridge
@@ -61,6 +62,46 @@ class AutopsyCLIContractTests(unittest.TestCase):
             resolved = cli.unified_memory_root_path()
             self.assertEqual(Path(resolved).name, "MemoryRoot")
             self.assertNotIn("github/codex", resolved)
+
+    def test_autopsy_dev_environment_defaults_to_isolated_support_tree(self):
+        env: dict[str, str] = {}
+        configured = dev_cli.configure_dev_environment(env)
+
+        self.assertEqual(configured["AUTOPSY_DEV_MODE"], "1")
+        self.assertEqual(Path(configured["AUTOPSY_APP_SUPPORT_DIR"]).name, "AutopsyDev")
+        self.assertIn("AutopsyDev", configured["AUTOPSY_UNIFIED_MEMORY_ROOT"])
+        self.assertIn("AutopsyDev", configured["AUTOPSY_FALKORDB_LITE_PATH"])
+        self.assertEqual(env["AUTOPSY_APP_SUPPORT_DIR"], configured["AUTOPSY_APP_SUPPORT_DIR"])
+
+    def test_autopsy_dev_refuses_production_support_without_override(self):
+        production = str(dev_cli.PRODUCTION_APP_SUPPORT_DIR)
+        with self.assertRaises(SystemExit) as raised:
+            dev_cli.configure_dev_environment({"AUTOPSY_APP_SUPPORT_DIR": production})
+
+        self.assertIn("refused to use production memory", str(raised.exception))
+
+    def test_autopsy_dev_allows_production_support_with_explicit_override(self):
+        production = str(dev_cli.PRODUCTION_APP_SUPPORT_DIR)
+        env = {
+            "AUTOPSY_APP_SUPPORT_DIR": production,
+            dev_cli.ALLOW_PRODUCTION_ENV: "1",
+        }
+        configured = dev_cli.configure_dev_environment(env)
+
+        self.assertEqual(configured["AUTOPSY_APP_SUPPORT_DIR"], production)
+
+    def test_autopsy_dev_main_forwards_argv_and_restores_process_argv(self):
+        original_argv = list(sys.argv)
+        seen_argv: list[str] = []
+
+        def capture_argv() -> None:
+            seen_argv[:] = sys.argv
+
+        with mock.patch.object(cli, "main", side_effect=capture_argv):
+            dev_cli.main(["status", "--current-only"])
+
+        self.assertEqual(seen_argv[1:], ["status", "--current-only"])
+        self.assertEqual(sys.argv, original_argv)
 
     def test_instructions_include_required_commands(self):
         parser = cli.build_parser()
@@ -320,6 +361,146 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(status["recovery_risk"]["status"], "stale")
         self.assertEqual(status["recovery_risk"]["staleness_seconds"], 86400)
 
+    def test_latest_backup_status_prefers_guard_generation_recovery_risk(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            support_dir = Path(temp_dir) / "Support"
+            backup_dir = support_dir / "Backups"
+            backup_dir.mkdir(parents=True)
+            backup_path = backup_dir / "autopsy-memory-20260620T000000Z.json"
+            backup_path.write_text(
+                json.dumps({
+                    "schema_version": 1,
+                    "exported_at": "2026-06-01T00:00:00Z",
+                    "autopsy_version": "0.0-test",
+                    "graph_name": "unit",
+                    "guard": {
+                        "policy": cli.MEMORY_DATABASE_GUARD_POLICY,
+                        "available": True,
+                        "graph_name": "unit",
+                        "graph_generation": 12,
+                        "sidecar_generation": 12,
+                    },
+                    "items": [{"stable_key": "graph-note:backup", "kind": "decision", "title": "Backup", "content": "Backup."}],
+                    "relations": [],
+                }),
+                encoding="utf-8",
+            )
+            os.utime(backup_path, (1_800_000_000, 1_800_000_000))
+            with (
+                mock.patch.object(cli, "APP_SUPPORT_DIR_DEFAULT", support_dir),
+                mock.patch.object(cli.time, "time", return_value=1_800_003_600),
+            ):
+                status = cli.latest_backup_status(
+                    recovery_reference_at="2026-06-21T00:00:00Z",
+                    recovery_reference_generation=10,
+                    recovery_reference_graph_name="unit",
+                )
+
+        self.assertTrue(status["valid"])
+        self.assertEqual(status["guard"]["graph_generation"], 12)
+        self.assertEqual(status["recovery_risk"]["status"], "covers_guard_generation")
+        self.assertFalse(status["recovery_risk"]["stale"])
+        self.assertEqual(status["recovery_risk"]["coverage"], "guard_generation")
+
+    def test_backup_recovery_risk_reports_generation_gap(self):
+        risk = cli.backup_recovery_risk(
+            {
+                "exported_at": "2026-06-21T00:00:00Z",
+                "graph_name": "unit",
+                "guard": {
+                    "graph_name": "unit",
+                    "graph_generation": 7,
+                },
+            },
+            reference_at="2026-06-21T00:00:00Z",
+            reference_generation=10,
+            reference_graph_name="unit",
+        )
+
+        self.assertEqual(risk["status"], "generation_gap")
+        self.assertEqual(risk["missing_generations"], 3)
+        self.assertTrue(risk["stale"])
+        self.assertEqual(risk["coverage"], "guard_generation")
+
+    def test_backup_recovery_summary_prefers_guard_coverage_over_timestamp_only(self):
+        summary = cli.backup_recovery_candidate_summary([
+            {
+                "path": "/tmp/newer-timestamp.json",
+                "valid": True,
+                "exported_at": "2026-06-21T00:00:00Z",
+                "recovery_risk": {
+                    "status": "fresh_or_newer",
+                    "coverage": "timestamp_only",
+                    "stale": False,
+                },
+            },
+            {
+                "path": "/tmp/guard-covered.json",
+                "valid": True,
+                "exported_at": "2026-06-20T00:00:00Z",
+                "guard": {
+                    "graph_name": "unit",
+                    "graph_generation": 12,
+                },
+                "recovery_risk": {
+                    "status": "covers_guard_generation",
+                    "coverage": "guard_generation",
+                    "reference_generation": 10,
+                    "backup_generation": 12,
+                    "stale": False,
+                },
+            },
+            {
+                "path": "/tmp/invalid.json",
+                "valid": False,
+                "error": "items_must_be_array",
+            },
+        ])
+
+        self.assertEqual(summary["status"], "covers_guard_generation")
+        self.assertEqual(summary["confidence"], "exact")
+        self.assertEqual(summary["valid_count"], 2)
+        self.assertEqual(summary["invalid_count"], 1)
+        self.assertEqual(summary["risk_status_counts"]["covers_guard_generation"], 1)
+        self.assertEqual(summary["coverage_counts"]["guard_generation"], 1)
+        self.assertEqual(summary["best_candidate"]["path"], "/tmp/guard-covered.json")
+
+    def test_export_memory_payload_includes_guard_state_when_graph_is_guarded(self):
+        class Result:
+            def __init__(self, rows):
+                self.result_set = rows
+
+        class Graph:
+            name = "unit"
+
+            def __init__(self, lite_path):
+                self._autopsy_guard_lite_path = str(lite_path)
+                self._autopsy_guard_graph_name = "unit"
+
+            def query(self, query, params=None):
+                if "MATCH (guard:AutopsyMemoryGuard" in query:
+                    return Result([[4]])
+                return Result([])
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lite_path = Path(temp_dir) / "autopsy-memory.db"
+            cli.write_memory_database_guard_sidecar(
+                lite_path,
+                graph_name="unit",
+                generation=4,
+                updated_at="2026-06-21T00:00:00Z",
+            )
+            payload = cli.export_memory_payload(
+                Graph(lite_path),
+                workspace={"root_path": "/tmp/workspace"},
+            )
+
+        self.assertEqual(payload["guard"]["policy"], cli.MEMORY_DATABASE_GUARD_POLICY)
+        self.assertTrue(payload["guard"]["available"])
+        self.assertTrue(payload["guard"]["ok"])
+        self.assertEqual(payload["guard"]["graph_generation"], 4)
+        self.assertEqual(payload["guard"]["sidecar_generation"], 4)
+
     def test_health_payload_requires_recent_valid_backup_for_nonempty_graph(self):
         parser = cli.build_parser()
         args = parser.parse_args(["health"])
@@ -352,17 +533,40 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["backup_health"]["severity"], "warning")
         self.assertEqual(payload["workflow"]["next_step"], "inspect_failed_checks_or_backup")
 
-    def test_auto_backup_after_write_skips_when_latest_backup_is_fresh(self):
-        with (
-            mock.patch.object(cli, "latest_backup_status", return_value={"count": 1, "latest": "/tmp/fresh.json", "valid": True, "age_seconds": 60}),
-            mock.patch.object(cli, "semantic_backup_item_count", return_value=2),
-            mock.patch.object(cli, "export_memory_payload") as export_memory,
-        ):
-            payload = cli.maybe_auto_backup_after_write(object(), {"root_path": "/tmp/workspace"}, reason="unit")
+    def test_auto_backup_after_write_creates_post_write_backup_even_when_latest_is_fresh(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            support_dir = Path(temp_dir) / "Support"
+            export_payload = {
+                "schema_version": 1,
+                "exported_at": "2026-06-21T00:00:00Z",
+                "autopsy_version": "0.0-test",
+                "graph_name": "unit",
+                "items": [
+                    {
+                        "stable_key": "graph-note:fresh-but-prewrite",
+                        "kind": "decision",
+                        "title": "Fresh prewrite backup",
+                        "content": "The fresh backup predates this write.",
+                    }
+                ],
+                "relations": [],
+                "structural_edges": [],
+            }
 
-        self.assertEqual(payload["status"], "skipped")
-        self.assertEqual(payload["reason"], "latest_backup_fresh")
-        export_memory.assert_not_called()
+            with (
+                mock.patch.object(cli, "APP_SUPPORT_DIR_DEFAULT", support_dir),
+                mock.patch.object(cli, "latest_backup_status", return_value={"count": 1, "latest": "/tmp/fresh.json", "valid": True, "age_seconds": 60}),
+                mock.patch.object(cli, "semantic_backup_item_count", return_value=2),
+                mock.patch.object(cli, "export_memory_payload", return_value=export_payload) as export_memory,
+            ):
+                payload = cli.maybe_auto_backup_after_write(object(), {"root_path": "/tmp/workspace"}, reason="unit")
+
+        self.assertEqual(payload["status"], "created")
+        self.assertEqual(payload["reason"], "unit")
+        self.assertTrue(payload["post_write_recovery_point"])
+        self.assertEqual(payload["previous_latest"], "/tmp/fresh.json")
+        self.assertEqual(payload["previous_backup_health"]["status"], "fresh")
+        export_memory.assert_called_once()
 
     def test_auto_backup_after_write_creates_valid_backup_when_stale(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -468,25 +672,41 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertIn("failed restore validation", result["workflow"]["message"])
         self.assertEqual(result["workflow"]["suggested_next_steps"][0]["command"], "autopsy backup")
 
-    def test_attach_auto_backup_marks_workflow_complete_when_backup_is_fresh(self):
+    def test_attach_auto_backup_marks_workflow_complete_when_backup_created(self):
         payload = {}
-        fresh_backup = {
+        created_backup = {
             "enabled": True,
-            "status": "skipped",
-            "reason": "latest_backup_fresh",
-            "latest": "/tmp/fresh.json",
-            "backup_health": {"status": "fresh", "ok": True},
+            "status": "created",
+            "reason": "unit",
+            "post_write_recovery_point": True,
+            "written": "/tmp/created.json",
+            "validation": {"valid": True},
         }
 
-        with mock.patch.object(cli, "maybe_auto_backup_after_write", return_value=fresh_backup):
+        with mock.patch.object(cli, "maybe_auto_backup_after_write", return_value=created_backup):
             result = cli.attach_auto_backup_after_write(payload, object(), {"root_path": "/tmp/workspace"}, reason="unit")
 
-        self.assertEqual(result["auto_backup"], fresh_backup)
+        self.assertEqual(result["auto_backup"], created_backup)
         self.assertTrue(result["write_recovery"]["backup_complete"])
         self.assertEqual(result["workflow"]["status"], "ok")
         self.assertTrue(result["workflow"]["complete"])
         self.assertEqual(result["workflow"]["next_step"], "done")
         self.assertTrue(result["workflow"]["backup_complete"])
+
+    def test_preexisting_fresh_backup_does_not_complete_write_recovery(self):
+        recovery = cli.auto_backup_write_recovery(
+            {
+                "enabled": True,
+                "status": "skipped",
+                "reason": "latest_backup_fresh",
+                "latest": "/tmp/prewrite.json",
+                "backup_health": {"status": "fresh", "ok": True},
+            }
+        )
+
+        self.assertFalse(recovery["backup_complete"])
+        self.assertEqual(recovery["backup_next_step"], "run_autopsy_backup")
+        self.assertIn("pre-existing fresh backup", recovery["message"])
 
     def test_attach_write_ack_verifies_payload_item_detail(self):
         payload = {
@@ -563,7 +783,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "root_path": "/tmp/workspace",
         }
         parser = cli.build_parser()
-        backup_payload = {"status": "skipped", "reason": "latest_backup_fresh", "backup_health": {"status": "fresh", "ok": True}}
+        backup_payload = {"status": "created", "reason": "unit", "post_write_recovery_point": True, "written": "/tmp/unit.json", "validation": {"valid": True}}
         written_keys = {"session-import:abc", "session-consolidation:abc", "observation:abc"}
 
         class Result:
@@ -3127,12 +3347,84 @@ class AutopsyCLIContractTests(unittest.TestCase):
             self.assertEqual(payload["guard"]["sidecar_generation"], 9)
             self.assertEqual(payload["recovery_reference_at"], "2026-06-21T00:00:00Z")
             self.assertEqual(payload["backup_candidates"]["count"], 1)
+            self.assertEqual(payload["backup_candidates"]["recovery_summary"]["status"], "fresh_or_newer")
+            self.assertEqual(payload["backup_candidates"]["recovery_summary"]["confidence"], "timestamp")
+            self.assertEqual(payload["backup_candidates"]["recovery_summary"]["best_candidate"]["path"], str(backup_path))
             self.assertTrue(payload["backup_candidates"]["candidates"][0]["valid"])
             self.assertFalse(payload["backup_candidates"]["candidates"][0]["recovery_risk"]["stale"])
             self.assertIsNone(payload["restore_backup"])
             self.assertTrue(lite_path.exists())
             self.assertTrue(Path(str(lite_path) + ".settings").exists())
             self.assertTrue(cli.memory_database_guard_sidecar_path(lite_path).exists())
+
+    def test_repair_embedded_snapshot_recovery_summary_prefers_guard_covered_backup(self):
+        parser = cli.build_parser()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            support_dir = Path(temp_dir) / "Support"
+            backup_dir = support_dir / "Backups"
+            backup_dir.mkdir(parents=True)
+            timestamp_backup = backup_dir / "autopsy-memory-20260622T000000Z.json"
+            guard_backup = backup_dir / "autopsy-memory-20260620T000000Z.json"
+            timestamp_backup.write_text(
+                json.dumps({
+                    "schema_version": 1,
+                    "exported_at": "2026-06-21T00:00:00Z",
+                    "graph_name": "unit",
+                    "items": [{"stable_key": "graph-note:timestamp", "kind": "decision", "title": "Timestamp", "content": "Timestamp."}],
+                    "relations": [],
+                }),
+                encoding="utf-8",
+            )
+            workspace = Path(temp_dir) / "MemoryRoot"
+            lite_path = Path(temp_dir) / "FalkorDB" / "autopsy-memory.db"
+            lite_path.parent.mkdir(parents=True)
+            lite_path.write_text("stale-rdb", encoding="utf-8")
+            args = parser.parse_args([
+                "--workspace",
+                str(workspace),
+                "repair-embedded-snapshot",
+                "--lite-path",
+                str(lite_path),
+            ])
+            graph_name, _workspace = cli.embedded_snapshot_repair_graph_name(args)
+            guard_backup.write_text(
+                json.dumps({
+                    "schema_version": 1,
+                    "exported_at": "2026-06-20T00:00:00Z",
+                    "graph_name": "unit",
+                    "guard": {
+                        "policy": cli.MEMORY_DATABASE_GUARD_POLICY,
+                        "available": True,
+                        "graph_name": graph_name,
+                        "graph_generation": 12,
+                        "sidecar_generation": 12,
+                    },
+                    "items": [{"stable_key": "graph-note:guard", "kind": "decision", "title": "Guard", "content": "Guard."}],
+                    "relations": [],
+                }),
+                encoding="utf-8",
+            )
+            os.utime(guard_backup, (1_800_000_000, 1_800_000_000))
+            os.utime(timestamp_backup, (1_800_000_100, 1_800_000_100))
+            cli.write_memory_database_guard_sidecar(
+                lite_path,
+                graph_name=graph_name,
+                generation=10,
+                updated_at="2026-06-21T00:00:00Z",
+            )
+
+            with mock.patch.object(cli, "APP_SUPPORT_DIR_DEFAULT", support_dir):
+                payload = cli.build_embedded_snapshot_repair_payload(args)
+
+            summary = payload["backup_candidates"]["recovery_summary"]
+            self.assertEqual(summary["status"], "covers_guard_generation")
+            self.assertEqual(summary["confidence"], "exact")
+            self.assertEqual(summary["best_candidate"]["path"], str(guard_backup))
+            self.assertEqual(summary["best_candidate"]["recovery_risk"]["backup_generation"], 12)
+            self.assertEqual(
+                [candidate["path"] for candidate in payload["backup_candidates"]["candidates"]],
+                [str(timestamp_backup), str(guard_backup)],
+            )
 
     def test_repair_embedded_snapshot_can_select_latest_valid_backup(self):
         parser = cli.build_parser()
@@ -3542,6 +3834,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with (
+                mock.patch.dict(mcp_bridge.os.environ, {}, clear=True),
                 mock.patch.object(mcp_bridge, "app_support_dir", return_value=support_dir),
                 mock.patch.object(
                     mcp_bridge,
@@ -6667,6 +6960,15 @@ class AutopsyCLIContractTests(unittest.TestCase):
         checks = {check["name"]: check for check in payload["checks"]}
         self.assertTrue(checks["embedded_cli_shutdown_detaches_by_default"]["passed"])
         self.assertEqual(checks["embedded_cli_shutdown_detaches_by_default"]["events"], ["save", "disconnect"])
+
+    def test_write_recovery_contract_benchmark_rejects_prewrite_fresh_backup(self):
+        payload = cli.benchmark_write_recovery_contract()
+
+        checks = {check["name"]: check for check in payload["checks"]}
+        self.assertTrue(checks["preexisting_fresh_backup_not_write_recovery"]["passed"])
+        self.assertFalse(checks["preexisting_fresh_backup_not_write_recovery"]["recovery"]["backup_complete"])
+        self.assertTrue(checks["validated_post_write_backup_is_recovery"]["passed"])
+        self.assertEqual(payload["score"], 10.0)
 
     def test_benchmark_payload_reports_partial_attribute_as_failed(self):
         class Tool:

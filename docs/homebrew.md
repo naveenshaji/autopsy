@@ -96,6 +96,13 @@ package does not bundle the native Darwin FalkorDB module. Homebrew supplies
 that module as a pinned resource and sets `AUTOPSY_FALKORDB_MODULE_PATH` in the
 installed wrappers.
 
+Keep the operational split clear: `autopsy` is the release CLI and should be the
+only command pointed at `~/Library/Application Support/Autopsy` during normal
+work. Development and source-checkout experiments should use `autopsy-dev`,
+which defaults to `~/Library/Application Support/AutopsyDev` and refuses the
+production support tree unless `AUTOPSY_DEV_ALLOW_PRODUCTION_MEMORY=1` is set
+intentionally.
+
 ## Plain `brew install autopsy-memory`
 
 Plain `brew install autopsy-memory` without a tap requires acceptance into
