@@ -147,7 +147,9 @@ including the matching caller-owned grant and capabilities.
 `--repo` resolves a local repo path; `--repo-scope` passes an exact shared-server
 scope such as a repo URL, stable repo id, or `*`. `shared-server publish
 <stable-key> --repo <repo>` copies a local memory item into the configured shared
-graph, `shared-server list --repo <repo>` lists repo-scoped shared memories, and
+graph; add `--expected-version-ns <value>` from a prior `list` or
+`memory-history` read to reject stale shared writes instead of overwriting a
+newer publish. `shared-server list --repo <repo>` lists repo-scoped shared memories, and
 `shared-server memory-history <shared-key> --repo-scope <repo>` lists immutable
 versions created by each shared-memory publish or upsert, newest first.
 `shared-server context --repo-scope <repo> --query <text>` fetches

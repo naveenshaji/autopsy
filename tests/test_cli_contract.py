@@ -161,6 +161,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         revoke_args = parser.parse_args(["shared-server", "revoke-token", "tok_1"])
         access_check_args = parser.parse_args(["shared-server", "access-check", "--repo-scope", "repo-a", "--mode", "write"])
         audit_args = parser.parse_args(["shared-server", "audit", "--repo-scope", "repo-a", "--limit", "25"])
+        publish_args = parser.parse_args(["shared-server", "publish", "graph-note:1", "--repo-scope", "repo-a", "--expected-version-ns", "123"])
         list_args = parser.parse_args(["shared-server", "list", "--repo-scope", "repo-a", "--include-archived", "--limit", "10"])
         history_args = parser.parse_args(["shared-server", "memory-history", "shared:1", "--repo-scope", "repo-a", "--limit", "10"])
         context_args = parser.parse_args([
@@ -237,6 +238,9 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(audit_args.shared_server_action, "audit")
         self.assertEqual(audit_args.repo_scope, "repo-a")
         self.assertEqual(audit_args.limit, 25)
+        self.assertEqual(publish_args.shared_server_action, "publish")
+        self.assertEqual(publish_args.stable_key, "graph-note:1")
+        self.assertEqual(publish_args.expected_version_ns, 123)
         self.assertEqual(list_args.shared_server_action, "list")
         self.assertTrue(list_args.include_archived)
         self.assertEqual(list_args.limit, 10)
@@ -835,10 +839,12 @@ class AutopsyCLIContractTests(unittest.TestCase):
                 "metadata": {"topic": "shared"},
             },
             repo="/repo/autopsy",
+            expected_version_ns=123,
         )
 
         self.assertEqual(payload["stable_key"], "graph-note:one")
         self.assertEqual(payload["repo"], "/repo/autopsy")
+        self.assertEqual(payload["expected_version_ns"], 123)
         self.assertEqual(payload["metadata"]["topic"], "shared")
         self.assertEqual(payload["metadata"]["autopsy_local_entity_id"], 42)
 

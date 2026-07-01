@@ -4699,9 +4699,9 @@ def shared_server_path(graph_slug: str, suffix: str) -> str:
     return f"/v1/shared-graphs/{urllib.parse.quote(graph_slug, safe='')}{suffix}"
 
 
-def build_shared_server_publish_payload(item: dict[str, Any], *, repo: str) -> dict[str, Any]:
+def build_shared_server_publish_payload(item: dict[str, Any], *, repo: str, expected_version_ns: int | None = None) -> dict[str, Any]:
     metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
-    return {
+    payload: dict[str, Any] = {
         "stable_key": str(item.get("stable_key") or ""),
         "kind": str(item.get("kind") or "memory_note"),
         "title": str(item.get("title") or ""),
@@ -4714,6 +4714,9 @@ def build_shared_server_publish_payload(item: dict[str, Any], *, repo: str) -> d
             "autopsy_updated_at": item.get("updated_at"),
         },
     }
+    if expected_version_ns is not None:
+        payload["expected_version_ns"] = int(expected_version_ns)
+    return payload
 
 
 def build_shared_context_command_payload(args: argparse.Namespace, query: str) -> dict[str, Any] | None:
@@ -5374,7 +5377,11 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
             print(json.dumps(blocked_missing_memory_item_payload_for_graph(graph, stable_key=stable_key, operation="shared-server publish"), indent=2))
             return
         item = fetch_item(graph, stable_key)
-        remote_payload = build_shared_server_publish_payload(item, repo=repo)
+        remote_payload = build_shared_server_publish_payload(
+            item,
+            repo=repo,
+            expected_version_ns=getattr(args, "expected_version_ns", None),
+        )
         published = shared_server_request_or_fail(
             config,
             shared_server_path(graph_slug, "/memories"),
