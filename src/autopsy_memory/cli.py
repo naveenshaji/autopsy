@@ -4553,6 +4553,10 @@ def shared_server_memory_lifecycle_path(graph_slug: str, action: str) -> str:
     return shared_server_path(graph_slug, f"/memories/{action}")
 
 
+def shared_server_memory_restore_version_path(graph_slug: str) -> str:
+    return shared_server_path(graph_slug, "/memories/restore-version")
+
+
 def shared_server_relations_path(
     graph_slug: str,
     repo: str,
@@ -5365,6 +5369,35 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
             method="POST",
             payload={"stable_key": stable_key, "repo": repo, "reason": str(getattr(args, "reason", "") or "")},
             timeout=10,
+        )
+        print(json.dumps(payload, indent=2))
+        return
+    if action == "restore-version":
+        stable_key = str(getattr(args, "stable_key", "") or "").strip()
+        version_id = str(getattr(args, "version_id", "") or "").strip()
+        version_ns = getattr(args, "version_ns", None)
+        if not stable_key:
+            fail("shared-server restore-version requires a stable key", 2)
+        if not version_id and version_ns is None:
+            fail("shared-server restore-version requires --version-id or --version-ns", 2)
+        restore_payload: dict[str, Any] = {
+            "stable_key": stable_key,
+            "repo": repo,
+            "reason": str(getattr(args, "reason", "") or ""),
+        }
+        if version_id:
+            restore_payload["version_id"] = version_id
+        if version_ns is not None:
+            restore_payload["version_ns"] = int(version_ns)
+        expected_version_ns = getattr(args, "expected_version_ns", None)
+        if expected_version_ns is not None:
+            restore_payload["expected_version_ns"] = int(expected_version_ns)
+        payload = shared_server_request_or_fail(
+            config,
+            shared_server_memory_restore_version_path(graph_slug),
+            method="POST",
+            payload=restore_payload,
+            timeout=15,
         )
         print(json.dumps(payload, indent=2))
         return

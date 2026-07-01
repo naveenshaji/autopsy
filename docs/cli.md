@@ -83,6 +83,7 @@ autopsy shared-server revoke-token tok_123 --repo-scope /path/to/repo
 autopsy shared-server archive shared:key --repo-scope /path/to/repo --reason duplicate
 autopsy shared-server list --repo-scope /path/to/repo --include-archived
 autopsy shared-server memory-history shared:key --repo-scope /path/to/repo
+autopsy shared-server restore-version shared:key --repo-scope /path/to/repo --version-id ver_123
 autopsy shared-server context --repo-scope /path/to/repo --query "current task"
 autopsy shared-server restore shared:key --repo-scope /path/to/repo --reason needed
 autopsy shared-server relate shared:source shared:target --repo-scope /path/to/repo --relation depends_on
@@ -152,6 +153,11 @@ graph; add `--expected-version-ns <value>` from a prior `list` or
 newer publish. `shared-server list --repo <repo>` lists repo-scoped shared memories, and
 `shared-server memory-history <shared-key> --repo-scope <repo>` lists immutable
 versions created by each shared-memory publish or upsert, newest first.
+`shared-server restore-version <shared-key> --repo-scope <repo> --version-id
+<history-item-id>` restores a prior version as a new current version; use the
+`id` field from `memory-history` as the version id, and add
+`--expected-version-ns <current-version>` to reject the restore if the current
+memory changed since review.
 `shared-server context --repo-scope <repo> --query <text>` fetches
 source-attributed shared memories plus adjacent shared graph relations as a
 ready-to-insert context block without importing them into the personal graph.

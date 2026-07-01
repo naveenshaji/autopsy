@@ -178,6 +178,19 @@ class AutopsyCLIContractTests(unittest.TestCase):
         ])
         archive_args = parser.parse_args(["shared-server", "archive", "shared:1", "--repo-scope", "repo-a", "--reason", "duplicate"])
         restore_args = parser.parse_args(["shared-server", "restore", "shared:1", "--repo-scope", "repo-a", "--reason", "needed"])
+        restore_version_args = parser.parse_args([
+            "shared-server",
+            "restore-version",
+            "shared:1",
+            "--repo-scope",
+            "repo-a",
+            "--version-id",
+            "ver_1",
+            "--expected-version-ns",
+            "456",
+            "--reason",
+            "bad publish",
+        ])
         relate_args = parser.parse_args(["shared-server", "relate", "shared:1", "shared:2", "--repo-scope", "repo-a", "--relation", "depends_on"])
         shared_relations_args = parser.parse_args([
             "shared-server",
@@ -257,6 +270,11 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(archive_args.reason, "duplicate")
         self.assertEqual(restore_args.shared_server_action, "restore")
         self.assertEqual(restore_args.reason, "needed")
+        self.assertEqual(restore_version_args.shared_server_action, "restore-version")
+        self.assertEqual(restore_version_args.stable_key, "shared:1")
+        self.assertEqual(restore_version_args.version_id, "ver_1")
+        self.assertEqual(restore_version_args.expected_version_ns, 456)
+        self.assertEqual(restore_version_args.reason, "bad publish")
         self.assertEqual(relate_args.shared_server_action, "relate")
         self.assertEqual(relate_args.stable_key, "shared:1")
         self.assertEqual(relate_args.target_key, "shared:2")
@@ -306,6 +324,10 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(
             cli.shared_server_memory_history_path("autopsy", "repo-a", "shared:1", limit=25),
             "/v1/shared-graphs/autopsy/memories/history?repo=repo-a&stable_key=shared%3A1&limit=25",
+        )
+        self.assertEqual(
+            cli.shared_server_memory_restore_version_path("autopsy"),
+            "/v1/shared-graphs/autopsy/memories/restore-version",
         )
         self.assertEqual(
             cli.shared_server_context_path(
@@ -509,6 +531,54 @@ class AutopsyCLIContractTests(unittest.TestCase):
                     "/v1/shared-graphs/autopsy/memories/history?repo=repo-a&stable_key=shared%3A1&limit=10",
                     "GET",
                     None,
+                )
+            ],
+        )
+
+    def test_shared_server_restore_version_posts_selector_payload(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "shared-server",
+            "restore-version",
+            "shared:1",
+            "--repo-scope",
+            "repo-a",
+            "--version-id",
+            "ver_1",
+            "--expected-version-ns",
+            "456",
+            "--reason",
+            "bad publish",
+        ])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
+            calls.append((path, method, payload))
+            return {"stable_key": "shared:1", "title": "Restored"}
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        self.assertEqual(json.loads(stream.getvalue())["title"], "Restored")
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "/v1/shared-graphs/autopsy/memories/restore-version",
+                    "POST",
+                    {
+                        "stable_key": "shared:1",
+                        "repo": "repo-a",
+                        "reason": "bad publish",
+                        "version_id": "ver_1",
+                        "expected_version_ns": 456,
+                    },
                 )
             ],
         )

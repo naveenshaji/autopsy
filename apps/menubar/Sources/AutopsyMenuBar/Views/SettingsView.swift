@@ -127,6 +127,8 @@ private struct SharedSettingsTab: View {
     @State private var sharedMemoryStableKey = ""
     @State private var sharedMemoryRepoScope = ""
     @State private var sharedMemoryReason = ""
+    @State private var sharedMemoryVersionID = ""
+    @State private var sharedMemoryExpectedVersionNS = ""
     @State private var sharedContextQuery = ""
     @State private var sharedContextRepoScope = ""
     @State private var sharedContextIncludeArchived = false
@@ -241,6 +243,10 @@ private struct SharedSettingsTab: View {
                     .textFieldStyle(.roundedBorder)
                 TextField("Reason", text: $sharedMemoryReason)
                     .textFieldStyle(.roundedBorder)
+                TextField("Version ID", text: $sharedMemoryVersionID)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Expected Version NS", text: $sharedMemoryExpectedVersionNS)
+                    .textFieldStyle(.roundedBorder)
                 HStack {
                     Button("Archive") {
                         store.archiveSharedServerMemory(
@@ -259,6 +265,21 @@ private struct SharedSettingsTab: View {
                         )
                     }
                     .disabled(sharedActionDisabled || sharedMemoryStableKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                    Button("Restore Version") {
+                        store.restoreSharedServerMemoryVersion(
+                            stableKey: sharedMemoryStableKey,
+                            versionID: sharedMemoryVersionID,
+                            expectedVersionNS: sharedMemoryExpectedVersionNS,
+                            repoScope: sharedMemoryRepoScope,
+                            reason: sharedMemoryReason
+                        )
+                    }
+                    .disabled(
+                        sharedActionDisabled
+                            || sharedMemoryStableKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            || sharedMemoryVersionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    )
                 }
                 HStack {
                     Button("Copy Active") {

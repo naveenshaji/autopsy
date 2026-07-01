@@ -594,6 +594,18 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    func restoreSharedServerMemoryVersion(stableKey: String, versionID: String, expectedVersionNS: String, repoScope: String, reason: String) {
+        Task {
+            await restoreSharedMemoryVersion(
+                stableKey: stableKey,
+                versionID: versionID,
+                expectedVersionNS: expectedVersionNS,
+                repoScope: repoScope,
+                reason: reason
+            )
+        }
+    }
+
     func copySharedServerMemories(repoScope: String, includeArchived: Bool) {
         Task {
             await copySharedMemories(repoScope: repoScope, includeArchived: includeArchived)
@@ -1087,6 +1099,35 @@ final class ActivityStore: ObservableObject {
             ],
             successMessage: action == "restore" ? "Shared memory restored" : "Shared memory archived"
         )
+    }
+
+    private func restoreSharedMemoryVersion(stableKey: String, versionID: String, expectedVersionNS: String, repoScope: String, reason: String) async {
+        let trimmedStableKey = stableKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedVersionID = versionID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedStableKey.isEmpty else {
+            sharedServerError = "Stable key required"
+            return
+        }
+        guard !trimmedVersionID.isEmpty else {
+            sharedServerError = "Version ID required"
+            return
+        }
+        var arguments = [
+            "shared-server",
+            "restore-version",
+            trimmedStableKey,
+            "--repo-scope",
+            normalizedRepoScope(repoScope),
+            "--version-id",
+            trimmedVersionID,
+            "--reason",
+            reason.trimmingCharacters(in: .whitespacesAndNewlines),
+        ]
+        let trimmedExpected = expectedVersionNS.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedExpected.isEmpty {
+            arguments += ["--expected-version-ns", trimmedExpected]
+        }
+        await runSharedAccessCommand(arguments, successMessage: "Shared version restored")
     }
 
     private func copySharedMemories(repoScope: String, includeArchived: Bool) async {
