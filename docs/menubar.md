@@ -78,6 +78,6 @@ Run checks:
 - Homebrew update check/update action.
 - Shared memory Settings controls for server health, graph-owner invites,
   repo grants, token cleanup, audit copy, shared memory archive/restore, and
-  private personal-to-shared link create/list/unlink.
+  shared relation and private personal-to-shared link create/list/unlink.
 - Attention items when available.
 - Quit action.

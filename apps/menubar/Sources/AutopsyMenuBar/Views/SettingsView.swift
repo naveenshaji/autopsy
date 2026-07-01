@@ -125,6 +125,12 @@ private struct SharedSettingsTab: View {
     @State private var sharedMemoryStableKey = ""
     @State private var sharedMemoryRepoScope = ""
     @State private var sharedMemoryReason = ""
+    @State private var sharedRelationSourceKey = ""
+    @State private var sharedRelationTargetKey = ""
+    @State private var sharedRelationRepoScope = ""
+    @State private var sharedRelation = "references"
+    @State private var sharedRelationFact = ""
+    @State private var sharedRelationID = ""
     @State private var personalLinkKey = ""
     @State private var personalSharedKey = ""
     @State private var personalLinkRepoScope = ""
@@ -241,6 +247,60 @@ private struct SharedSettingsTab: View {
                     }
                     .disabled(sharedActionDisabled)
                 }
+            }
+
+            Section("Shared Relations") {
+                TextField("Source Stable Key", text: $sharedRelationSourceKey)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Target Stable Key", text: $sharedRelationTargetKey)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Repo Scope", text: $sharedRelationRepoScope)
+                    .textFieldStyle(.roundedBorder)
+                Picker("Relation", selection: $sharedRelation) {
+                    ForEach(relationOptions, id: \.self) { relation in
+                        Text(relation).tag(relation)
+                    }
+                }
+                .pickerStyle(.menu)
+                TextField("Fact", text: $sharedRelationFact)
+                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    Button("Relate") {
+                        store.relateSharedServerMemories(
+                            sourceKey: sharedRelationSourceKey,
+                            targetKey: sharedRelationTargetKey,
+                            repoScope: sharedRelationRepoScope,
+                            relation: sharedRelation,
+                            fact: sharedRelationFact
+                        )
+                    }
+                    .disabled(
+                        sharedActionDisabled
+                            || sharedRelationSourceKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            || sharedRelationTargetKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    )
+
+                    Button("Copy Relations") {
+                        store.copySharedServerRelations(
+                            repoScope: sharedRelationRepoScope,
+                            sourceKey: sharedRelationSourceKey,
+                            targetKey: sharedRelationTargetKey
+                        )
+                    }
+                    .disabled(sharedActionDisabled)
+                }
+
+                Divider()
+
+                TextField("Relation ID", text: $sharedRelationID)
+                    .textFieldStyle(.roundedBorder)
+                Button("Unrelate") {
+                    store.unrelateSharedServerRelation(
+                        relationID: sharedRelationID,
+                        repoScope: sharedRelationRepoScope
+                    )
+                }
+                .disabled(sharedActionDisabled || sharedRelationID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
 
             Section("Personal Links") {
@@ -382,6 +442,9 @@ private struct SharedSettingsTab: View {
             }
             if sharedMemoryRepoScope.isEmpty {
                 sharedMemoryRepoScope = store.sharedServerDefaultRepoScope
+            }
+            if sharedRelationRepoScope.isEmpty {
+                sharedRelationRepoScope = store.sharedServerDefaultRepoScope
             }
             if personalLinkRepoScope.isEmpty {
                 personalLinkRepoScope = store.sharedServerDefaultRepoScope

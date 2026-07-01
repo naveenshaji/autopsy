@@ -594,6 +594,24 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    func relateSharedServerMemories(sourceKey: String, targetKey: String, repoScope: String, relation: String, fact: String) {
+        Task {
+            await relateSharedMemories(sourceKey: sourceKey, targetKey: targetKey, repoScope: repoScope, relation: relation, fact: fact)
+        }
+    }
+
+    func copySharedServerRelations(repoScope: String, sourceKey: String, targetKey: String) {
+        Task {
+            await copySharedRelations(repoScope: repoScope, sourceKey: sourceKey, targetKey: targetKey)
+        }
+    }
+
+    func unrelateSharedServerRelation(relationID: String, repoScope: String) {
+        Task {
+            await unrelateSharedMemory(relationID: relationID, repoScope: repoScope)
+        }
+    }
+
     func linkSharedServerPersonalMemory(personalKey: String, sharedKey: String, repoScope: String, relation: String, fact: String) {
         Task {
             await linkPersonalSharedMemory(personalKey: personalKey, sharedKey: sharedKey, repoScope: repoScope, relation: relation, fact: fact)
@@ -1049,6 +1067,95 @@ final class ActivityStore: ObservableObject {
         } catch {
             sharedServerError = error.localizedDescription
         }
+    }
+
+    private func relateSharedMemories(sourceKey: String, targetKey: String, repoScope: String, relation: String, fact: String) async {
+        let trimmedSourceKey = sourceKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedTargetKey = targetKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedRelation = relation.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedSourceKey.isEmpty else {
+            sharedServerError = "Source key required"
+            return
+        }
+        guard !trimmedTargetKey.isEmpty else {
+            sharedServerError = "Target key required"
+            return
+        }
+        guard !trimmedRelation.isEmpty else {
+            sharedServerError = "Relation required"
+            return
+        }
+        await runSharedAccessCommand(
+            [
+                "shared-server",
+                "relate",
+                trimmedSourceKey,
+                trimmedTargetKey,
+                "--repo-scope",
+                normalizedRepoScope(repoScope),
+                "--relation",
+                trimmedRelation,
+                "--fact",
+                fact.trimmingCharacters(in: .whitespacesAndNewlines),
+            ],
+            successMessage: "Shared relation created",
+            refreshTeam: false
+        )
+    }
+
+    private func copySharedRelations(repoScope: String, sourceKey: String, targetKey: String) async {
+        guard !isManagingSharedAccess else { return }
+        isManagingSharedAccess = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingSharedAccess = false
+        }
+
+        do {
+            var arguments = [
+                "shared-server",
+                "shared-relations",
+                "--repo-scope",
+                normalizedRepoScope(repoScope),
+                "--limit",
+                "50",
+            ]
+            let trimmedSourceKey = sourceKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedSourceKey.isEmpty {
+                arguments += ["--source-key", trimmedSourceKey]
+            }
+            let trimmedTargetKey = targetKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedTargetKey.isEmpty {
+                arguments += ["--target-shared-key", trimmedTargetKey]
+            }
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run(arguments)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(output.trimmingCharacters(in: .whitespacesAndNewlines), forType: .string)
+            lastActionMessage = "Shared relations copied"
+            clearLastActionMessageAfterDelay(expected: "Shared relations copied")
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
+    }
+
+    private func unrelateSharedMemory(relationID: String, repoScope: String) async {
+        let trimmedRelationID = relationID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedRelationID.isEmpty else {
+            sharedServerError = "Relation ID required"
+            return
+        }
+        await runSharedAccessCommand(
+            [
+                "shared-server",
+                "unrelate",
+                trimmedRelationID,
+                "--repo-scope",
+                normalizedRepoScope(repoScope),
+            ],
+            successMessage: "Shared relation removed",
+            refreshTeam: false
+        )
     }
 
     private func linkPersonalSharedMemory(personalKey: String, sharedKey: String, repoScope: String, relation: String, fact: String) async {

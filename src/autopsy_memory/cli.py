@@ -4441,6 +4441,29 @@ def shared_server_memory_lifecycle_path(graph_slug: str, action: str) -> str:
     return shared_server_path(graph_slug, f"/memories/{action}")
 
 
+def shared_server_relations_path(
+    graph_slug: str,
+    repo: str,
+    *,
+    limit: int,
+    source_key: str = "",
+    target_key: str = "",
+) -> str:
+    query: dict[str, Any] = {
+        "repo": repo,
+        "limit": max(1, min(int(limit), 500)),
+    }
+    if source_key:
+        query["source_key"] = source_key
+    if target_key:
+        query["target_key"] = target_key
+    return shared_server_path(graph_slug, f"/relations?{urllib.parse.urlencode(query)}")
+
+
+def shared_server_relation_revoke_path(graph_slug: str) -> str:
+    return shared_server_path(graph_slug, "/relations/revoke")
+
+
 def shared_server_personal_relations_path(
     graph_slug: str,
     repo: str,
@@ -4759,6 +4782,33 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         )
         print(json.dumps(payload, indent=2))
         return
+    if action == "shared-relations":
+        payload = shared_server_request_or_fail(
+            config,
+            shared_server_relations_path(
+                graph_slug,
+                repo,
+                limit=int(getattr(args, "limit", 50) or 50),
+                source_key=str(getattr(args, "source_key", "") or getattr(args, "stable_key", "") or "").strip(),
+                target_key=str(getattr(args, "target_shared_key", "") or getattr(args, "target_key", "") or "").strip(),
+            ),
+            timeout=10,
+        )
+        print(json.dumps(payload, indent=2))
+        return
+    if action == "unrelate":
+        relation_id = str(getattr(args, "stable_key", "") or "").strip()
+        if not relation_id:
+            fail("shared-server unrelate requires a shared relation id", 2)
+        payload = shared_server_request_or_fail(
+            config,
+            shared_server_relation_revoke_path(graph_slug),
+            method="POST",
+            payload={"id": relation_id, "repo": repo},
+            timeout=10,
+        )
+        print(json.dumps(payload, indent=2))
+        return
     if action == "unlink":
         relation_id = str(getattr(args, "stable_key", "") or "").strip()
         if not relation_id:
@@ -4807,6 +4857,31 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
             "shared_server": redacted_shared_server_config(config, path=config_path),
             "repo": repo,
             "published": published,
+        }, indent=2))
+        return
+    if action == "relate":
+        source_key = str(getattr(args, "stable_key", "") or getattr(args, "source_key", "") or "").strip()
+        target_key = str(getattr(args, "target_key", "") or getattr(args, "target_shared_key", "") or "").strip()
+        relation = str(getattr(args, "relation", "") or "").strip()
+        if not source_key or not target_key or not relation:
+            fail("shared-server relate requires source_key, target_key, and --relation", 2)
+        related = shared_server_request_or_fail(
+            config,
+            shared_server_path(graph_slug, "/relations"),
+            method="POST",
+            payload={
+                "source_key": source_key,
+                "target_key": target_key,
+                "relation": relation,
+                "fact": str(getattr(args, "fact", "") or ""),
+                "repo": repo,
+            },
+            timeout=15,
+        )
+        print(json.dumps({
+            "shared_server": redacted_shared_server_config(config, path=config_path),
+            "repo": repo,
+            "related": related,
         }, indent=2))
         return
     if action == "link":

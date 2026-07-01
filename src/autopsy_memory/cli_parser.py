@@ -397,15 +397,18 @@ def build_parser(
             "list",
             "archive",
             "restore",
+            "relate",
+            "shared-relations",
+            "unrelate",
             "link",
             "personal-links",
             "unlink",
         ),
         default="status",
-        help="Configure, check, administer shared access, publish local memory, list shared memory, or manage personal links to shared memory.",
+        help="Configure, check, administer shared access, publish local memory, list shared memory, or manage shared and personal relations.",
     )
-    shared_server_parser.add_argument("stable_key", nargs="?", help="Primary id: stable key for publish/link, token id for revoke-token, or relation id for unlink.")
-    shared_server_parser.add_argument("target_key", nargs="?", help="Shared memory stable key for link.")
+    shared_server_parser.add_argument("stable_key", nargs="?", help="Primary id: stable key for publish/link/relate, token id for revoke-token, or relation id for unlink/unrelate.")
+    shared_server_parser.add_argument("target_key", nargs="?", help="Target shared memory stable key for link or relate.")
     shared_server_parser.add_argument("--config", dest="shared_server_config", help="Path to the local shared-server config JSON.")
     shared_server_parser.add_argument("--base-url", help="Shared server base URL, for example https://autopsy-server.fly.dev.")
     shared_server_parser.add_argument("--graph-slug", help="Shared graph slug. Defaults to autopsy when configuring.")
@@ -417,9 +420,11 @@ def build_parser(
     shared_server_parser.add_argument("--repo-scope", help="Exact shared-server repo scope. Overrides --repo path resolution for shared-server operations.")
     shared_server_parser.add_argument("--token", help="Bearer token for shared memory server access. Stored in a 0600 local config file.")
     shared_server_parser.add_argument("--relation", help="Relation name for shared-server link.")
-    shared_server_parser.add_argument("--fact", default="", help="Optional relation fact text for shared-server link.")
+    shared_server_parser.add_argument("--fact", default="", help="Optional relation fact text for shared-server link or relate.")
     shared_server_parser.add_argument("--personal-key", help="Personal stable-key filter for shared-server personal-links, or personal key for link.")
     shared_server_parser.add_argument("--shared-key", help="Shared stable-key filter for shared-server personal-links, or shared key for link.")
+    shared_server_parser.add_argument("--source-key", help="Source stable-key filter for shared-server shared-relations, or source key for relate.")
+    shared_server_parser.add_argument("--target-shared-key", help="Target stable-key filter for shared-server shared-relations, or target key for relate.")
     shared_server_parser.add_argument("--reason", default="", help="Reason for shared-server archive or restore lifecycle actions.")
     shared_server_parser.add_argument("--limit", type=int, default=50, help="Maximum shared memories to list.")
     shared_server_parser.add_argument("--include-archived", action="store_true", help="With shared-server list, include archived shared memories.")

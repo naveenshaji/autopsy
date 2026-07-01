@@ -163,6 +163,18 @@ class AutopsyCLIContractTests(unittest.TestCase):
         list_args = parser.parse_args(["shared-server", "list", "--repo-scope", "repo-a", "--include-archived", "--limit", "10"])
         archive_args = parser.parse_args(["shared-server", "archive", "shared:1", "--repo-scope", "repo-a", "--reason", "duplicate"])
         restore_args = parser.parse_args(["shared-server", "restore", "shared:1", "--repo-scope", "repo-a", "--reason", "needed"])
+        relate_args = parser.parse_args(["shared-server", "relate", "shared:1", "shared:2", "--repo-scope", "repo-a", "--relation", "depends_on"])
+        shared_relations_args = parser.parse_args([
+            "shared-server",
+            "shared-relations",
+            "--repo-scope",
+            "repo-a",
+            "--source-key",
+            "shared:1",
+            "--target-shared-key",
+            "shared:2",
+        ])
+        unrelate_args = parser.parse_args(["shared-server", "unrelate", "rel_1", "--repo-scope", "repo-a"])
         personal_links_args = parser.parse_args([
             "shared-server",
             "personal-links",
@@ -206,6 +218,15 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(archive_args.reason, "duplicate")
         self.assertEqual(restore_args.shared_server_action, "restore")
         self.assertEqual(restore_args.reason, "needed")
+        self.assertEqual(relate_args.shared_server_action, "relate")
+        self.assertEqual(relate_args.stable_key, "shared:1")
+        self.assertEqual(relate_args.target_key, "shared:2")
+        self.assertEqual(relate_args.relation, "depends_on")
+        self.assertEqual(shared_relations_args.shared_server_action, "shared-relations")
+        self.assertEqual(shared_relations_args.source_key, "shared:1")
+        self.assertEqual(shared_relations_args.target_shared_key, "shared:2")
+        self.assertEqual(unrelate_args.shared_server_action, "unrelate")
+        self.assertEqual(unrelate_args.stable_key, "rel_1")
         self.assertEqual(personal_links_args.shared_server_action, "personal-links")
         self.assertEqual(personal_links_args.personal_key, "graph-note:local")
         self.assertEqual(personal_links_args.shared_key, "shared:1")
@@ -251,6 +272,22 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(
             cli.shared_server_personal_relation_revoke_path("autopsy"),
             "/v1/shared-graphs/autopsy/personal-relations/revoke",
+        )
+
+    def test_shared_server_shared_relation_paths_are_graph_scoped(self):
+        self.assertEqual(
+            cli.shared_server_relations_path(
+                "autopsy",
+                "repo-a",
+                limit=25,
+                source_key="shared:1",
+                target_key="shared:2",
+            ),
+            "/v1/shared-graphs/autopsy/relations?repo=repo-a&limit=25&source_key=shared%3A1&target_key=shared%3A2",
+        )
+        self.assertEqual(
+            cli.shared_server_relation_revoke_path("autopsy"),
+            "/v1/shared-graphs/autopsy/relations/revoke",
         )
 
     def test_shared_server_revoke_token_falls_back_to_graph_scope_on_403(self):
@@ -350,6 +387,124 @@ class AutopsyCLIContractTests(unittest.TestCase):
                     "/v1/shared-graphs/autopsy/personal-relations?repo=repo-a&limit=10&personal_key=graph-note%3Alocal&shared_key=shared%3A1",
                     "GET",
                     None,
+                )
+            ],
+        )
+
+    def test_shared_server_shared_relations_lists_graph_relations(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "shared-server",
+            "shared-relations",
+            "--repo-scope",
+            "repo-a",
+            "--source-key",
+            "shared:1",
+            "--target-shared-key",
+            "shared:2",
+            "--limit",
+            "10",
+        ])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        calls: list[tuple[str, str, dict[str, str] | None]] = []
+
+        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
+            calls.append((path, method, payload))
+            return {"items": [{"id": "rel_1", "source_key": "shared:1"}]}
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        self.assertEqual(json.loads(stream.getvalue())["items"][0]["id"], "rel_1")
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "/v1/shared-graphs/autopsy/relations?repo=repo-a&limit=10&source_key=shared%3A1&target_key=shared%3A2",
+                    "GET",
+                    None,
+                )
+            ],
+        )
+
+    def test_shared_server_relate_posts_shared_relation_payload(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "shared-server",
+            "relate",
+            "shared:1",
+            "shared:2",
+            "--repo-scope",
+            "repo-a",
+            "--relation",
+            "depends_on",
+            "--fact",
+            "one depends on two",
+        ])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        calls: list[tuple[str, str, dict[str, str] | None]] = []
+
+        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
+            calls.append((path, method, payload))
+            return {"id": "rel_1", "source_key": "shared:1", "target_key": "shared:2"}
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        self.assertEqual(json.loads(stream.getvalue())["related"]["id"], "rel_1")
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "/v1/shared-graphs/autopsy/relations",
+                    "POST",
+                    {
+                        "source_key": "shared:1",
+                        "target_key": "shared:2",
+                        "relation": "depends_on",
+                        "fact": "one depends on two",
+                        "repo": "repo-a",
+                    },
+                )
+            ],
+        )
+
+    def test_shared_server_unrelate_posts_shared_relation_revoke(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["shared-server", "unrelate", "rel_1", "--repo-scope", "repo-a"])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        calls: list[tuple[str, str, dict[str, str] | None]] = []
+
+        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
+            calls.append((path, method, payload))
+            return {"id": "rel_1", "source_key": "shared:1"}
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        self.assertEqual(json.loads(stream.getvalue())["id"], "rel_1")
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "/v1/shared-graphs/autopsy/relations/revoke",
+                    "POST",
+                    {"id": "rel_1", "repo": "repo-a"},
                 )
             ],
         )
