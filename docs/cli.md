@@ -76,6 +76,7 @@ autopsy shared-server health
 autopsy shared-server team-status
 autopsy shared-server users
 autopsy shared-server grants --repo-scope /path/to/repo
+autopsy shared-server access-check --repo-scope /path/to/repo --mode write
 autopsy shared-server audit --repo-scope /path/to/repo
 autopsy shared-server invite --email dev@example.com --role writer --repo-scope /path/to/repo
 autopsy shared-server revoke-token tok_123 --repo-scope /path/to/repo
@@ -139,6 +140,9 @@ to manage shared access. `revoke-token` first uses the global-admin endpoint and
 falls back to graph-scoped revocation, so graph owners can clean up invite-issued
 tokens for repos they own without global token access. `shared-server audit
 --repo-scope <repo>` lists scoped server audit events for graph owners or admins.
+`shared-server access-check --repo-scope <repo> --mode read|write|admin`
+explains the configured caller's effective access for one graph/repo action,
+including the matching caller-owned grant and capabilities.
 `--repo` resolves a local repo path; `--repo-scope` passes an exact shared-server
 scope such as a repo URL, stable repo id, or `*`. `shared-server publish
 <stable-key> --repo <repo>` copies a local memory item into the configured shared

@@ -116,6 +116,8 @@ private struct SharedSettingsTab: View {
     @ObservedObject var store: ActivityStore
     @State private var newUserEmail = ""
     @State private var newUserName = ""
+    @State private var accessCheckRepoScope = ""
+    @State private var accessCheckMode = "read"
     @State private var inviteRepoScope = ""
     @State private var inviteRole = "writer"
     @State private var inviteTokenLabel = "menubar-invite"
@@ -150,6 +152,7 @@ private struct SharedSettingsTab: View {
     @State private var auditRepoScope = ""
 
     private let roles = ["reader", "writer", "owner"]
+    private let accessModes = ["read", "write", "admin"]
     private let relationOptions = ["references", "depends_on", "informed_by", "implements", "answers", "refines"]
 
     var body: some View {
@@ -187,6 +190,21 @@ private struct SharedSettingsTab: View {
                     }
                     .disabled(sharedActionDisabled)
                 }
+            }
+
+            Section("Access Check") {
+                TextField("Repo Scope", text: $accessCheckRepoScope)
+                    .textFieldStyle(.roundedBorder)
+                Picker("Mode", selection: $accessCheckMode) {
+                    ForEach(accessModes, id: \.self) { mode in
+                        Text(mode.capitalized).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                Button("Copy Access") {
+                    store.copySharedServerAccessCheck(repoScope: accessCheckRepoScope, mode: accessCheckMode)
+                }
+                .disabled(sharedActionDisabled)
             }
 
             Section("Invite User") {

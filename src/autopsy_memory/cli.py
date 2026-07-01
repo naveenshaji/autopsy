@@ -4406,6 +4406,14 @@ def shared_server_grants_path(graph_slug: str, repo: str | None) -> str:
     return shared_server_path(graph_slug, suffix)
 
 
+def shared_server_access_check_path(graph_slug: str, repo: str, *, mode: str = "read") -> str:
+    query = {
+        "repo": repo,
+        "mode": mode if mode in {"read", "write", "admin"} else "read",
+    }
+    return shared_server_path(graph_slug, f"/access-check?{urllib.parse.urlencode(query)}")
+
+
 def shared_server_audit_path(graph_slug: str, repo: str | None, *, limit: int) -> str:
     query: dict[str, Any] = {
         "graph_slug": graph_slug,
@@ -5098,6 +5106,14 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         return
     if action == "grants":
         payload = shared_server_request_or_fail(config, shared_server_grants_path(graph_slug, repo), timeout=10)
+        print(json.dumps(payload, indent=2))
+        return
+    if action == "access-check":
+        payload = shared_server_request_or_fail(
+            config,
+            shared_server_access_check_path(graph_slug, repo, mode=str(getattr(args, "mode", "read") or "read")),
+            timeout=10,
+        )
         print(json.dumps(payload, indent=2))
         return
     if action == "audit":

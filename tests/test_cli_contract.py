@@ -159,6 +159,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "repo-a",
         ])
         revoke_args = parser.parse_args(["shared-server", "revoke-token", "tok_1"])
+        access_check_args = parser.parse_args(["shared-server", "access-check", "--repo-scope", "repo-a", "--mode", "write"])
         audit_args = parser.parse_args(["shared-server", "audit", "--repo-scope", "repo-a", "--limit", "25"])
         list_args = parser.parse_args(["shared-server", "list", "--repo-scope", "repo-a", "--include-archived", "--limit", "10"])
         context_args = parser.parse_args([
@@ -229,6 +230,9 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(grant_args.repo_scope, "repo-a")
         self.assertEqual(revoke_args.shared_server_action, "revoke-token")
         self.assertEqual(revoke_args.stable_key, "tok_1")
+        self.assertEqual(access_check_args.shared_server_action, "access-check")
+        self.assertEqual(access_check_args.repo_scope, "repo-a")
+        self.assertEqual(access_check_args.mode, "write")
         self.assertEqual(audit_args.shared_server_action, "audit")
         self.assertEqual(audit_args.repo_scope, "repo-a")
         self.assertEqual(audit_args.limit, 25)
@@ -273,6 +277,12 @@ class AutopsyCLIContractTests(unittest.TestCase):
 
         self.assertEqual(path, "/v1/audit-events?graph_slug=autopsy&limit=25&repo=repo-a")
         self.assertEqual(unscoped_path, "/v1/audit-events?graph_slug=autopsy&limit=500")
+
+    def test_shared_server_access_check_path_is_graph_scoped(self):
+        self.assertEqual(
+            cli.shared_server_access_check_path("autopsy", "repo-a", mode="write"),
+            "/v1/shared-graphs/autopsy/access-check?repo=repo-a&mode=write",
+        )
 
     def test_shared_server_invitation_path_is_graph_scoped(self):
         self.assertEqual(cli.shared_server_invitation_path("autopsy"), "/v1/shared-graphs/autopsy/invitations")
@@ -369,6 +379,36 @@ class AutopsyCLIContractTests(unittest.TestCase):
             [
                 ("/v1/tokens/tok%2F1/revoke", "POST", None),
                 ("/v1/shared-graphs/autopsy/tokens/tok%2F1/revoke", "POST", {"repo": "repo-a"}),
+            ],
+        )
+
+    def test_shared_server_access_check_fetches_effective_access(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["shared-server", "access-check", "--repo-scope", "repo-a", "--mode", "write"])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        calls: list[tuple[str, str, dict[str, str] | None]] = []
+
+        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
+            calls.append((path, method, payload))
+            return {"allowed": True, "effective_role": "writer", "mode": "write"}
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        self.assertTrue(json.loads(stream.getvalue())["allowed"])
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "/v1/shared-graphs/autopsy/access-check?repo=repo-a&mode=write",
+                    "GET",
+                    None,
+                )
             ],
         )
 

@@ -552,6 +552,12 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    func copySharedServerAccessCheck(repoScope: String, mode: String) {
+        Task {
+            await copySharedAccessCheck(repoScope: repoScope, mode: mode)
+        }
+    }
+
     func createSharedServerUser(email: String, name: String) {
         Task {
             await createSharedUser(email: email, name: name)
@@ -839,6 +845,33 @@ final class ActivityStore: ObservableObject {
                 "team-status",
             ])
             sharedServerStatus = try JSONDecoder().decode(SharedServerPayload.self, from: Data(output.utf8))
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
+    }
+
+    private func copySharedAccessCheck(repoScope: String, mode: String) async {
+        guard !isManagingSharedAccess else { return }
+        isManagingSharedAccess = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingSharedAccess = false
+        }
+
+        do {
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 15).run([
+                "shared-server",
+                "access-check",
+                "--repo-scope",
+                normalizedRepoScope(repoScope),
+                "--mode",
+                mode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "read" : mode.trimmingCharacters(in: .whitespacesAndNewlines),
+            ])
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(output.trimmingCharacters(in: .whitespacesAndNewlines), forType: .string)
+            lastActionMessage = "Access check copied"
+            clearLastActionMessageAfterDelay(expected: "Access check copied")
         } catch {
             sharedServerError = error.localizedDescription
         }
