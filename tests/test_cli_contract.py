@@ -237,6 +237,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "repo-a",
             "--label",
             "laptop",
+            "--expires-at",
+            "2999-01-01T00:00:00Z",
         ])
 
         self.assertEqual(grant_args.shared_server_action, "grant")
@@ -296,6 +298,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(invite_args.email, "dev@example.com")
         self.assertEqual(invite_args.role, "writer")
         self.assertEqual(invite_args.repo_scope, "repo-a")
+        self.assertEqual(invite_args.expires_at, "2999-01-01T00:00:00Z")
 
     def test_shared_server_audit_path_scopes_graph_repo_and_limit(self):
         path = cli.shared_server_audit_path("autopsy", "repo-a", limit=25)
@@ -506,6 +509,97 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(
             cli.shared_server_http_error_message(error),
             "HTTP 422: shared write rejected by unsafe-memory guard; operation=upsert_memory; target=shared:unsafe; codes=sensitive_memory_exposure; fields=content; types=credential_assignment",
+        )
+
+    def test_shared_server_create_token_posts_expiration_payload(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "shared-server",
+            "create-token",
+            "--user-id",
+            "usr_1",
+            "--label",
+            "laptop",
+            "--expires-at",
+            "2999-01-01T00:00:00Z",
+        ])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        calls: list[tuple[str, str, dict[str, str] | None]] = []
+
+        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
+            calls.append((path, method, payload))
+            return {"id": "tok_1", "token": "plain-token"}
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        self.assertEqual(json.loads(stream.getvalue())["token"], "plain-token")
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "/v1/users/usr_1/tokens",
+                    "POST",
+                    {"label": "laptop", "expires_at": "2999-01-01T00:00:00Z"},
+                )
+            ],
+        )
+
+    def test_shared_server_invite_posts_expiration_payload(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "shared-server",
+            "invite",
+            "--email",
+            "dev@example.com",
+            "--name",
+            "Dev",
+            "--repo-scope",
+            "repo-a",
+            "--role",
+            "writer",
+            "--label",
+            "invite",
+            "--expires-at",
+            "2999-01-01T00:00:00Z",
+        ])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        calls: list[tuple[str, str, dict[str, str] | None]] = []
+
+        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
+            calls.append((path, method, payload))
+            return {"token": "invite-token"}
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        self.assertEqual(json.loads(stream.getvalue())["token"], "invite-token")
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "/v1/shared-graphs/autopsy/invitations",
+                    "POST",
+                    {
+                        "email": "dev@example.com",
+                        "name": "Dev",
+                        "repo": "repo-a",
+                        "role": "writer",
+                        "label": "invite",
+                        "expires_at": "2999-01-01T00:00:00Z",
+                    },
+                )
+            ],
         )
 
     def test_shared_server_archive_posts_lifecycle_payload(self):

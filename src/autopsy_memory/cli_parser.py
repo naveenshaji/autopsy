@@ -435,6 +435,7 @@ def build_parser(
     shared_server_parser.add_argument("--email", help="Email for shared-server create-user or invite.")
     shared_server_parser.add_argument("--name", default="", help="Display name for shared-server create-user or invite.")
     shared_server_parser.add_argument("--label", default="default", help="Token label for shared-server create-token or invite.")
+    shared_server_parser.add_argument("--expires-at", help="ISO-8601 expiration timestamp for shared-server create-token or invite.")
     shared_server_parser.add_argument("--role", choices=("reader", "writer", "owner"), help="Grant role for shared-server grant or invite.")
     shared_server_parser.add_argument("--mode", choices=("read", "write", "admin"), default="read", help="Access mode for shared-server access-check.")
     shared_server_parser.add_argument("--repo-scope", help="Exact shared-server repo scope. Overrides --repo path resolution for shared-server operations.")

@@ -564,9 +564,9 @@ final class ActivityStore: ObservableObject {
         }
     }
 
-    func inviteSharedServerUser(email: String, name: String, repoScope: String, role: String, label: String) {
+    func inviteSharedServerUser(email: String, name: String, repoScope: String, role: String, label: String, expiresAt: String) {
         Task {
-            await inviteSharedUser(email: email, name: name, repoScope: repoScope, role: role, label: label)
+            await inviteSharedUser(email: email, name: name, repoScope: repoScope, role: role, label: label, expiresAt: expiresAt)
         }
     }
 
@@ -666,9 +666,9 @@ final class ActivityStore: ObservableObject {
         }
     }
 
-    func issueSharedServerToken(userID: String, label: String) {
+    func issueSharedServerToken(userID: String, label: String, expiresAt: String) {
         Task {
-            await issueSharedToken(userID: userID, label: label)
+            await issueSharedToken(userID: userID, label: label, expiresAt: expiresAt)
         }
     }
 
@@ -975,7 +975,7 @@ final class ActivityStore: ObservableObject {
         )
     }
 
-    private func inviteSharedUser(email: String, name: String, repoScope: String, role: String, label: String) async {
+    private func inviteSharedUser(email: String, name: String, repoScope: String, role: String, label: String, expiresAt: String) async {
         let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedEmail.isEmpty else {
             sharedServerError = "Email required"
@@ -991,7 +991,8 @@ final class ActivityStore: ObservableObject {
 
         do {
             let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
-            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run([
+            let trimmedExpiresAt = expiresAt.trimmingCharacters(in: .whitespacesAndNewlines)
+            var arguments = [
                 "shared-server",
                 "invite",
                 "--email",
@@ -1004,7 +1005,11 @@ final class ActivityStore: ObservableObject {
                 role,
                 "--label",
                 trimmedLabel.isEmpty ? "menubar-invite" : trimmedLabel,
-            ])
+            ]
+            if !trimmedExpiresAt.isEmpty {
+                arguments.append(contentsOf: ["--expires-at", trimmedExpiresAt])
+            }
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run(arguments)
             let invitePayload = jsonObject(from: output)
             guard let token = invitePayload?["token"] as? String, !token.isEmpty else {
                 throw CLIError.failed("shared server did not return an invite token")
@@ -1045,7 +1050,7 @@ final class ActivityStore: ObservableObject {
         )
     }
 
-    private func issueSharedToken(userID: String, label: String) async {
+    private func issueSharedToken(userID: String, label: String, expiresAt: String) async {
         let trimmedUserID = userID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedUserID.isEmpty else {
             sharedServerError = "User ID required"
@@ -1060,14 +1065,20 @@ final class ActivityStore: ObservableObject {
         }
 
         do {
-            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run([
+            let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedExpiresAt = expiresAt.trimmingCharacters(in: .whitespacesAndNewlines)
+            var arguments = [
                 "shared-server",
                 "create-token",
                 "--user-id",
                 trimmedUserID,
                 "--label",
-                label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "menubar" : label.trimmingCharacters(in: .whitespacesAndNewlines),
-            ])
+                trimmedLabel.isEmpty ? "menubar" : trimmedLabel,
+            ]
+            if !trimmedExpiresAt.isEmpty {
+                arguments.append(contentsOf: ["--expires-at", trimmedExpiresAt])
+            }
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run(arguments)
             guard let token = jsonObject(from: output)?["token"] as? String, !token.isEmpty else {
                 throw CLIError.failed("shared server did not return a token")
             }

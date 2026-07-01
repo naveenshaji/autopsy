@@ -121,6 +121,7 @@ private struct SharedSettingsTab: View {
     @State private var inviteRepoScope = ""
     @State private var inviteRole = "writer"
     @State private var inviteTokenLabel = "menubar-invite"
+    @State private var inviteTokenExpiresAt = ""
     @State private var grantUserID = ""
     @State private var grantRepoScope = ""
     @State private var grantRole = "reader"
@@ -149,6 +150,7 @@ private struct SharedSettingsTab: View {
     @State private var personalContextIncludeRelations = true
     @State private var tokenUserID = ""
     @State private var tokenLabel = "menubar"
+    @State private var tokenExpiresAt = ""
     @State private var revokeTokenID = ""
     @State private var revokeTokenRepoScope = ""
     @State private var auditRepoScope = ""
@@ -224,13 +226,16 @@ private struct SharedSettingsTab: View {
                 .pickerStyle(.segmented)
                 TextField("Token Label", text: $inviteTokenLabel)
                     .textFieldStyle(.roundedBorder)
+                TextField("Token Expires At", text: $inviteTokenExpiresAt)
+                    .textFieldStyle(.roundedBorder)
                 Button("Invite User") {
                     store.inviteSharedServerUser(
                         email: newUserEmail,
                         name: newUserName,
                         repoScope: inviteRepoScope,
                         role: inviteRole,
-                        label: inviteTokenLabel
+                        label: inviteTokenLabel,
+                        expiresAt: inviteTokenExpiresAt
                     )
                 }
                 .disabled(sharedActionDisabled || newUserEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -472,8 +477,10 @@ private struct SharedSettingsTab: View {
                     .textFieldStyle(.roundedBorder)
                 TextField("Token Label", text: $tokenLabel)
                     .textFieldStyle(.roundedBorder)
+                TextField("Token Expires At", text: $tokenExpiresAt)
+                    .textFieldStyle(.roundedBorder)
                 Button("Issue Token") {
-                    store.issueSharedServerToken(userID: tokenUserID, label: tokenLabel)
+                    store.issueSharedServerToken(userID: tokenUserID, label: tokenLabel, expiresAt: tokenExpiresAt)
                 }
                 .disabled(sharedActionDisabled || tokenUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 

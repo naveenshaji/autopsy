@@ -133,7 +133,9 @@ shared-memory connectivity. `shared-server team-status` summarizes users and
 repo grants for menu bar clients without echoing token material. Graph owners
 can use `shared-server invite --email <email> --role reader|writer|owner
 --repo-scope <repo>` to create or reuse a user, grant repo access, and issue a
-one-time token in one audited operation. Global admins can also use
+one-time token in one audited operation. Add `--expires-at <ISO-8601>` to
+`invite` or `create-token` to issue a token that the server rejects after that
+UTC timestamp. Global admins can also use
 `shared-server users`, `create-user --email <email>`, `tokens --user-id <id>`,
 `create-token --user-id <id> --label <label>`, `grants --repo-scope <repo>`,
 `grant --user-id <id> --role reader|writer|owner --repo-scope <repo>`,

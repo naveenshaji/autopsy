@@ -5177,11 +5177,15 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         user_id = str(getattr(args, "user_id", "") or "").strip()
         if not user_id:
             fail("shared-server create-token requires --user-id", 2)
+        token_payload = {"label": str(getattr(args, "label", "") or "default")}
+        expires_at = str(getattr(args, "expires_at", "") or "").strip()
+        if expires_at:
+            token_payload["expires_at"] = expires_at
         payload = shared_server_request_or_fail(
             config,
             f"/v1/users/{urllib.parse.quote(user_id, safe='')}/tokens",
             method="POST",
-            payload={"label": str(getattr(args, "label", "") or "default")},
+            payload=token_payload,
             timeout=10,
         )
         print(json.dumps(payload, indent=2))
@@ -5211,17 +5215,21 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         role = str(getattr(args, "role", "") or "reader").strip()
         if not email:
             fail("shared-server invite requires --email", 2)
+        invite_payload = {
+            "email": email,
+            "name": str(getattr(args, "name", "") or ""),
+            "repo": repo,
+            "role": role,
+            "label": str(getattr(args, "label", "") or "invite"),
+        }
+        expires_at = str(getattr(args, "expires_at", "") or "").strip()
+        if expires_at:
+            invite_payload["expires_at"] = expires_at
         payload = shared_server_request_or_fail(
             config,
             shared_server_invitation_path(graph_slug),
             method="POST",
-            payload={
-                "email": email,
-                "name": str(getattr(args, "name", "") or ""),
-                "repo": repo,
-                "role": role,
-                "label": str(getattr(args, "label", "") or "invite"),
-            },
+            payload=invite_payload,
             timeout=10,
         )
         print(json.dumps(payload, indent=2))
