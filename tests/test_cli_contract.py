@@ -160,6 +160,9 @@ class AutopsyCLIContractTests(unittest.TestCase):
         ])
         revoke_args = parser.parse_args(["shared-server", "revoke-token", "tok_1"])
         audit_args = parser.parse_args(["shared-server", "audit", "--repo-scope", "repo-a", "--limit", "25"])
+        list_args = parser.parse_args(["shared-server", "list", "--repo-scope", "repo-a", "--include-archived", "--limit", "10"])
+        archive_args = parser.parse_args(["shared-server", "archive", "shared:1", "--repo-scope", "repo-a", "--reason", "duplicate"])
+        restore_args = parser.parse_args(["shared-server", "restore", "shared:1", "--repo-scope", "repo-a", "--reason", "needed"])
         invite_args = parser.parse_args([
             "shared-server",
             "invite",
@@ -184,6 +187,14 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(audit_args.shared_server_action, "audit")
         self.assertEqual(audit_args.repo_scope, "repo-a")
         self.assertEqual(audit_args.limit, 25)
+        self.assertEqual(list_args.shared_server_action, "list")
+        self.assertTrue(list_args.include_archived)
+        self.assertEqual(list_args.limit, 10)
+        self.assertEqual(archive_args.shared_server_action, "archive")
+        self.assertEqual(archive_args.stable_key, "shared:1")
+        self.assertEqual(archive_args.reason, "duplicate")
+        self.assertEqual(restore_args.shared_server_action, "restore")
+        self.assertEqual(restore_args.reason, "needed")
         self.assertEqual(invite_args.shared_server_action, "invite")
         self.assertEqual(invite_args.email, "dev@example.com")
         self.assertEqual(invite_args.role, "writer")
@@ -201,6 +212,14 @@ class AutopsyCLIContractTests(unittest.TestCase):
 
     def test_shared_server_token_revoke_path_is_graph_scoped(self):
         self.assertEqual(cli.shared_server_token_revoke_path("autopsy", "tok/1"), "/v1/shared-graphs/autopsy/tokens/tok%2F1/revoke")
+
+    def test_shared_server_memory_lifecycle_paths_are_graph_scoped(self):
+        self.assertEqual(
+            cli.shared_server_memories_path("autopsy", "repo-a", limit=25, include_archived=True),
+            "/v1/shared-graphs/autopsy/memories?repo=repo-a&limit=25&include_archived=true",
+        )
+        self.assertEqual(cli.shared_server_memory_lifecycle_path("autopsy", "archive"), "/v1/shared-graphs/autopsy/memories/archive")
+        self.assertEqual(cli.shared_server_memory_lifecycle_path("autopsy", "restore"), "/v1/shared-graphs/autopsy/memories/restore")
 
     def test_shared_server_revoke_token_falls_back_to_graph_scope_on_403(self):
         parser = cli.build_parser()
@@ -229,6 +248,36 @@ class AutopsyCLIContractTests(unittest.TestCase):
             [
                 ("/v1/tokens/tok%2F1/revoke", "POST", None),
                 ("/v1/shared-graphs/autopsy/tokens/tok%2F1/revoke", "POST", {"repo": "repo-a"}),
+            ],
+        )
+
+    def test_shared_server_archive_posts_lifecycle_payload(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["shared-server", "archive", "shared:1", "--repo-scope", "repo-a", "--reason", "duplicate"])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        calls: list[tuple[str, str, dict[str, str] | None]] = []
+
+        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
+            calls.append((path, method, payload))
+            return {"stable_key": "shared:1", "archived": True}
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        self.assertEqual(json.loads(stream.getvalue())["archived"], True)
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "/v1/shared-graphs/autopsy/memories/archive",
+                    "POST",
+                    {"stable_key": "shared:1", "repo": "repo-a", "reason": "duplicate"},
+                )
             ],
         )
 

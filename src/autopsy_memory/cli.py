@@ -4425,6 +4425,22 @@ def shared_server_token_revoke_path(graph_slug: str, token_id: str) -> str:
     return shared_server_path(graph_slug, f"/tokens/{quoted_token_id}/revoke")
 
 
+def shared_server_memories_path(graph_slug: str, repo: str, *, limit: int, include_archived: bool = False) -> str:
+    query: dict[str, Any] = {
+        "repo": repo,
+        "limit": max(1, min(int(limit), 500)),
+    }
+    if include_archived:
+        query["include_archived"] = "true"
+    return shared_server_path(graph_slug, f"/memories?{urllib.parse.urlencode(query)}")
+
+
+def shared_server_memory_lifecycle_path(graph_slug: str, action: str) -> str:
+    if action not in {"archive", "restore"}:
+        raise ValueError("shared memory lifecycle action must be archive or restore")
+    return shared_server_path(graph_slug, f"/memories/{action}")
+
+
 def summarize_shared_server_grants(items: list[dict[str, Any]]) -> dict[str, Any]:
     role_counts: dict[str, int] = {}
     repos: set[str] = set()
@@ -4694,13 +4710,29 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         print(json.dumps(payload, indent=2))
         return
     if action == "list":
-        query = urllib.parse.urlencode(
-            {
-                "repo": repo,
-                "limit": max(1, min(int(getattr(args, "limit", 50) or 50), 500)),
-            }
+        payload = shared_server_request_or_fail(
+            config,
+            shared_server_memories_path(
+                graph_slug,
+                repo,
+                limit=int(getattr(args, "limit", 50) or 50),
+                include_archived=bool(getattr(args, "include_archived", False)),
+            ),
+            timeout=10,
         )
-        payload = shared_server_request_or_fail(config, shared_server_path(graph_slug, f"/memories?{query}"), timeout=10)
+        print(json.dumps(payload, indent=2))
+        return
+    if action in {"archive", "restore"}:
+        stable_key = str(getattr(args, "stable_key", "") or "").strip()
+        if not stable_key:
+            fail(f"shared-server {action} requires a stable key", 2)
+        payload = shared_server_request_or_fail(
+            config,
+            shared_server_memory_lifecycle_path(graph_slug, action),
+            method="POST",
+            payload={"stable_key": stable_key, "repo": repo, "reason": str(getattr(args, "reason", "") or "")},
+            timeout=10,
+        )
         print(json.dumps(payload, indent=2))
         return
     if action == "publish":

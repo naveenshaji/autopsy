@@ -395,6 +395,8 @@ def build_parser(
             "revoke-grant",
             "publish",
             "list",
+            "archive",
+            "restore",
             "link",
         ),
         default="status",
@@ -414,7 +416,9 @@ def build_parser(
     shared_server_parser.add_argument("--token", help="Bearer token for shared memory server access. Stored in a 0600 local config file.")
     shared_server_parser.add_argument("--relation", help="Relation name for shared-server link.")
     shared_server_parser.add_argument("--fact", default="", help="Optional relation fact text for shared-server link.")
+    shared_server_parser.add_argument("--reason", default="", help="Reason for shared-server archive or restore lifecycle actions.")
     shared_server_parser.add_argument("--limit", type=int, default=50, help="Maximum shared memories to list.")
+    shared_server_parser.add_argument("--include-archived", action="store_true", help="With shared-server list, include archived shared memories.")
     shared_server_parser.add_argument(
         "--from-owner-config",
         nargs="?",

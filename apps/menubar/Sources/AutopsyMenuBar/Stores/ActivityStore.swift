@@ -576,6 +576,24 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    func archiveSharedServerMemory(stableKey: String, repoScope: String, reason: String) {
+        Task {
+            await updateSharedMemoryLifecycle(action: "archive", stableKey: stableKey, repoScope: repoScope, reason: reason)
+        }
+    }
+
+    func restoreSharedServerMemory(stableKey: String, repoScope: String, reason: String) {
+        Task {
+            await updateSharedMemoryLifecycle(action: "restore", stableKey: stableKey, repoScope: repoScope, reason: reason)
+        }
+    }
+
+    func copySharedServerMemories(repoScope: String, includeArchived: Bool) {
+        Task {
+            await copySharedMemories(repoScope: repoScope, includeArchived: includeArchived)
+        }
+    }
+
     func issueSharedServerToken(userID: String, label: String) {
         Task {
             await issueSharedToken(userID: userID, label: label)
@@ -959,6 +977,57 @@ final class ActivityStore: ObservableObject {
             lastActionMessage = "Shared token copied"
             clearLastActionMessageAfterDelay(expected: "Shared token copied")
             await loadSharedServerTeamStatus()
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
+    }
+
+    private func updateSharedMemoryLifecycle(action: String, stableKey: String, repoScope: String, reason: String) async {
+        let trimmedStableKey = stableKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedStableKey.isEmpty else {
+            sharedServerError = "Stable key required"
+            return
+        }
+        await runSharedAccessCommand(
+            [
+                "shared-server",
+                action,
+                trimmedStableKey,
+                "--repo-scope",
+                normalizedRepoScope(repoScope),
+                "--reason",
+                reason.trimmingCharacters(in: .whitespacesAndNewlines),
+            ],
+            successMessage: action == "restore" ? "Shared memory restored" : "Shared memory archived"
+        )
+    }
+
+    private func copySharedMemories(repoScope: String, includeArchived: Bool) async {
+        guard !isManagingSharedAccess else { return }
+        isManagingSharedAccess = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingSharedAccess = false
+        }
+
+        do {
+            var arguments = [
+                "shared-server",
+                "list",
+                "--repo-scope",
+                normalizedRepoScope(repoScope),
+                "--limit",
+                "50",
+            ]
+            if includeArchived {
+                arguments.append("--include-archived")
+            }
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run(arguments)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(output.trimmingCharacters(in: .whitespacesAndNewlines), forType: .string)
+            lastActionMessage = includeArchived ? "Shared memories copied with archive" : "Shared memories copied"
+            clearLastActionMessageAfterDelay(expected: lastActionMessage ?? "")
         } catch {
             sharedServerError = error.localizedDescription
         }

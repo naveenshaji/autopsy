@@ -122,6 +122,9 @@ private struct SharedSettingsTab: View {
     @State private var grantUserID = ""
     @State private var grantRepoScope = ""
     @State private var grantRole = "reader"
+    @State private var sharedMemoryStableKey = ""
+    @State private var sharedMemoryRepoScope = ""
+    @State private var sharedMemoryReason = ""
     @State private var tokenUserID = ""
     @State private var tokenLabel = "menubar"
     @State private var revokeTokenID = ""
@@ -192,6 +195,45 @@ private struct SharedSettingsTab: View {
                     )
                 }
                 .disabled(sharedActionDisabled || newUserEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+
+            Section("Shared Memories") {
+                TextField("Stable Key", text: $sharedMemoryStableKey)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Repo Scope", text: $sharedMemoryRepoScope)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Reason", text: $sharedMemoryReason)
+                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    Button("Archive") {
+                        store.archiveSharedServerMemory(
+                            stableKey: sharedMemoryStableKey,
+                            repoScope: sharedMemoryRepoScope,
+                            reason: sharedMemoryReason
+                        )
+                    }
+                    .disabled(sharedActionDisabled || sharedMemoryStableKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                    Button("Restore") {
+                        store.restoreSharedServerMemory(
+                            stableKey: sharedMemoryStableKey,
+                            repoScope: sharedMemoryRepoScope,
+                            reason: sharedMemoryReason
+                        )
+                    }
+                    .disabled(sharedActionDisabled || sharedMemoryStableKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                HStack {
+                    Button("Copy Active") {
+                        store.copySharedServerMemories(repoScope: sharedMemoryRepoScope, includeArchived: false)
+                    }
+                    .disabled(sharedActionDisabled)
+
+                    Button("Copy All") {
+                        store.copySharedServerMemories(repoScope: sharedMemoryRepoScope, includeArchived: true)
+                    }
+                    .disabled(sharedActionDisabled)
+                }
             }
 
             Section("Advanced Repo Access") {

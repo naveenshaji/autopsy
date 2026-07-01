@@ -77,6 +77,9 @@ autopsy shared-server grants --repo-scope /path/to/repo
 autopsy shared-server audit --repo-scope /path/to/repo
 autopsy shared-server invite --email dev@example.com --role writer --repo-scope /path/to/repo
 autopsy shared-server revoke-token tok_123 --repo-scope /path/to/repo
+autopsy shared-server archive shared:key --repo-scope /path/to/repo --reason duplicate
+autopsy shared-server list --repo-scope /path/to/repo --include-archived
+autopsy shared-server restore shared:key --repo-scope /path/to/repo --reason needed
 autopsy benchmark --sample-size 5 --include-sync
 autopsy menubar
 ```
@@ -115,7 +118,10 @@ scope such as a repo URL, stable repo id, or `*`. `shared-server publish
 graph, `shared-server list --repo <repo>` lists repo-scoped shared memories, and
 `shared-server link <personal-key> <shared-key> --repo <repo> --relation <name>`
 creates a private personal-to-shared relation without uploading the personal
-graph.
+graph. `shared-server archive <shared-key> --repo-scope <repo> --reason <text>`
+soft-archives a shared memory for repo owners, and `shared-server restore
+<shared-key> --repo-scope <repo> --reason <text>` restores it. Normal list reads
+omit archived memories; use `--include-archived` for review or recovery.
 
 `menubar` stages the native macOS menu bar app as a small `.app` bundle and, in a normal GUI session, installs and kickstarts the supervised LaunchAgent. Current bundles launch without rebuilding; use `autopsy menubar --build` to build and stage without launching, `autopsy menubar --rebuild` to force a rebuild before launch, `autopsy menubar --install-launch-agent` to explicitly install the supervised login item, and `autopsy menubar --print-path` to inspect resolved app paths. Installed LaunchAgents run the app executable directly with `KeepAlive`, and the app silently checks the resident worker so local memory routes stay warm.
 
