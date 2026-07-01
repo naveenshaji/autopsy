@@ -90,7 +90,11 @@ owner token file created by `autopsy-server` bootstrap into
 permissions. `shared-server health` checks the remote `/health` and `/v1/me`
 endpoints and always redacts the bearer token from output. The `activity` feed
 includes redacted `shared_server` state so the macOS menu bar can show and check
-shared-memory connectivity.
+shared-memory connectivity. `shared-server publish <stable-key> --repo <repo>`
+copies a local memory item into the configured shared graph, `shared-server list
+--repo <repo>` lists repo-scoped shared memories, and `shared-server link
+<personal-key> <shared-key> --repo <repo> --relation <name>` creates a private
+personal-to-shared relation without uploading the personal graph.
 
 `menubar` stages the native macOS menu bar app as a small `.app` bundle and, in a normal GUI session, installs and kickstarts the supervised LaunchAgent. Current bundles launch without rebuilding; use `autopsy menubar --build` to build and stage without launching, `autopsy menubar --rebuild` to force a rebuild before launch, `autopsy menubar --install-launch-agent` to explicitly install the supervised login item, and `autopsy menubar --print-path` to inspect resolved app paths. Installed LaunchAgents run the app executable directly with `KeepAlive`, and the app silently checks the resident worker so local memory routes stay warm.
 

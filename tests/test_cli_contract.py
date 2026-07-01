@@ -182,6 +182,26 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["status"], "missing")
         self.assertNotIn("token", payload)
 
+    def test_shared_server_publish_payload_carries_local_memory_metadata(self):
+        payload = cli.build_shared_server_publish_payload(
+            {
+                "entity_id": 42,
+                "stable_key": "graph-note:one",
+                "kind": "decision",
+                "title": "One",
+                "content": "Shared decision.",
+                "source_kind": "graph_note",
+                "updated_at": "2026-07-01T00:00:00Z",
+                "metadata": {"topic": "shared"},
+            },
+            repo="/repo/autopsy",
+        )
+
+        self.assertEqual(payload["stable_key"], "graph-note:one")
+        self.assertEqual(payload["repo"], "/repo/autopsy")
+        self.assertEqual(payload["metadata"]["topic"], "shared")
+        self.assertEqual(payload["metadata"]["autopsy_local_entity_id"], 42)
+
     def test_restore_offline_requires_dry_run(self):
         parser = cli.build_parser()
         args = parser.parse_args(["restore", "/tmp/export.json", "--offline"])

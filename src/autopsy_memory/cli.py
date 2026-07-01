@@ -16,6 +16,7 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from collections import deque
@@ -4306,15 +4307,23 @@ def write_shared_server_config(config: dict[str, Any], *, path: str | None = Non
     return config_path
 
 
-def shared_server_request(config: dict[str, Any], path: str, *, timeout: float = 5.0) -> dict[str, Any]:
+def shared_server_request(
+    config: dict[str, Any],
+    path: str,
+    *,
+    method: str = "GET",
+    payload: dict[str, Any] | None = None,
+    timeout: float = 5.0,
+) -> dict[str, Any]:
     base_url = str(config.get("base_url") or "").rstrip("/")
     token = str(config.get("token") or "")
     if not base_url:
         raise RuntimeError("shared server base_url is missing")
-    headers = {"accept": "application/json"}
+    headers = {"accept": "application/json", "content-type": "application/json"}
     if token:
         headers["authorization"] = f"Bearer {token}"
-    request = urllib.request.Request(f"{base_url}{path}", headers=headers, method="GET")
+    data = None if payload is None else json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(f"{base_url}{path}", data=data, headers=headers, method=method)
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
 
@@ -4360,6 +4369,46 @@ def build_shared_server_status_payload(*, check_remote: bool = False, config_pat
     return payload
 
 
+def require_shared_server_config(config_path: str | None = None) -> dict[str, Any]:
+    config = load_shared_server_config(config_path)
+    if not config or not redacted_shared_server_config(config, path=config_path).get("configured"):
+        fail("shared server is not configured; run autopsy shared-server configure first", 2)
+    return config
+
+
+def shared_server_repo_scope_from_args(args: argparse.Namespace) -> str:
+    repo = repository_path_from_args(args)
+    if repo:
+        return str(Path(repo).expanduser().resolve(strict=False))
+    inferred = infer_git_repository_root(str(Path.cwd()))
+    return inferred or "*"
+
+
+def shared_server_graph_slug_from_args(args: argparse.Namespace, config: dict[str, Any]) -> str:
+    return str(getattr(args, "graph_slug", None) or config.get("graph_slug") or "autopsy").strip()
+
+
+def shared_server_path(graph_slug: str, suffix: str) -> str:
+    return f"/v1/shared-graphs/{urllib.parse.quote(graph_slug, safe='')}{suffix}"
+
+
+def build_shared_server_publish_payload(item: dict[str, Any], *, repo: str) -> dict[str, Any]:
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    return {
+        "stable_key": str(item.get("stable_key") or ""),
+        "kind": str(item.get("kind") or "memory_note"),
+        "title": str(item.get("title") or ""),
+        "content": str(item.get("content") or ""),
+        "repo": repo,
+        "metadata": {
+            **metadata,
+            "autopsy_local_entity_id": item.get("entity_id"),
+            "autopsy_source_kind": item.get("source_kind"),
+            "autopsy_updated_at": item.get("updated_at"),
+        },
+    }
+
+
 def cmd_shared_server(args: argparse.Namespace) -> None:
     action = str(getattr(args, "shared_server_action", "") or "status")
     config_path = getattr(args, "shared_server_config", None)
@@ -4394,11 +4443,75 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         payload["written"] = str(written)
         print(json.dumps(payload, indent=2))
         return
-    payload = build_shared_server_status_payload(
-        check_remote=action == "health" or bool(getattr(args, "check", False)),
-        config_path=config_path,
-    )
-    print(json.dumps(payload, indent=2))
+    if action in {"status", "health"}:
+        payload = build_shared_server_status_payload(
+            check_remote=action == "health" or bool(getattr(args, "check", False)),
+            config_path=config_path,
+        )
+        print(json.dumps(payload, indent=2))
+        return
+    config = require_shared_server_config(config_path)
+    graph_slug = shared_server_graph_slug_from_args(args, config)
+    repo = shared_server_repo_scope_from_args(args)
+    if action == "list":
+        query = urllib.parse.urlencode(
+            {
+                "repo": repo,
+                "limit": max(1, min(int(getattr(args, "limit", 50) or 50), 500)),
+            }
+        )
+        payload = shared_server_request(config, shared_server_path(graph_slug, f"/memories?{query}"), timeout=10)
+        print(json.dumps(payload, indent=2))
+        return
+    if action == "publish":
+        stable_key = str(getattr(args, "stable_key", "") or "").strip()
+        if not stable_key:
+            fail("shared-server publish requires a stable key", 2)
+        tool, workspace, _config, graph = open_workspace_graph(args)
+        if lookup_node_by_stable_key(graph, stable_key) is None:
+            print(json.dumps(blocked_missing_memory_item_payload_for_graph(graph, stable_key=stable_key, operation="shared-server publish"), indent=2))
+            return
+        item = fetch_item(graph, stable_key)
+        remote_payload = build_shared_server_publish_payload(item, repo=repo)
+        published = shared_server_request(
+            config,
+            shared_server_path(graph_slug, "/memories"),
+            method="PUT",
+            payload=remote_payload,
+            timeout=15,
+        )
+        print(json.dumps({
+            "workspace": tool.workspace_payload(workspace),
+            "shared_server": redacted_shared_server_config(config, path=config_path),
+            "repo": repo,
+            "published": published,
+        }, indent=2))
+        return
+    if action == "link":
+        personal_key = str(getattr(args, "stable_key", "") or "").strip()
+        shared_key = str(getattr(args, "target_key", "") or "").strip()
+        relation = str(getattr(args, "relation", "") or "").strip()
+        if not personal_key or not shared_key or not relation:
+            fail("shared-server link requires personal_key, shared_key, and --relation", 2)
+        linked = shared_server_request(
+            config,
+            shared_server_path(graph_slug, "/personal-relations"),
+            method="POST",
+            payload={
+                "personal_key": personal_key,
+                "shared_key": shared_key,
+                "relation": relation,
+                "fact": str(getattr(args, "fact", "") or ""),
+                "repo": repo,
+            },
+            timeout=15,
+        )
+        print(json.dumps({
+            "shared_server": redacted_shared_server_config(config, path=config_path),
+            "repo": repo,
+            "linked": linked,
+        }, indent=2))
+        return
 
 
 def build_activity_onboarding_payload(
