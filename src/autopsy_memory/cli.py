@@ -4328,6 +4328,36 @@ def shared_server_request(
         return json.loads(response.read().decode("utf-8"))
 
 
+def format_shared_server_error_detail(value: Any) -> str:
+    if isinstance(value, dict):
+        access = value.get("access") if isinstance(value.get("access"), dict) else {}
+        if access:
+            parts = [str(value.get("error") or "access denied")]
+            reason = str(access.get("reason") or "").strip()
+            role = str(access.get("effective_role") or "").strip()
+            repo = str(access.get("repo") or "").strip()
+            mode = str(access.get("mode") or "").strip()
+            capabilities = access.get("capabilities") if isinstance(access.get("capabilities"), dict) else {}
+            enabled_capabilities = [
+                label
+                for key, label in (("can_read", "read"), ("can_write", "write"), ("can_admin", "admin"))
+                if bool(capabilities.get(key))
+            ]
+            if reason:
+                parts.append(f"reason={reason}")
+            if role:
+                parts.append(f"role={role}")
+            if repo:
+                parts.append(f"repo={repo}")
+            if mode:
+                parts.append(f"mode={mode}")
+            if enabled_capabilities:
+                parts.append(f"capabilities={','.join(enabled_capabilities)}")
+            return "; ".join(parts)
+        return json.dumps(value, sort_keys=True)
+    return str(value)
+
+
 def shared_server_http_error_message(exc: urllib.error.HTTPError) -> str:
     detail = str(exc.reason or "").strip()
     with contextlib.suppress(Exception):
@@ -4335,7 +4365,7 @@ def shared_server_http_error_message(exc: urllib.error.HTTPError) -> str:
         if raw:
             parsed = json.loads(raw)
             if isinstance(parsed, dict) and parsed.get("detail"):
-                detail = str(parsed.get("detail"))
+                detail = format_shared_server_error_detail(parsed.get("detail"))
             else:
                 detail = raw
     return f"HTTP {exc.code}: {detail or exc.reason}"

@@ -412,6 +412,35 @@ class AutopsyCLIContractTests(unittest.TestCase):
             ],
         )
 
+    def test_shared_server_http_error_formats_structured_access_detail(self):
+        error = urllib.error.HTTPError(
+            "/v1/shared-graphs/autopsy/memories",
+            403,
+            "Forbidden",
+            {},
+            io.BytesIO(
+                json.dumps(
+                    {
+                        "detail": {
+                            "error": "write access denied",
+                            "access": {
+                                "reason": "insufficient_role",
+                                "effective_role": "reader",
+                                "repo": "repo-a",
+                                "mode": "write",
+                                "capabilities": {"can_read": True, "can_write": False, "can_admin": False},
+                            },
+                        }
+                    }
+                ).encode()
+            ),
+        )
+
+        self.assertEqual(
+            cli.shared_server_http_error_message(error),
+            "HTTP 403: write access denied; reason=insufficient_role; role=reader; repo=repo-a; mode=write; capabilities=read",
+        )
+
     def test_shared_server_archive_posts_lifecycle_payload(self):
         parser = cli.build_parser()
         args = parser.parse_args(["shared-server", "archive", "shared:1", "--repo-scope", "repo-a", "--reason", "duplicate"])
