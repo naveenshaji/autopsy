@@ -4425,6 +4425,25 @@ def shared_server_token_revoke_path(graph_slug: str, token_id: str) -> str:
     return shared_server_path(graph_slug, f"/tokens/{quoted_token_id}/revoke")
 
 
+def split_cli_csv_values(values: list[str] | tuple[str, ...] | str | None) -> list[str]:
+    if values is None:
+        return []
+    raw_values: list[str]
+    if isinstance(values, str):
+        raw_values = [values]
+    else:
+        raw_values = [str(value or "") for value in values]
+    items: list[str] = []
+    seen: set[str] = set()
+    for value in raw_values:
+        for part in str(value or "").split(","):
+            item = part.strip()
+            if item and item not in seen:
+                seen.add(item)
+                items.append(item)
+    return items
+
+
 def shared_server_memories_path(graph_slug: str, repo: str, *, limit: int, include_archived: bool = False) -> str:
     query: dict[str, Any] = {
         "repo": repo,
@@ -4454,6 +4473,31 @@ def shared_server_context_path(
     if not include_relations:
         query["include_relations"] = "false"
     return shared_server_path(graph_slug, f"/context?{urllib.parse.urlencode(query)}")
+
+
+def shared_server_personal_context_path(
+    graph_slug: str,
+    repo: str,
+    *,
+    personal_keys: list[str] | tuple[str, ...] | str | None = None,
+    limit: int,
+    include_archived: bool = False,
+    include_relations: bool = True,
+) -> str:
+    query: dict[str, Any] = {
+        "repo": repo,
+        "limit": max(1, min(int(limit), 50)),
+    }
+    keys = split_cli_csv_values(personal_keys)
+    if len(keys) == 1:
+        query["personal_key"] = keys[0]
+    elif len(keys) > 1:
+        query["personal_keys"] = ",".join(keys)
+    if include_archived:
+        query["include_archived"] = "true"
+    if not include_relations:
+        query["include_relations"] = "false"
+    return shared_server_path(graph_slug, f"/personal-context?{urllib.parse.urlencode(query)}")
 
 
 def shared_server_memory_lifecycle_path(graph_slug: str, action: str) -> str:
@@ -4594,6 +4638,16 @@ def shared_context_repo_scope_from_args(args: argparse.Namespace) -> str:
     return shared_server_repo_scope_from_args(args)
 
 
+def linked_shared_repo_scope_from_args(args: argparse.Namespace) -> str:
+    exact_scope = str(getattr(args, "linked_shared_repo_scope", None) or "").strip()
+    if exact_scope:
+        return exact_scope
+    shared_scope = str(getattr(args, "shared_repo_scope", None) or "").strip()
+    if shared_scope:
+        return shared_scope
+    return shared_server_repo_scope_from_args(args)
+
+
 def shared_server_path(graph_slug: str, suffix: str) -> str:
     return f"/v1/shared-graphs/{urllib.parse.quote(graph_slug, safe='')}{suffix}"
 
@@ -4670,6 +4724,114 @@ def build_shared_context_command_payload(args: argparse.Namespace, query: str) -
     return merged
 
 
+def context_linked_personal_keys_from_payload(args: argparse.Namespace, payload: dict[str, Any]) -> list[str]:
+    explicit_keys = split_cli_csv_values(getattr(args, "linked_shared_personal_key", None))
+    if explicit_keys:
+        return explicit_keys[:50]
+
+    keys: list[str] = []
+    seen: set[str] = set()
+
+    def add_key(value: Any) -> None:
+        key = str(value or "").strip()
+        if key and key not in seen:
+            seen.add(key)
+            keys.append(key)
+
+    for entry in list(payload.get("agent_context") or []):
+        if not isinstance(entry, dict):
+            continue
+        section = str(entry.get("section") or "")
+        if section.startswith("shared_context") or section.startswith("linked_shared_context"):
+            continue
+        add_key(entry.get("stable_key") or entry.get("stableKey"))
+        if len(keys) >= 50:
+            return keys
+
+    retrieval = payload.get("retrieval") if isinstance(payload.get("retrieval"), dict) else {}
+    for bucket in ("items", "hits", "weak_signal_candidates"):
+        for item in list(retrieval.get(bucket) or []):
+            if isinstance(item, dict):
+                add_key(item.get("stable_key") or item.get("stableKey"))
+            if len(keys) >= 50:
+                return keys
+    related = retrieval.get("related_memory") if isinstance(retrieval.get("related_memory"), dict) else {}
+    for item in list(related.get("items") or []):
+        if isinstance(item, dict):
+            add_key(item.get("stable_key") or item.get("stableKey"))
+        if len(keys) >= 50:
+            return keys
+
+    core = payload.get("core") if isinstance(payload.get("core"), dict) else {}
+    for section in ("pinned_memory", "procedures", "observations", "active_now", "open_loops", "recent_decisions", "recent_activity", "open_questions", "recent_threads"):
+        for item in list(core.get(section) or []):
+            if isinstance(item, dict):
+                add_key(item.get("stable_key") or item.get("stableKey"))
+            if len(keys) >= 50:
+                return keys
+    return keys
+
+
+def build_linked_shared_context_command_payload(args: argparse.Namespace, payload: dict[str, Any]) -> dict[str, Any] | None:
+    if not bool(getattr(args, "include_linked_shared", False)):
+        return None
+    config_path = getattr(args, "shared_server_config", None)
+    config = load_shared_server_config(config_path)
+    redacted_config = redacted_shared_server_config(config, path=config_path)
+    repo = linked_shared_repo_scope_from_args(args)
+    personal_keys = context_linked_personal_keys_from_payload(args, payload)
+    base_payload: dict[str, Any] = {
+        "enabled": True,
+        "status": "missing_config" if not config else "pending",
+        "shared_server": redacted_config,
+        "repo": repo,
+        "personal_keys": personal_keys,
+        "items": [],
+        "relations": [],
+        "context_block": "",
+    }
+    if not config or not redacted_config.get("configured"):
+        base_payload["error"] = "shared server is not configured"
+        return base_payload
+    if not personal_keys:
+        base_payload["status"] = "no_personal_keys"
+        base_payload["message"] = "no local personal stable keys were available for linked shared context"
+        return base_payload
+    graph_slug = shared_context_graph_slug_from_args(args, config)
+    base_payload["graph_slug"] = graph_slug
+    try:
+        shared_payload = shared_server_request(
+            config,
+            shared_server_personal_context_path(
+                graph_slug,
+                repo,
+                personal_keys=personal_keys,
+                limit=int(getattr(args, "linked_shared_limit", 8) or 8),
+                include_archived=bool(getattr(args, "linked_shared_include_archived", False)),
+                include_relations=not bool(getattr(args, "linked_shared_no_relations", False)),
+            ),
+            timeout=15,
+        )
+    except urllib.error.HTTPError as exc:
+        base_payload["status"] = "error"
+        base_payload["error"] = shared_server_http_error_message(exc)
+        return base_payload
+    except Exception as exc:
+        base_payload["status"] = "error"
+        base_payload["error"] = str(exc)
+        return base_payload
+    if not isinstance(shared_payload, dict):
+        base_payload["status"] = "error"
+        base_payload["error"] = "shared server returned a non-object payload"
+        return base_payload
+    merged = {**base_payload, **shared_payload}
+    merged["enabled"] = True
+    merged["status"] = "ok"
+    merged["shared_server"] = redacted_config
+    merged["personal_keys"] = personal_keys
+    return merged
+
+
 def attach_shared_context_to_context_payload(payload: dict[str, Any], shared_context: dict[str, Any] | None) -> dict[str, Any]:
     if not shared_context:
         return payload
@@ -4739,6 +4901,98 @@ def attach_shared_context_to_context_payload(payload: dict[str, Any], shared_con
                 entries,
                 {
                     "section": "shared_context_relations",
+                    "priority": 2,
+                    "stable_key": source_key or target_key,
+                    "text": text,
+                },
+                max_chars=max_chars,
+                used_chars=used_chars,
+            )
+            truncated = truncated or was_truncated
+    if budget:
+        budget["used_chars"] = min(used_chars, max_chars)
+        budget["truncated"] = truncated
+    payload["context_block"] = render_context_block(payload)
+    return payload
+
+
+def attach_linked_shared_context_to_context_payload(payload: dict[str, Any], linked_context: dict[str, Any] | None) -> dict[str, Any]:
+    if not linked_context:
+        return payload
+    payload["linked_shared_context"] = linked_context
+    budget = payload.get("context_budget") if isinstance(payload.get("context_budget"), dict) else {}
+    max_chars = int(budget.get("max_chars") or 6000)
+    used_chars = int(budget.get("used_chars") or 0)
+    truncated = bool(budget.get("truncated"))
+    entries = payload.get("agent_context")
+    if not isinstance(entries, list):
+        entries = []
+        payload["agent_context"] = entries
+    status = str(linked_context.get("status") or "").strip()
+    if status and status != "ok":
+        message = summary_snippet(str(linked_context.get("error") or linked_context.get("message") or status), limit=300)
+        prefix = "linked shared context skipped" if status == "no_personal_keys" else "linked shared context unavailable"
+        used_chars, was_truncated = append_context_entry(
+            entries,
+            {
+                "section": "linked_shared_context",
+                "priority": 1,
+                "text": f"{prefix}: {message}",
+            },
+            max_chars=max_chars,
+            used_chars=used_chars,
+        )
+        truncated = truncated or was_truncated
+    else:
+        graph_slug = str(linked_context.get("graph_slug") or "").strip()
+        repo = str(linked_context.get("repo") or "").strip()
+        for item in list(linked_context.get("items") or [])[:8]:
+            if not isinstance(item, dict):
+                continue
+            stable_key = str(item.get("stable_key") or "")
+            title = summary_snippet(str(item.get("title") or ""), limit=160)
+            content = summary_snippet(str(item.get("content") or ""), limit=420)
+            kind = str(item.get("kind") or "shared_memory")
+            source = item.get("source") if isinstance(item.get("source"), dict) else {}
+            source_graph = str(source.get("graph_slug") or graph_slug)
+            source_repo = str(source.get("repo") or repo)
+            personal_relation = item.get("personal_relation") if isinstance(item.get("personal_relation"), dict) else {}
+            personal_key = str(personal_relation.get("personal_key") or "")
+            relation = str(personal_relation.get("relation") or "linked_to")
+            text = f"linked shared {kind}: {title}"
+            if content:
+                text = f"{text} - {content}"
+            link_bits = []
+            if personal_key or stable_key:
+                link_bits.append(f"link: {personal_key} -{relation}-> {stable_key}")
+            link_bits.append(f"source: shared_server graph={source_graph} repo={source_repo}")
+            text = f"{text} [{'; '.join(link_bits)}]"
+            used_chars, was_truncated = append_context_entry(
+                entries,
+                {
+                    "section": "linked_shared_context",
+                    "priority": 1,
+                    "stable_key": stable_key,
+                    "text": text,
+                },
+                max_chars=max_chars,
+                used_chars=used_chars,
+            )
+            truncated = truncated or was_truncated
+        for relation in list(linked_context.get("relations") or [])[:8]:
+            if not isinstance(relation, dict):
+                continue
+            source_key = str(relation.get("source_key") or "")
+            target_key = str(relation.get("target_key") or "")
+            label = str(relation.get("relation") or "related_to")
+            fact = summary_snippet(str(relation.get("fact") or ""), limit=220)
+            text = f"linked shared relation: {source_key} -{label}-> {target_key}"
+            if fact:
+                text = f"{text}: {fact}"
+            used_chars, was_truncated = append_context_entry(
+                entries,
+                {
+                    "section": "linked_shared_context_relations",
                     "priority": 2,
                     "stable_key": source_key or target_key,
                     "text": text,
@@ -4946,6 +5200,25 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
                 graph_slug,
                 repo,
                 query_text=str(getattr(args, "query", "") or "").strip(),
+                limit=int(getattr(args, "limit", 8) or 8),
+                include_archived=bool(getattr(args, "include_archived", False)),
+                include_relations=not bool(getattr(args, "no_relations", False)),
+            ),
+            timeout=15,
+        )
+        print(json.dumps(payload, indent=2))
+        return
+    if action == "personal-context":
+        personal_keys = split_cli_csv_values([
+            str(getattr(args, "personal_key", "") or ""),
+            str(getattr(args, "stable_key", "") or ""),
+        ])
+        payload = shared_server_request_or_fail(
+            config,
+            shared_server_personal_context_path(
+                graph_slug,
+                repo,
+                personal_keys=personal_keys,
                 limit=int(getattr(args, "limit", 8) or 8),
                 include_archived=bool(getattr(args, "include_archived", False)),
                 include_relations=not bool(getattr(args, "no_relations", False)),
@@ -10619,6 +10892,8 @@ def context_block_section_title(section: str) -> str:
         "retrieved_memory": "Retrieved Memory",
         "shared_context": "Shared Context",
         "shared_context_relations": "Shared Context Relations",
+        "linked_shared_context": "Linked Shared Context",
+        "linked_shared_context_relations": "Linked Shared Context Relations",
         "weak_signals": "Weak Signals",
         "related_memory": "Related Memory",
         "relations": "Relations",
@@ -15777,6 +16052,7 @@ def build_context_command_payload(args: argparse.Namespace) -> dict[str, Any]:
         related_memory=related_memory,
     )
     payload = attach_shared_context_to_context_payload(payload, build_shared_context_command_payload(args, query))
+    payload = attach_linked_shared_context_to_context_payload(payload, build_linked_shared_context_command_payload(args, payload))
     if query:
         refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
     return payload

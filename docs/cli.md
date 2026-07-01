@@ -69,6 +69,7 @@ autopsy status --current-only
 autopsy context --current-only --query "current task"
 autopsy context --current-only --format text --query "current task"
 autopsy context --current-only --include-shared --shared-repo-scope /path/to/repo --format text --query "current task"
+autopsy context --current-only --include-linked-shared --linked-shared-repo-scope /path/to/repo --format text --query "current task"
 autopsy audit --current-only
 autopsy activity
 autopsy shared-server health
@@ -86,6 +87,7 @@ autopsy shared-server relate shared:source shared:target --repo-scope /path/to/r
 autopsy shared-server shared-relations --repo-scope /path/to/repo --source-key shared:source
 autopsy shared-server unrelate rel_123 --repo-scope /path/to/repo
 autopsy shared-server personal-links --repo-scope /path/to/repo --personal-key graph-note:local
+autopsy shared-server personal-context --repo-scope /path/to/repo --personal-key graph-note:local
 autopsy shared-server unlink plink_123 --repo-scope /path/to/repo
 autopsy benchmark --sample-size 5 --include-sync
 autopsy menubar
@@ -106,6 +108,16 @@ denies access, local context still renders with a shared-context error entry.
 Use `--shared-repo-scope`, `--shared-query`, `--shared-limit`,
 `--shared-include-archived`, and `--shared-no-relations` to control the shared
 side of the retrieval.
+
+`context --include-linked-shared` follows the caller's private
+personal-to-shared links from local context stable keys to shared memories and
+renders those results in a separate source-attributed block. It does not upload
+local memory content; the server receives only selected personal stable keys and
+returns shared memories that are both repo-readable and linked by the caller's
+own private relation records. Use `--linked-shared-personal-key` to provide
+explicit keys, `--linked-shared-repo-scope` to target a repo scope, and
+`--linked-shared-limit`, `--linked-shared-include-archived`, and
+`--linked-shared-no-relations` to control the linked shared lookup.
 
 `shared-server` configures and inspects the Autopsy shared memory server used for
 team graphs. `shared-server configure --from-owner-config` imports the private
@@ -138,7 +150,10 @@ ready-to-insert context block without importing them into the personal graph.
 creates a private personal-to-shared relation without uploading the personal
 graph. `shared-server personal-links --repo-scope <repo>` lists only your own
 private personal-to-shared relation records; add `--personal-key` or
-`--shared-key` to filter. `shared-server unlink <relation-id> --repo-scope
+`--shared-key` to filter. `shared-server personal-context --repo-scope <repo>
+--personal-key <stable-key>` fetches the shared memories currently reachable
+through your private personal links, plus adjacent shared graph relations unless
+`--no-relations` is supplied. `shared-server unlink <relation-id> --repo-scope
 <repo>` revokes one of your private relation records. `shared-server relate
 <source-shared-key> <target-shared-key> --repo-scope <repo> --relation <name>`
 creates a team-visible relation between two active shared memories, while

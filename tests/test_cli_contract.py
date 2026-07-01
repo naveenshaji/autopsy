@@ -197,6 +197,16 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "--shared-key",
             "shared:1",
         ])
+        personal_context_args = parser.parse_args([
+            "shared-server",
+            "personal-context",
+            "--repo-scope",
+            "repo-a",
+            "--personal-key",
+            "graph-note:local",
+            "--limit",
+            "10",
+        ])
         unlink_args = parser.parse_args(["shared-server", "unlink", "plink_1", "--repo-scope", "repo-a"])
         invite_args = parser.parse_args([
             "shared-server",
@@ -247,6 +257,9 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(personal_links_args.shared_server_action, "personal-links")
         self.assertEqual(personal_links_args.personal_key, "graph-note:local")
         self.assertEqual(personal_links_args.shared_key, "shared:1")
+        self.assertEqual(personal_context_args.shared_server_action, "personal-context")
+        self.assertEqual(personal_context_args.personal_key, "graph-note:local")
+        self.assertEqual(personal_context_args.limit, 10)
         self.assertEqual(unlink_args.shared_server_action, "unlink")
         self.assertEqual(unlink_args.stable_key, "plink_1")
         self.assertEqual(invite_args.shared_server_action, "invite")
@@ -296,6 +309,17 @@ class AutopsyCLIContractTests(unittest.TestCase):
                 shared_key="shared:1",
             ),
             "/v1/shared-graphs/autopsy/personal-relations?repo=repo-a&limit=25&personal_key=graph-note%3Alocal&shared_key=shared%3A1",
+        )
+        self.assertEqual(
+            cli.shared_server_personal_context_path(
+                "autopsy",
+                "repo-a",
+                limit=25,
+                personal_keys=["graph-note:one", "graph-note:two"],
+                include_archived=True,
+                include_relations=False,
+            ),
+            "/v1/shared-graphs/autopsy/personal-context?repo=repo-a&limit=25&personal_keys=graph-note%3Aone%2Cgraph-note%3Atwo&include_archived=true&include_relations=false",
         )
         self.assertEqual(
             cli.shared_server_personal_relation_revoke_path("autopsy"),
@@ -413,6 +437,47 @@ class AutopsyCLIContractTests(unittest.TestCase):
             [
                 (
                     "/v1/shared-graphs/autopsy/personal-relations?repo=repo-a&limit=10&personal_key=graph-note%3Alocal&shared_key=shared%3A1",
+                    "GET",
+                    None,
+                )
+            ],
+        )
+
+    def test_shared_server_personal_context_fetches_private_linked_context(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "shared-server",
+            "personal-context",
+            "--repo-scope",
+            "repo-a",
+            "--personal-key",
+            "graph-note:local,graph-note:other",
+            "--include-archived",
+            "--no-relations",
+            "--limit",
+            "10",
+        ])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        calls: list[tuple[str, str, dict[str, str] | None]] = []
+
+        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
+            calls.append((path, method, payload))
+            return {"items": [{"stable_key": "shared:1", "personal_relation": {"id": "plink_1", "personal_key": "graph-note:local"}}]}
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        self.assertEqual(json.loads(stream.getvalue())["items"][0]["personal_relation"]["id"], "plink_1")
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "/v1/shared-graphs/autopsy/personal-context?repo=repo-a&limit=10&personal_keys=graph-note%3Alocal%2Cgraph-note%3Aother&include_archived=true&include_relations=false",
                     "GET",
                     None,
                 )
@@ -6836,6 +6901,84 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertIn("Shared Context Relations", payload["context_block"])
         self.assertIn("shared:1 -supports-> shared:2", payload["context_block"])
         self.assertEqual(calls[0][0], "/v1/shared-graphs/autopsy/context?repo=repo-a&query=needle&limit=3")
+
+    def test_context_command_can_follow_private_shared_links(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "context",
+            "--query",
+            "needle",
+            "--include-linked-shared",
+            "--linked-shared-repo-scope",
+            "repo-a",
+            "--linked-shared-limit",
+            "3",
+        ])
+        tool = types.SimpleNamespace(STATUS_WINDOW_DAYS_DEFAULT=21, workspace_payload=cli.workspace_payload)
+        workspace = {"id": "/tmp/ws", "workspace_key": "/tmp/ws", "slug": "ws", "title": "ws", "root_path": "/tmp/ws"}
+        graph = types.SimpleNamespace(name="unit")
+        base_context = {
+            "query": "needle",
+            "context_budget": {"max_chars": 2500, "used_chars": 32, "truncated": False},
+            "agent_context": [
+                {"section": "retrieved_memory", "stable_key": "graph-note:local", "text": "observation: Local One"},
+                {"section": "shared_context", "stable_key": "shared:ignore", "text": "shared observation: Ignore"},
+            ],
+            "workflow": {"status": "ok", "coverage": "strong", "complete": True},
+        }
+        calls: list[tuple[str, str, dict[str, str] | None]] = []
+
+        def fake_shared_request(_config, path, *, method="GET", payload=None, timeout=5.0):
+            calls.append((path, method, payload))
+            return {
+                "graph_slug": "autopsy",
+                "repo": "repo-a",
+                "personal_keys": ["graph-note:local"],
+                "items": [
+                    {
+                        "stable_key": "shared:1",
+                        "kind": "observation",
+                        "title": "Shared Link",
+                        "content": "private link target from shared graph",
+                        "source": {"type": "shared_server", "graph_slug": "autopsy", "repo": "repo-a"},
+                        "personal_relation": {
+                            "id": "plink_1",
+                            "personal_key": "graph-note:local",
+                            "shared_key": "shared:1",
+                            "relation": "references",
+                        },
+                    }
+                ],
+                "relations": [
+                    {"id": "rel_1", "source_key": "shared:1", "target_key": "shared:2", "relation": "supports", "fact": "one supports two"}
+                ],
+                "context_block": "Autopsy Linked Shared Context",
+            }
+
+        with (
+            mock.patch.object(cli, "open_workspace_graph", return_value=(tool, workspace, {}, graph)),
+            mock.patch.object(cli, "build_status_payload", return_value={"items": [], "workflow": {"complete": True}}),
+            mock.patch.object(cli, "build_consult_filters", return_value={}),
+            mock.patch.object(cli, "filter_status_payload_by_metadata", side_effect=lambda _graph, payload, _filters: payload),
+            mock.patch.object(cli, "build_consult_payload", return_value={"route": "hybrid", "hits": [], "items": []}),
+            mock.patch.object(cli, "build_related_memory_payload_for_consult", return_value={"items": []}),
+            mock.patch.object(cli, "context_stable_keys_from_payloads", return_value=[]),
+            mock.patch.object(cli, "fetch_context_lineage", return_value={}),
+            mock.patch.object(cli, "build_context_pack_payload", return_value=base_context),
+            mock.patch.object(cli, "load_shared_server_config", return_value={"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_shared_request),
+            mock.patch.object(cli, "refresh_activity_snapshot", return_value={}),
+        ):
+            payload = cli.build_context_command_payload(args)
+
+        self.assertEqual(payload["linked_shared_context"]["status"], "ok")
+        self.assertEqual(payload["linked_shared_context"]["personal_keys"], ["graph-note:local"])
+        self.assertIn("Linked Shared Context", payload["context_block"])
+        self.assertIn("[shared:1] linked shared observation: Shared Link", payload["context_block"])
+        self.assertIn("link: graph-note:local -references-> shared:1", payload["context_block"])
+        self.assertIn("Linked Shared Context Relations", payload["context_block"])
+        self.assertIn("linked shared relation: shared:1 -supports-> shared:2", payload["context_block"])
+        self.assertEqual(calls[0][0], "/v1/shared-graphs/autopsy/personal-context?repo=repo-a&limit=3&personal_key=graph-note%3Alocal")
 
     def test_context_command_shared_context_errors_are_nonfatal(self):
         parser = cli.build_parser()

@@ -204,6 +204,12 @@ def build_parser(
     context_parser.add_argument("--shared-limit", type=int, default=8, help="Maximum shared memories to retrieve with --include-shared.")
     context_parser.add_argument("--shared-include-archived", action="store_true", help="With --include-shared, include archived shared memories.")
     context_parser.add_argument("--shared-no-relations", action="store_true", help="With --include-shared, omit adjacent shared graph relations.")
+    context_parser.add_argument("--include-linked-shared", action="store_true", help="Also follow private personal-to-shared links from local context stable keys.")
+    context_parser.add_argument("--linked-shared-personal-key", action="append", help="Specific personal stable key to resolve through private shared links. Repeat or comma-separate.")
+    context_parser.add_argument("--linked-shared-repo-scope", help="Exact shared-server repo scope for --include-linked-shared. Defaults to --shared-repo-scope, --repo, or the current repository.")
+    context_parser.add_argument("--linked-shared-limit", type=int, default=8, help="Maximum linked shared memories to retrieve.")
+    context_parser.add_argument("--linked-shared-include-archived", action="store_true", help="With --include-linked-shared, include archived shared targets.")
+    context_parser.add_argument("--linked-shared-no-relations", action="store_true", help="With --include-linked-shared, omit adjacent shared graph relations.")
     context_parser.add_argument(
         "--format",
         choices=("json", "text"),
@@ -411,6 +417,7 @@ def build_parser(
             "unrelate",
             "link",
             "personal-links",
+            "personal-context",
             "unlink",
         ),
         default="status",
@@ -430,15 +437,15 @@ def build_parser(
     shared_server_parser.add_argument("--token", help="Bearer token for shared memory server access. Stored in a 0600 local config file.")
     shared_server_parser.add_argument("--relation", help="Relation name for shared-server link.")
     shared_server_parser.add_argument("--fact", default="", help="Optional relation fact text for shared-server link or relate.")
-    shared_server_parser.add_argument("--personal-key", help="Personal stable-key filter for shared-server personal-links, or personal key for link.")
+    shared_server_parser.add_argument("--personal-key", help="Personal stable-key filter for shared-server personal-links or personal-context, or personal key for link.")
     shared_server_parser.add_argument("--shared-key", help="Shared stable-key filter for shared-server personal-links, or shared key for link.")
     shared_server_parser.add_argument("--source-key", help="Source stable-key filter for shared-server shared-relations, or source key for relate.")
     shared_server_parser.add_argument("--target-shared-key", help="Target stable-key filter for shared-server shared-relations, or target key for relate.")
     shared_server_parser.add_argument("--reason", default="", help="Reason for shared-server archive or restore lifecycle actions.")
     shared_server_parser.add_argument("--query", default="", help="Query text for shared-server context retrieval.")
     shared_server_parser.add_argument("--limit", type=int, default=50, help="Maximum shared records to list or retrieve.")
-    shared_server_parser.add_argument("--include-archived", action="store_true", help="With shared-server list or context, include archived shared memories.")
-    shared_server_parser.add_argument("--no-relations", action="store_true", help="With shared-server context, omit adjacent shared graph relations.")
+    shared_server_parser.add_argument("--include-archived", action="store_true", help="With shared-server list, context, or personal-context, include archived shared memories.")
+    shared_server_parser.add_argument("--no-relations", action="store_true", help="With shared-server context or personal-context, omit adjacent shared graph relations.")
     shared_server_parser.add_argument(
         "--from-owner-config",
         nargs="?",
