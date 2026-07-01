@@ -4435,6 +4435,27 @@ def shared_server_memories_path(graph_slug: str, repo: str, *, limit: int, inclu
     return shared_server_path(graph_slug, f"/memories?{urllib.parse.urlencode(query)}")
 
 
+def shared_server_context_path(
+    graph_slug: str,
+    repo: str,
+    *,
+    query_text: str = "",
+    limit: int,
+    include_archived: bool = False,
+    include_relations: bool = True,
+) -> str:
+    query: dict[str, Any] = {
+        "repo": repo,
+        "query": query_text,
+        "limit": max(1, min(int(limit), 50)),
+    }
+    if include_archived:
+        query["include_archived"] = "true"
+    if not include_relations:
+        query["include_relations"] = "false"
+    return shared_server_path(graph_slug, f"/context?{urllib.parse.urlencode(query)}")
+
+
 def shared_server_memory_lifecycle_path(graph_slug: str, action: str) -> str:
     if action not in {"archive", "restore"}:
         raise ValueError("shared memory lifecycle action must be archive or restore")
@@ -4765,6 +4786,21 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
                 include_archived=bool(getattr(args, "include_archived", False)),
             ),
             timeout=10,
+        )
+        print(json.dumps(payload, indent=2))
+        return
+    if action == "context":
+        payload = shared_server_request_or_fail(
+            config,
+            shared_server_context_path(
+                graph_slug,
+                repo,
+                query_text=str(getattr(args, "query", "") or "").strip(),
+                limit=int(getattr(args, "limit", 8) or 8),
+                include_archived=bool(getattr(args, "include_archived", False)),
+                include_relations=not bool(getattr(args, "no_relations", False)),
+            ),
+            timeout=15,
         )
         print(json.dumps(payload, indent=2))
         return

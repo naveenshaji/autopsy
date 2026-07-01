@@ -594,6 +594,12 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    func copySharedServerContext(repoScope: String, query: String, includeArchived: Bool, includeRelations: Bool) {
+        Task {
+            await copySharedContext(repoScope: repoScope, query: query, includeArchived: includeArchived, includeRelations: includeRelations)
+        }
+    }
+
     func relateSharedServerMemories(sourceKey: String, targetKey: String, repoScope: String, relation: String, fact: String) {
         Task {
             await relateSharedMemories(sourceKey: sourceKey, targetKey: targetKey, repoScope: repoScope, relation: relation, fact: fact)
@@ -1064,6 +1070,42 @@ final class ActivityStore: ObservableObject {
             NSPasteboard.general.setString(output.trimmingCharacters(in: .whitespacesAndNewlines), forType: .string)
             lastActionMessage = includeArchived ? "Shared memories copied with archive" : "Shared memories copied"
             clearLastActionMessageAfterDelay(expected: lastActionMessage ?? "")
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
+    }
+
+    private func copySharedContext(repoScope: String, query: String, includeArchived: Bool, includeRelations: Bool) async {
+        guard !isManagingSharedAccess else { return }
+        isManagingSharedAccess = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingSharedAccess = false
+        }
+
+        do {
+            var arguments = [
+                "shared-server",
+                "context",
+                "--repo-scope",
+                normalizedRepoScope(repoScope),
+                "--query",
+                query.trimmingCharacters(in: .whitespacesAndNewlines),
+                "--limit",
+                "8",
+            ]
+            if includeArchived {
+                arguments.append("--include-archived")
+            }
+            if !includeRelations {
+                arguments.append("--no-relations")
+            }
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run(arguments)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(output.trimmingCharacters(in: .whitespacesAndNewlines), forType: .string)
+            lastActionMessage = "Shared context copied"
+            clearLastActionMessageAfterDelay(expected: "Shared context copied")
         } catch {
             sharedServerError = error.localizedDescription
         }

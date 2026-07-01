@@ -161,6 +161,18 @@ class AutopsyCLIContractTests(unittest.TestCase):
         revoke_args = parser.parse_args(["shared-server", "revoke-token", "tok_1"])
         audit_args = parser.parse_args(["shared-server", "audit", "--repo-scope", "repo-a", "--limit", "25"])
         list_args = parser.parse_args(["shared-server", "list", "--repo-scope", "repo-a", "--include-archived", "--limit", "10"])
+        context_args = parser.parse_args([
+            "shared-server",
+            "context",
+            "--repo-scope",
+            "repo-a",
+            "--query",
+            "needle context",
+            "--include-archived",
+            "--no-relations",
+            "--limit",
+            "5",
+        ])
         archive_args = parser.parse_args(["shared-server", "archive", "shared:1", "--repo-scope", "repo-a", "--reason", "duplicate"])
         restore_args = parser.parse_args(["shared-server", "restore", "shared:1", "--repo-scope", "repo-a", "--reason", "needed"])
         relate_args = parser.parse_args(["shared-server", "relate", "shared:1", "shared:2", "--repo-scope", "repo-a", "--relation", "depends_on"])
@@ -213,6 +225,11 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(list_args.shared_server_action, "list")
         self.assertTrue(list_args.include_archived)
         self.assertEqual(list_args.limit, 10)
+        self.assertEqual(context_args.shared_server_action, "context")
+        self.assertEqual(context_args.query, "needle context")
+        self.assertTrue(context_args.include_archived)
+        self.assertTrue(context_args.no_relations)
+        self.assertEqual(context_args.limit, 5)
         self.assertEqual(archive_args.shared_server_action, "archive")
         self.assertEqual(archive_args.stable_key, "shared:1")
         self.assertEqual(archive_args.reason, "duplicate")
@@ -254,6 +271,17 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(
             cli.shared_server_memories_path("autopsy", "repo-a", limit=25, include_archived=True),
             "/v1/shared-graphs/autopsy/memories?repo=repo-a&limit=25&include_archived=true",
+        )
+        self.assertEqual(
+            cli.shared_server_context_path(
+                "autopsy",
+                "repo-a",
+                query_text="needle context",
+                limit=25,
+                include_archived=True,
+                include_relations=False,
+            ),
+            "/v1/shared-graphs/autopsy/context?repo=repo-a&query=needle+context&limit=25&include_archived=true&include_relations=false",
         )
         self.assertEqual(cli.shared_server_memory_lifecycle_path("autopsy", "archive"), "/v1/shared-graphs/autopsy/memories/archive")
         self.assertEqual(cli.shared_server_memory_lifecycle_path("autopsy", "restore"), "/v1/shared-graphs/autopsy/memories/restore")
@@ -426,6 +454,52 @@ class AutopsyCLIContractTests(unittest.TestCase):
             [
                 (
                     "/v1/shared-graphs/autopsy/relations?repo=repo-a&limit=10&source_key=shared%3A1&target_key=shared%3A2",
+                    "GET",
+                    None,
+                )
+            ],
+        )
+
+    def test_shared_server_context_fetches_source_attributed_context(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "shared-server",
+            "context",
+            "--repo-scope",
+            "repo-a",
+            "--query",
+            "needle context",
+            "--include-archived",
+            "--no-relations",
+            "--limit",
+            "10",
+        ])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        calls: list[tuple[str, str, dict[str, str] | None]] = []
+
+        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
+            calls.append((path, method, payload))
+            return {
+                "items": [{"stable_key": "shared:1", "source": {"type": "shared_server"}}],
+                "context_block": "Autopsy Shared Context\n- [shared:1] observation: One",
+            }
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        payload = json.loads(stream.getvalue())
+        self.assertEqual(payload["items"][0]["source"]["type"], "shared_server")
+        self.assertIn("Autopsy Shared Context", payload["context_block"])
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "/v1/shared-graphs/autopsy/context?repo=repo-a&query=needle+context&limit=10&include_archived=true&include_relations=false",
                     "GET",
                     None,
                 )

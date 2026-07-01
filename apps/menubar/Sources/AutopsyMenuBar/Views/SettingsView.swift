@@ -125,6 +125,10 @@ private struct SharedSettingsTab: View {
     @State private var sharedMemoryStableKey = ""
     @State private var sharedMemoryRepoScope = ""
     @State private var sharedMemoryReason = ""
+    @State private var sharedContextQuery = ""
+    @State private var sharedContextRepoScope = ""
+    @State private var sharedContextIncludeArchived = false
+    @State private var sharedContextIncludeRelations = true
     @State private var sharedRelationSourceKey = ""
     @State private var sharedRelationTargetKey = ""
     @State private var sharedRelationRepoScope = ""
@@ -247,6 +251,24 @@ private struct SharedSettingsTab: View {
                     }
                     .disabled(sharedActionDisabled)
                 }
+            }
+
+            Section("Shared Context") {
+                TextField("Query", text: $sharedContextQuery)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Repo Scope", text: $sharedContextRepoScope)
+                    .textFieldStyle(.roundedBorder)
+                Toggle("Include Relations", isOn: $sharedContextIncludeRelations)
+                Toggle("Include Archived", isOn: $sharedContextIncludeArchived)
+                Button("Copy Context") {
+                    store.copySharedServerContext(
+                        repoScope: sharedContextRepoScope,
+                        query: sharedContextQuery,
+                        includeArchived: sharedContextIncludeArchived,
+                        includeRelations: sharedContextIncludeRelations
+                    )
+                }
+                .disabled(sharedActionDisabled)
             }
 
             Section("Shared Relations") {
@@ -442,6 +464,9 @@ private struct SharedSettingsTab: View {
             }
             if sharedMemoryRepoScope.isEmpty {
                 sharedMemoryRepoScope = store.sharedServerDefaultRepoScope
+            }
+            if sharedContextRepoScope.isEmpty {
+                sharedContextRepoScope = store.sharedServerDefaultRepoScope
             }
             if sharedRelationRepoScope.isEmpty {
                 sharedRelationRepoScope = store.sharedServerDefaultRepoScope

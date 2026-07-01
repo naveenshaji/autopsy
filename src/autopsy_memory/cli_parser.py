@@ -398,6 +398,7 @@ def build_parser(
             "archive",
             "restore",
             "relate",
+            "context",
             "shared-relations",
             "unrelate",
             "link",
@@ -426,8 +427,10 @@ def build_parser(
     shared_server_parser.add_argument("--source-key", help="Source stable-key filter for shared-server shared-relations, or source key for relate.")
     shared_server_parser.add_argument("--target-shared-key", help="Target stable-key filter for shared-server shared-relations, or target key for relate.")
     shared_server_parser.add_argument("--reason", default="", help="Reason for shared-server archive or restore lifecycle actions.")
-    shared_server_parser.add_argument("--limit", type=int, default=50, help="Maximum shared memories to list.")
-    shared_server_parser.add_argument("--include-archived", action="store_true", help="With shared-server list, include archived shared memories.")
+    shared_server_parser.add_argument("--query", default="", help="Query text for shared-server context retrieval.")
+    shared_server_parser.add_argument("--limit", type=int, default=50, help="Maximum shared records to list or retrieve.")
+    shared_server_parser.add_argument("--include-archived", action="store_true", help="With shared-server list or context, include archived shared memories.")
+    shared_server_parser.add_argument("--no-relations", action="store_true", help="With shared-server context, omit adjacent shared graph relations.")
     shared_server_parser.add_argument(
         "--from-owner-config",
         nargs="?",

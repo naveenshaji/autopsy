@@ -79,6 +79,7 @@ autopsy shared-server invite --email dev@example.com --role writer --repo-scope 
 autopsy shared-server revoke-token tok_123 --repo-scope /path/to/repo
 autopsy shared-server archive shared:key --repo-scope /path/to/repo --reason duplicate
 autopsy shared-server list --repo-scope /path/to/repo --include-archived
+autopsy shared-server context --repo-scope /path/to/repo --query "current task"
 autopsy shared-server restore shared:key --repo-scope /path/to/repo --reason needed
 autopsy shared-server relate shared:source shared:target --repo-scope /path/to/repo --relation depends_on
 autopsy shared-server shared-relations --repo-scope /path/to/repo --source-key shared:source
@@ -121,6 +122,9 @@ tokens for repos they own without global token access. `shared-server audit
 scope such as a repo URL, stable repo id, or `*`. `shared-server publish
 <stable-key> --repo <repo>` copies a local memory item into the configured shared
 graph, `shared-server list --repo <repo>` lists repo-scoped shared memories, and
+`shared-server context --repo-scope <repo> --query <text>` fetches
+source-attributed shared memories plus adjacent shared graph relations as a
+ready-to-insert context block without importing them into the personal graph.
 `shared-server link <personal-key> <shared-key> --repo <repo> --relation <name>`
 creates a private personal-to-shared relation without uploading the personal
 graph. `shared-server personal-links --repo-scope <repo>` lists only your own
