@@ -389,6 +389,7 @@ def build_parser(
             "create-token",
             "grants",
             "grant",
+            "audit",
             "revoke-token",
             "revoke-grant",
             "publish",

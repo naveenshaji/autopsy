@@ -4406,6 +4406,16 @@ def shared_server_grants_path(graph_slug: str, repo: str | None) -> str:
     return shared_server_path(graph_slug, suffix)
 
 
+def shared_server_audit_path(graph_slug: str, repo: str | None, *, limit: int) -> str:
+    query: dict[str, Any] = {
+        "graph_slug": graph_slug,
+        "limit": max(1, min(int(limit), 500)),
+    }
+    if repo and repo != "*":
+        query["repo"] = repo
+    return f"/v1/audit-events?{urllib.parse.urlencode(query)}"
+
+
 def summarize_shared_server_grants(items: list[dict[str, Any]]) -> dict[str, Any]:
     role_counts: dict[str, int] = {}
     repos: set[str] = set()
@@ -4592,6 +4602,14 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         return
     if action == "grants":
         payload = shared_server_request_or_fail(config, shared_server_grants_path(graph_slug, repo), timeout=10)
+        print(json.dumps(payload, indent=2))
+        return
+    if action == "audit":
+        payload = shared_server_request_or_fail(
+            config,
+            shared_server_audit_path(graph_slug, repo, limit=int(getattr(args, "limit", 100) or 100)),
+            timeout=10,
+        )
         print(json.dumps(payload, indent=2))
         return
     if action == "grant":
