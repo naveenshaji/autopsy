@@ -558,6 +558,12 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    func inviteSharedServerUser(email: String, name: String, repoScope: String, role: String, label: String) {
+        Task {
+            await inviteSharedUser(email: email, name: name, repoScope: repoScope, role: role, label: label)
+        }
+    }
+
     func grantSharedServerAccess(userID: String, repoScope: String, role: String) {
         Task {
             await grantSharedAccess(userID: userID, repoScope: repoScope, role: role)
@@ -844,6 +850,49 @@ final class ActivityStore: ObservableObject {
             ],
             successMessage: "Shared grant updated"
         )
+    }
+
+    private func inviteSharedUser(email: String, name: String, repoScope: String, role: String, label: String) async {
+        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedEmail.isEmpty else {
+            sharedServerError = "Email required"
+            return
+        }
+        guard !isManagingSharedAccess else { return }
+        isManagingSharedAccess = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingSharedAccess = false
+        }
+
+        do {
+            let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run([
+                "shared-server",
+                "invite",
+                "--email",
+                trimmedEmail,
+                "--name",
+                name.trimmingCharacters(in: .whitespacesAndNewlines),
+                "--repo-scope",
+                normalizedRepoScope(repoScope),
+                "--role",
+                role,
+                "--label",
+                trimmedLabel.isEmpty ? "menubar-invite" : trimmedLabel,
+            ])
+            guard let token = jsonObject(from: output)?["token"] as? String, !token.isEmpty else {
+                throw CLIError.failed("shared server did not return an invite token")
+            }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(token, forType: .string)
+            lastActionMessage = "Invite token copied"
+            clearLastActionMessageAfterDelay(expected: "Invite token copied")
+            await loadSharedServerTeamStatus()
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
     }
 
     private func revokeSharedAccess(userID: String, repoScope: String) async {

@@ -116,6 +116,9 @@ private struct SharedSettingsTab: View {
     @ObservedObject var store: ActivityStore
     @State private var newUserEmail = ""
     @State private var newUserName = ""
+    @State private var inviteRepoScope = ""
+    @State private var inviteRole = "writer"
+    @State private var inviteTokenLabel = "menubar-invite"
     @State private var grantUserID = ""
     @State private var grantRepoScope = ""
     @State private var grantRole = "reader"
@@ -162,18 +165,34 @@ private struct SharedSettingsTab: View {
                 }
             }
 
-            Section("Users") {
+            Section("Invite User") {
                 TextField("Email", text: $newUserEmail)
                     .textFieldStyle(.roundedBorder)
                 TextField("Name", text: $newUserName)
                     .textFieldStyle(.roundedBorder)
-                Button("Create User") {
-                    store.createSharedServerUser(email: newUserEmail, name: newUserName)
+                TextField("Repo Scope", text: $inviteRepoScope)
+                    .textFieldStyle(.roundedBorder)
+                Picker("Role", selection: $inviteRole) {
+                    ForEach(roles, id: \.self) { role in
+                        Text(role.capitalized).tag(role)
+                    }
+                }
+                .pickerStyle(.segmented)
+                TextField("Token Label", text: $inviteTokenLabel)
+                    .textFieldStyle(.roundedBorder)
+                Button("Invite User") {
+                    store.inviteSharedServerUser(
+                        email: newUserEmail,
+                        name: newUserName,
+                        repoScope: inviteRepoScope,
+                        role: inviteRole,
+                        label: inviteTokenLabel
+                    )
                 }
                 .disabled(sharedActionDisabled || newUserEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
 
-            Section("Repo Access") {
+            Section("Advanced Repo Access") {
                 TextField("User ID", text: $grantUserID)
                     .textFieldStyle(.roundedBorder)
                 TextField("Repo Scope", text: $grantRepoScope)
@@ -238,6 +257,9 @@ private struct SharedSettingsTab: View {
         .onAppear {
             if grantRepoScope.isEmpty {
                 grantRepoScope = store.sharedServerDefaultRepoScope
+            }
+            if inviteRepoScope.isEmpty {
+                inviteRepoScope = store.sharedServerDefaultRepoScope
             }
             if auditRepoScope.isEmpty {
                 auditRepoScope = store.sharedServerDefaultRepoScope

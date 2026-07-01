@@ -159,6 +159,20 @@ class AutopsyCLIContractTests(unittest.TestCase):
         ])
         revoke_args = parser.parse_args(["shared-server", "revoke-token", "tok_1"])
         audit_args = parser.parse_args(["shared-server", "audit", "--repo-scope", "repo-a", "--limit", "25"])
+        invite_args = parser.parse_args([
+            "shared-server",
+            "invite",
+            "--email",
+            "dev@example.com",
+            "--name",
+            "Dev",
+            "--role",
+            "writer",
+            "--repo-scope",
+            "repo-a",
+            "--label",
+            "laptop",
+        ])
 
         self.assertEqual(grant_args.shared_server_action, "grant")
         self.assertEqual(grant_args.user_id, "usr_1")
@@ -169,6 +183,10 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(audit_args.shared_server_action, "audit")
         self.assertEqual(audit_args.repo_scope, "repo-a")
         self.assertEqual(audit_args.limit, 25)
+        self.assertEqual(invite_args.shared_server_action, "invite")
+        self.assertEqual(invite_args.email, "dev@example.com")
+        self.assertEqual(invite_args.role, "writer")
+        self.assertEqual(invite_args.repo_scope, "repo-a")
 
     def test_shared_server_audit_path_scopes_graph_repo_and_limit(self):
         path = cli.shared_server_audit_path("autopsy", "repo-a", limit=25)
@@ -176,6 +194,9 @@ class AutopsyCLIContractTests(unittest.TestCase):
 
         self.assertEqual(path, "/v1/audit-events?graph_slug=autopsy&limit=25&repo=repo-a")
         self.assertEqual(unscoped_path, "/v1/audit-events?graph_slug=autopsy&limit=500")
+
+    def test_shared_server_invitation_path_is_graph_scoped(self):
+        self.assertEqual(cli.shared_server_invitation_path("autopsy"), "/v1/shared-graphs/autopsy/invitations")
 
     def test_shared_server_config_is_written_private_and_redacted(self):
         parser = cli.build_parser()

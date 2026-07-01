@@ -4416,6 +4416,10 @@ def shared_server_audit_path(graph_slug: str, repo: str | None, *, limit: int) -
     return f"/v1/audit-events?{urllib.parse.urlencode(query)}"
 
 
+def shared_server_invitation_path(graph_slug: str) -> str:
+    return shared_server_path(graph_slug, "/invitations")
+
+
 def summarize_shared_server_grants(items: list[dict[str, Any]]) -> dict[str, Any]:
     role_counts: dict[str, int] = {}
     repos: set[str] = set()
@@ -4608,6 +4612,26 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         payload = shared_server_request_or_fail(
             config,
             shared_server_audit_path(graph_slug, repo, limit=int(getattr(args, "limit", 100) or 100)),
+            timeout=10,
+        )
+        print(json.dumps(payload, indent=2))
+        return
+    if action == "invite":
+        email = str(getattr(args, "email", "") or "").strip()
+        role = str(getattr(args, "role", "") or "reader").strip()
+        if not email:
+            fail("shared-server invite requires --email", 2)
+        payload = shared_server_request_or_fail(
+            config,
+            shared_server_invitation_path(graph_slug),
+            method="POST",
+            payload={
+                "email": email,
+                "name": str(getattr(args, "name", "") or ""),
+                "repo": repo,
+                "role": role,
+                "label": str(getattr(args, "label", "") or "invite"),
+            },
             timeout=10,
         )
         print(json.dumps(payload, indent=2))

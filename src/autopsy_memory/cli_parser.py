@@ -390,6 +390,7 @@ def build_parser(
             "grants",
             "grant",
             "audit",
+            "invite",
             "revoke-token",
             "revoke-grant",
             "publish",
@@ -405,10 +406,10 @@ def build_parser(
     shared_server_parser.add_argument("--base-url", help="Shared server base URL, for example https://autopsy-server.fly.dev.")
     shared_server_parser.add_argument("--graph-slug", help="Shared graph slug. Defaults to autopsy when configuring.")
     shared_server_parser.add_argument("--user-id", help="Server user id for config, token, or grant operations.")
-    shared_server_parser.add_argument("--email", help="Email for shared-server create-user.")
-    shared_server_parser.add_argument("--name", default="", help="Display name for shared-server create-user.")
-    shared_server_parser.add_argument("--label", default="default", help="Token label for shared-server create-token.")
-    shared_server_parser.add_argument("--role", choices=("reader", "writer", "owner"), help="Grant role for shared-server grant.")
+    shared_server_parser.add_argument("--email", help="Email for shared-server create-user or invite.")
+    shared_server_parser.add_argument("--name", default="", help="Display name for shared-server create-user or invite.")
+    shared_server_parser.add_argument("--label", default="default", help="Token label for shared-server create-token or invite.")
+    shared_server_parser.add_argument("--role", choices=("reader", "writer", "owner"), help="Grant role for shared-server grant or invite.")
     shared_server_parser.add_argument("--repo-scope", help="Exact shared-server repo scope. Overrides --repo path resolution for shared-server operations.")
     shared_server_parser.add_argument("--token", help="Bearer token for shared memory server access. Stored in a 0600 local config file.")
     shared_server_parser.add_argument("--relation", help="Relation name for shared-server link.")
