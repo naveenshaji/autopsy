@@ -475,6 +475,39 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "HTTP 403: write access denied; reason=insufficient_role; role=reader; repo=repo-a; mode=write; capabilities=read",
         )
 
+    def test_shared_server_http_error_formats_structured_guard_detail(self):
+        error = urllib.error.HTTPError(
+            "/v1/shared-graphs/autopsy/memories",
+            422,
+            "Unprocessable Content",
+            {},
+            io.BytesIO(
+                json.dumps(
+                    {
+                        "detail": {
+                            "error": "shared write rejected by unsafe-memory guard",
+                            "operation": "upsert_memory",
+                            "target": "shared:unsafe",
+                            "guard": {
+                                "block_reason_codes": ["sensitive_memory_exposure"],
+                                "warnings": [
+                                    {
+                                        "fields": ["content"],
+                                        "types": ["credential_assignment"],
+                                    }
+                                ],
+                            },
+                        }
+                    }
+                ).encode()
+            ),
+        )
+
+        self.assertEqual(
+            cli.shared_server_http_error_message(error),
+            "HTTP 422: shared write rejected by unsafe-memory guard; operation=upsert_memory; target=shared:unsafe; codes=sensitive_memory_exposure; fields=content; types=credential_assignment",
+        )
+
     def test_shared_server_archive_posts_lifecycle_payload(self):
         parser = cli.build_parser()
         args = parser.parse_args(["shared-server", "archive", "shared:1", "--repo-scope", "repo-a", "--reason", "duplicate"])

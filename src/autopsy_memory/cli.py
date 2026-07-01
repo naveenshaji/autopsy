@@ -4354,6 +4354,42 @@ def format_shared_server_error_detail(value: Any) -> str:
             if enabled_capabilities:
                 parts.append(f"capabilities={','.join(enabled_capabilities)}")
             return "; ".join(parts)
+        guard = value.get("guard") if isinstance(value.get("guard"), dict) else {}
+        if guard:
+            parts = [str(value.get("error") or "shared write rejected")]
+            operation = str(value.get("operation") or "").strip()
+            target = str(value.get("target") or "").strip()
+            codes = [str(code) for code in guard.get("block_reason_codes", []) if str(code)]
+            warnings = guard.get("warnings") if isinstance(guard.get("warnings"), list) else []
+            fields = sorted(
+                {
+                    str(field)
+                    for warning in warnings
+                    if isinstance(warning, dict)
+                    for field in warning.get("fields", [])
+                    if str(field)
+                }
+            )
+            types = sorted(
+                {
+                    str(finding_type)
+                    for warning in warnings
+                    if isinstance(warning, dict)
+                    for finding_type in warning.get("types", [])
+                    if str(finding_type)
+                }
+            )
+            if operation:
+                parts.append(f"operation={operation}")
+            if target:
+                parts.append(f"target={target}")
+            if codes:
+                parts.append(f"codes={','.join(codes)}")
+            if fields:
+                parts.append(f"fields={','.join(fields)}")
+            if types:
+                parts.append(f"types={','.join(types)}")
+            return "; ".join(parts)
         return json.dumps(value, sort_keys=True)
     return str(value)
 
