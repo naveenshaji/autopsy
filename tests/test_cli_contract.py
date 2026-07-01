@@ -162,6 +162,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         access_check_args = parser.parse_args(["shared-server", "access-check", "--repo-scope", "repo-a", "--mode", "write"])
         audit_args = parser.parse_args(["shared-server", "audit", "--repo-scope", "repo-a", "--limit", "25"])
         list_args = parser.parse_args(["shared-server", "list", "--repo-scope", "repo-a", "--include-archived", "--limit", "10"])
+        history_args = parser.parse_args(["shared-server", "memory-history", "shared:1", "--repo-scope", "repo-a", "--limit", "10"])
         context_args = parser.parse_args([
             "shared-server",
             "context",
@@ -239,6 +240,9 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(list_args.shared_server_action, "list")
         self.assertTrue(list_args.include_archived)
         self.assertEqual(list_args.limit, 10)
+        self.assertEqual(history_args.shared_server_action, "memory-history")
+        self.assertEqual(history_args.stable_key, "shared:1")
+        self.assertEqual(history_args.limit, 10)
         self.assertEqual(context_args.shared_server_action, "context")
         self.assertEqual(context_args.query, "needle context")
         self.assertTrue(context_args.include_archived)
@@ -294,6 +298,10 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(
             cli.shared_server_memories_path("autopsy", "repo-a", limit=25, include_archived=True),
             "/v1/shared-graphs/autopsy/memories?repo=repo-a&limit=25&include_archived=true",
+        )
+        self.assertEqual(
+            cli.shared_server_memory_history_path("autopsy", "repo-a", "shared:1", limit=25),
+            "/v1/shared-graphs/autopsy/memories/history?repo=repo-a&stable_key=shared%3A1&limit=25",
         )
         self.assertEqual(
             cli.shared_server_context_path(
@@ -467,6 +475,36 @@ class AutopsyCLIContractTests(unittest.TestCase):
                     "/v1/shared-graphs/autopsy/memories/archive",
                     "POST",
                     {"stable_key": "shared:1", "repo": "repo-a", "reason": "duplicate"},
+                )
+            ],
+        )
+
+    def test_shared_server_memory_history_fetches_versions(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["shared-server", "memory-history", "shared:1", "--repo-scope", "repo-a", "--limit", "10"])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        calls: list[tuple[str, str, dict[str, str] | None]] = []
+
+        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
+            calls.append((path, method, payload))
+            return {"stable_key": "shared:1", "items": [{"id": "ver_2", "title": "Second"}]}
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        self.assertEqual(json.loads(stream.getvalue())["items"][0]["id"], "ver_2")
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "/v1/shared-graphs/autopsy/memories/history?repo=repo-a&stable_key=shared%3A1&limit=10",
+                    "GET",
+                    None,
                 )
             ],
         )

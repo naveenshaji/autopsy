@@ -270,6 +270,14 @@ private struct SharedSettingsTab: View {
                         store.copySharedServerMemories(repoScope: sharedMemoryRepoScope, includeArchived: true)
                     }
                     .disabled(sharedActionDisabled)
+
+                    Button("Copy History") {
+                        store.copySharedServerMemoryHistory(
+                            stableKey: sharedMemoryStableKey,
+                            repoScope: sharedMemoryRepoScope
+                        )
+                    }
+                    .disabled(sharedActionDisabled || sharedMemoryStableKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
 

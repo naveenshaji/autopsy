@@ -410,6 +410,7 @@ def build_parser(
             "revoke-grant",
             "publish",
             "list",
+            "memory-history",
             "archive",
             "restore",
             "relate",
@@ -422,9 +423,9 @@ def build_parser(
             "unlink",
         ),
         default="status",
-        help="Configure, check, administer shared access, publish local memory, list shared memory, or manage shared and personal relations.",
+        help="Configure, check, administer shared access, publish local memory, list shared memory, inspect shared history, or manage shared and personal relations.",
     )
-    shared_server_parser.add_argument("stable_key", nargs="?", help="Primary id: stable key for publish/link/relate, token id for revoke-token, or relation id for unlink/unrelate.")
+    shared_server_parser.add_argument("stable_key", nargs="?", help="Primary id: stable key for publish/link/relate/memory-history, token id for revoke-token, or relation id for unlink/unrelate.")
     shared_server_parser.add_argument("target_key", nargs="?", help="Target shared memory stable key for link or relate.")
     shared_server_parser.add_argument("--config", dest="shared_server_config", help="Path to the local shared-server config JSON.")
     shared_server_parser.add_argument("--base-url", help="Shared server base URL, for example https://autopsy-server.fly.dev.")

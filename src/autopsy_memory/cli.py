@@ -4492,6 +4492,15 @@ def shared_server_memories_path(graph_slug: str, repo: str, *, limit: int, inclu
     return shared_server_path(graph_slug, f"/memories?{urllib.parse.urlencode(query)}")
 
 
+def shared_server_memory_history_path(graph_slug: str, repo: str, stable_key: str, *, limit: int) -> str:
+    query: dict[str, Any] = {
+        "repo": repo,
+        "stable_key": stable_key,
+        "limit": max(1, min(int(limit), 100)),
+    }
+    return shared_server_path(graph_slug, f"/memories/history?{urllib.parse.urlencode(query)}")
+
+
 def shared_server_context_path(
     graph_slug: str,
     repo: str,
@@ -5234,6 +5243,22 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
                 repo,
                 limit=int(getattr(args, "limit", 50) or 50),
                 include_archived=bool(getattr(args, "include_archived", False)),
+            ),
+            timeout=10,
+        )
+        print(json.dumps(payload, indent=2))
+        return
+    if action == "memory-history":
+        stable_key = str(getattr(args, "stable_key", "") or "").strip()
+        if not stable_key:
+            fail("shared-server memory-history requires a stable key", 2)
+        payload = shared_server_request_or_fail(
+            config,
+            shared_server_memory_history_path(
+                graph_slug,
+                repo,
+                stable_key,
+                limit=int(getattr(args, "limit", 50) or 50),
             ),
             timeout=10,
         )

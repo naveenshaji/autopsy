@@ -82,6 +82,7 @@ autopsy shared-server invite --email dev@example.com --role writer --repo-scope 
 autopsy shared-server revoke-token tok_123 --repo-scope /path/to/repo
 autopsy shared-server archive shared:key --repo-scope /path/to/repo --reason duplicate
 autopsy shared-server list --repo-scope /path/to/repo --include-archived
+autopsy shared-server memory-history shared:key --repo-scope /path/to/repo
 autopsy shared-server context --repo-scope /path/to/repo --query "current task"
 autopsy shared-server restore shared:key --repo-scope /path/to/repo --reason needed
 autopsy shared-server relate shared:source shared:target --repo-scope /path/to/repo --relation depends_on
@@ -147,6 +148,8 @@ including the matching caller-owned grant and capabilities.
 scope such as a repo URL, stable repo id, or `*`. `shared-server publish
 <stable-key> --repo <repo>` copies a local memory item into the configured shared
 graph, `shared-server list --repo <repo>` lists repo-scoped shared memories, and
+`shared-server memory-history <shared-key> --repo-scope <repo>` lists immutable
+versions created by each shared-memory publish or upsert, newest first.
 `shared-server context --repo-scope <repo> --query <text>` fetches
 source-attributed shared memories plus adjacent shared graph relations as a
 ready-to-insert context block without importing them into the personal graph.

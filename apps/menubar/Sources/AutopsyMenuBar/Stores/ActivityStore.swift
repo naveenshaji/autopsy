@@ -600,6 +600,12 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    func copySharedServerMemoryHistory(stableKey: String, repoScope: String) {
+        Task {
+            await copySharedMemoryHistory(stableKey: stableKey, repoScope: repoScope)
+        }
+    }
+
     func copySharedServerContext(repoScope: String, query: String, includeArchived: Bool, includeRelations: Bool) {
         Task {
             await copySharedContext(repoScope: repoScope, query: query, includeArchived: includeArchived, includeRelations: includeRelations)
@@ -1109,6 +1115,39 @@ final class ActivityStore: ObservableObject {
             NSPasteboard.general.setString(output.trimmingCharacters(in: .whitespacesAndNewlines), forType: .string)
             lastActionMessage = includeArchived ? "Shared memories copied with archive" : "Shared memories copied"
             clearLastActionMessageAfterDelay(expected: lastActionMessage ?? "")
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
+    }
+
+    private func copySharedMemoryHistory(stableKey: String, repoScope: String) async {
+        let trimmedStableKey = stableKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedStableKey.isEmpty else {
+            sharedServerError = "Stable key required"
+            return
+        }
+        guard !isManagingSharedAccess else { return }
+        isManagingSharedAccess = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingSharedAccess = false
+        }
+
+        do {
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run([
+                "shared-server",
+                "memory-history",
+                trimmedStableKey,
+                "--repo-scope",
+                normalizedRepoScope(repoScope),
+                "--limit",
+                "20",
+            ])
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(output.trimmingCharacters(in: .whitespacesAndNewlines), forType: .string)
+            lastActionMessage = "Shared history copied"
+            clearLastActionMessageAfterDelay(expected: "Shared history copied")
         } catch {
             sharedServerError = error.localizedDescription
         }
