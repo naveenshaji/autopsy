@@ -137,6 +137,51 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(alias_args.command, "import")
         self.assertFalse(alias_args.replace)
 
+    def test_shared_server_parser_accepts_configure_from_owner_config(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["shared-server", "configure", "--from-owner-config"])
+
+        self.assertEqual(args.command, "shared-server")
+        self.assertEqual(args.shared_server_action, "configure")
+        self.assertEqual(args.from_owner_config, "")
+
+    def test_shared_server_config_is_written_private_and_redacted(self):
+        parser = cli.build_parser()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "shared.json"
+            args = parser.parse_args([
+                "shared-server",
+                "configure",
+                "--config",
+                str(config_path),
+                "--base-url",
+                "https://autopsy-server.fly.dev/",
+                "--graph-slug",
+                "autopsy",
+                "--user-id",
+                "usr_1",
+                "--token",
+                "secret-token",
+            ])
+            stream = io.StringIO()
+            with contextlib.redirect_stdout(stream):
+                args.func(args)
+            payload = json.loads(stream.getvalue())
+            stored = json.loads(config_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["base_url"], "https://autopsy-server.fly.dev")
+        self.assertTrue(payload["token_configured"])
+        self.assertNotIn("secret-token", json.dumps(payload))
+        self.assertEqual(stored["token"], "secret-token")
+
+    def test_shared_server_status_reports_missing_config_without_token(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            payload = cli.build_shared_server_status_payload(config_path=str(Path(temp_dir) / "missing.json"))
+
+        self.assertFalse(payload["configured"])
+        self.assertEqual(payload["status"], "missing")
+        self.assertNotIn("token", payload)
+
     def test_restore_offline_requires_dry_run(self):
         parser = cli.build_parser()
         args = parser.parse_args(["restore", "/tmp/export.json", "--offline"])

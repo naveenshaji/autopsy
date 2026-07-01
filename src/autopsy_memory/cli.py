@@ -15,6 +15,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.request
 import uuid
 from collections import deque
 from datetime import datetime, timezone
@@ -37,6 +39,8 @@ FALKORDB_LITE_PATH_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "FalkorDB" / "autopsy-mem
 GLOBAL_MEMORY_SETTINGS_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "Config" / "memory-settings.json"
 UNIFIED_MEMORY_ROOT_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "MemoryRoot"
 ACTIVITY_SNAPSHOT_PATH_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "Activity" / "activity.json"
+SHARED_SERVER_CONFIG_PATH_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "SharedServer" / "config.json"
+SHARED_SERVER_OWNER_CONFIG_DEFAULT = Path.home() / ".config" / "autopsy-server" / "owner.json"
 MODEL_WARMUP_STATUS_PATH_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "ML" / "model-warmup.json"
 STATUS_WINDOW_DAYS_DEFAULT = 21
 MENUBAR_RELATIVE_DIR = Path("apps") / "menubar"
@@ -4234,6 +4238,7 @@ def build_activity_payload(
     return {
         "workspace": tool.workspace_payload(workspace),
         "onboarding": onboarding,
+        "shared_server": build_shared_server_status_payload(),
         "activity": {
             "summary": f"{len(writes)} recent writes, {len(consults)} recent consults",
             "recent_writes": writes,
@@ -4249,6 +4254,151 @@ def build_activity_payload(
             "message": f"{len(writes)} recent writes, {len(consults)} recent consults",
         },
     }
+
+
+def shared_server_config_path(path: str | None = None) -> Path:
+    configured = path or os.environ.get("AUTOPSY_SHARED_SERVER_CONFIG")
+    return Path(configured).expanduser() if configured else SHARED_SERVER_CONFIG_PATH_DEFAULT
+
+
+def load_shared_server_config(path: str | None = None) -> dict[str, Any] | None:
+    config_path = shared_server_config_path(path)
+    if not config_path.exists():
+        return None
+    try:
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def redacted_shared_server_config(config: dict[str, Any] | None, *, path: str | None = None) -> dict[str, Any]:
+    config_path = shared_server_config_path(path)
+    if not config:
+        return {
+            "configured": False,
+            "status": "missing",
+            "config_path": str(config_path),
+            "message": "Shared memory server is not configured.",
+        }
+    base_url = str(config.get("base_url") or "").rstrip("/")
+    graph_slug = str(config.get("graph_slug") or "")
+    token = str(config.get("token") or "")
+    return {
+        "configured": bool(base_url and graph_slug and token),
+        "status": "configured" if base_url and graph_slug and token else "incomplete",
+        "config_path": str(config_path),
+        "base_url": base_url,
+        "graph_slug": graph_slug,
+        "user_id": str(config.get("user_id") or ""),
+        "token_configured": bool(token),
+    }
+
+
+def write_shared_server_config(config: dict[str, Any], *, path: str | None = None) -> Path:
+    config_path = shared_server_config_path(path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    try:
+        os.chmod(config_path, 0o600)
+    except OSError:
+        pass
+    return config_path
+
+
+def shared_server_request(config: dict[str, Any], path: str, *, timeout: float = 5.0) -> dict[str, Any]:
+    base_url = str(config.get("base_url") or "").rstrip("/")
+    token = str(config.get("token") or "")
+    if not base_url:
+        raise RuntimeError("shared server base_url is missing")
+    headers = {"accept": "application/json"}
+    if token:
+        headers["authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(f"{base_url}{path}", headers=headers, method="GET")
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def build_shared_server_status_payload(*, check_remote: bool = False, config_path: str | None = None) -> dict[str, Any]:
+    config = load_shared_server_config(config_path)
+    payload = redacted_shared_server_config(config, path=config_path)
+    if not check_remote or not payload.get("configured") or not config:
+        return payload
+    try:
+        health = shared_server_request(config, "/health")
+        me = shared_server_request(config, "/v1/me")
+    except urllib.error.HTTPError as exc:
+        payload.update(
+            {
+                "status": "error",
+                "remote_ok": False,
+                "error": f"HTTP {exc.code}: {exc.reason}",
+            }
+        )
+    except Exception as exc:
+        payload.update(
+            {
+                "status": "error",
+                "remote_ok": False,
+                "error": str(exc),
+            }
+        )
+    else:
+        payload.update(
+            {
+                "status": "ok" if bool(health.get("ok")) else "error",
+                "remote_ok": bool(health.get("ok")),
+                "health": health,
+                "me": {
+                    "id": str(me.get("id") or ""),
+                    "email": str(me.get("email") or ""),
+                    "name": str(me.get("name") or ""),
+                    "is_admin": bool(me.get("is_admin")),
+                },
+            }
+        )
+    return payload
+
+
+def cmd_shared_server(args: argparse.Namespace) -> None:
+    action = str(getattr(args, "shared_server_action", "") or "status")
+    config_path = getattr(args, "shared_server_config", None)
+    if action == "configure":
+        source_path = getattr(args, "from_owner_config", None)
+        source_config: dict[str, Any] = {}
+        if source_path is not None:
+            owner_path = Path(source_path or SHARED_SERVER_OWNER_CONFIG_DEFAULT).expanduser()
+            if not owner_path.exists():
+                fail(f"owner config not found: {owner_path}", 2)
+            try:
+                loaded = json.loads(owner_path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                fail(f"could not read owner config: {exc}", 2)
+            if not isinstance(loaded, dict):
+                fail("owner config must contain a JSON object", 2)
+            source_config.update(loaded)
+        base_url = str(getattr(args, "base_url", None) or source_config.get("base_url") or "").rstrip("/")
+        graph_slug = str(getattr(args, "graph_slug", None) or source_config.get("graph_slug") or "autopsy").strip()
+        token = str(getattr(args, "token", None) or source_config.get("token") or "").strip()
+        user_id = str(getattr(args, "user_id", None) or source_config.get("user_id") or "").strip()
+        if not base_url or not graph_slug or not token:
+            fail("configure requires --base-url, --graph-slug, and --token, or --from-owner-config", 2)
+        config = {
+            "base_url": base_url,
+            "graph_slug": graph_slug,
+            "user_id": user_id,
+            "token": token,
+        }
+        written = write_shared_server_config(config, path=config_path)
+        payload = redacted_shared_server_config(config, path=str(written))
+        payload["written"] = str(written)
+        print(json.dumps(payload, indent=2))
+        return
+    payload = build_shared_server_status_payload(
+        check_remote=action == "health" or bool(getattr(args, "check", False)),
+        config_path=config_path,
+    )
+    print(json.dumps(payload, indent=2))
 
 
 def build_activity_onboarding_payload(
@@ -19625,6 +19775,7 @@ def build_parser() -> argparse.ArgumentParser:
             diagnostics=cmd_diagnostics,
             repair_embedded_snapshot=cmd_repair_embedded_snapshot,
             activity=cmd_activity,
+            shared_server=cmd_shared_server,
             menubar=cmd_menubar,
             model_warmup=cmd_model_warmup,
             create_note=cmd_create_note,

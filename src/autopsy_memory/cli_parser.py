@@ -36,6 +36,7 @@ class CommandHandlers:
     diagnostics: CommandHandler
     repair_embedded_snapshot: CommandHandler
     activity: CommandHandler
+    shared_server: CommandHandler
     menubar: CommandHandler
     model_warmup: CommandHandler
     create_note: CommandHandler
@@ -372,6 +373,28 @@ def build_parser(
     activity_parser.add_argument("--recent-days", type=int, default=status_window_days_default)
     activity_parser.add_argument("--current-only", action="store_true", help="Accepted for compatibility; activity reads the current graph by default.")
     activity_parser.set_defaults(func=handlers.activity)
+
+    shared_server_parser = subparsers.add_parser("shared-server", help="Configure and inspect the Autopsy shared memory server.")
+    shared_server_parser.add_argument(
+        "shared_server_action",
+        nargs="?",
+        choices=("status", "configure", "health"),
+        default="status",
+        help="Show local config, write config, or check remote health.",
+    )
+    shared_server_parser.add_argument("--config", dest="shared_server_config", help="Path to the local shared-server config JSON.")
+    shared_server_parser.add_argument("--base-url", help="Shared server base URL, for example https://autopsy-server.fly.dev.")
+    shared_server_parser.add_argument("--graph-slug", help="Shared graph slug. Defaults to autopsy when configuring.")
+    shared_server_parser.add_argument("--user-id", help="Optional server user id to store with the config.")
+    shared_server_parser.add_argument("--token", help="Bearer token for shared memory server access. Stored in a 0600 local config file.")
+    shared_server_parser.add_argument(
+        "--from-owner-config",
+        nargs="?",
+        const="",
+        help="Configure from the local autopsy-server owner config. Defaults to ~/.config/autopsy-server/owner.json.",
+    )
+    shared_server_parser.add_argument("--check", action="store_true", help="With status, also call remote /health and /v1/me.")
+    shared_server_parser.set_defaults(func=handlers.shared_server)
 
     menubar_parser = subparsers.add_parser("menubar", help="Run the native macOS Autopsy menu bar app.")
     menubar_parser.add_argument("--dir", dest="menubar_dir", help="Path to the Swift menu bar app package.")

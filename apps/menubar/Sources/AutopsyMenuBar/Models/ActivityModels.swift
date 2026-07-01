@@ -3,9 +3,59 @@ import Foundation
 struct ActivityPayload: Decodable {
     var workspace: WorkspacePayload?
     var onboarding: OnboardingPayload?
+    var sharedServer: SharedServerPayload?
     var activity: ActivityFeed?
     var status: StatusPayload?
     var workflow: WorkflowPayload?
+
+    enum CodingKeys: String, CodingKey {
+        case workspace
+        case onboarding
+        case sharedServer = "shared_server"
+        case activity
+        case status
+        case workflow
+    }
+}
+
+struct SharedServerPayload: Decodable {
+    var configured: Bool?
+    var status: String?
+    var configPath: String?
+    var baseURL: String?
+    var graphSlug: String?
+    var userID: String?
+    var tokenConfigured: Bool?
+    var remoteOK: Bool?
+    var error: String?
+    var me: SharedServerUserPayload?
+
+    enum CodingKeys: String, CodingKey {
+        case configured
+        case status
+        case configPath = "config_path"
+        case baseURL = "base_url"
+        case graphSlug = "graph_slug"
+        case userID = "user_id"
+        case tokenConfigured = "token_configured"
+        case remoteOK = "remote_ok"
+        case error
+        case me
+    }
+}
+
+struct SharedServerUserPayload: Decodable {
+    var id: String?
+    var email: String?
+    var name: String?
+    var isAdmin: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case email
+        case name
+        case isAdmin = "is_admin"
+    }
 }
 
 struct OnboardingPayload: Decodable {

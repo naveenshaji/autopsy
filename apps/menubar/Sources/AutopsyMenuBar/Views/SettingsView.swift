@@ -78,6 +78,27 @@ private struct MemorySettingsTab: View {
             }
 
             Section {
+                LabeledContent("Shared Memory", value: store.sharedServerStatusText)
+                if !store.sharedServerEndpoint.isEmpty {
+                    LabeledContent("Endpoint", value: store.sharedServerEndpoint)
+                }
+                if !store.sharedServerGraphSlug.isEmpty {
+                    LabeledContent("Graph", value: store.sharedServerGraphSlug)
+                }
+                HStack {
+                    Button("Use Owner Config") {
+                        store.configureSharedServerFromOwnerConfig()
+                    }
+                    .disabled(store.isCheckingSharedServer)
+
+                    Button("Check Server") {
+                        store.checkSharedServer()
+                    }
+                    .disabled(store.isCheckingSharedServer)
+                }
+            }
+
+            Section {
                 HStack {
                     Button("Install Agent Instructions") {
                         store.installAllInstructions()

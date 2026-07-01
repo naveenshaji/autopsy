@@ -19,6 +19,9 @@ final class ActivityStore: ObservableObject {
     @Published var setupStatus: SetupStatusPayload?
     @Published var setupStatusError: String?
     @Published var isRepairingSetup = false
+    @Published var sharedServerStatus: SharedServerPayload?
+    @Published var sharedServerError: String?
+    @Published var isCheckingSharedServer = false
     @Published var softwareUpdateStatus: SoftwareUpdateStatus?
     @Published var softwareUpdateError: String?
     @Published var isCheckingForSoftwareUpdates = false
@@ -188,6 +191,37 @@ final class ActivityStore: ObservableObject {
         instructionTargets.contains { target in
             target.state == "managed"
         }
+    }
+
+    var currentSharedServer: SharedServerPayload? {
+        sharedServerStatus ?? payload?.sharedServer
+    }
+
+    var sharedServerStatusText: String {
+        if isCheckingSharedServer {
+            return "Checking"
+        }
+        if let sharedServerError, !sharedServerError.isEmpty {
+            return sharedServerError.clippedForMenuBar(limit: 28)
+        }
+        guard let currentSharedServer else {
+            return "Not configured"
+        }
+        if currentSharedServer.remoteOK == true {
+            return "Connected"
+        }
+        if currentSharedServer.configured == true {
+            return currentSharedServer.status == "error" ? "Connection failed" : "Configured"
+        }
+        return "Not configured"
+    }
+
+    var sharedServerEndpoint: String {
+        currentSharedServer?.baseURL ?? ""
+    }
+
+    var sharedServerGraphSlug: String {
+        currentSharedServer?.graphSlug ?? ""
     }
 
     var shouldShowOnboardingPrompt: Bool {
@@ -412,6 +446,9 @@ final class ActivityStore: ObservableObject {
                 await loadSetupStatus()
             }
             Task {
+                await loadSharedServerStatus()
+            }
+            Task {
                 await loadSoftwareUpdateStatus()
             }
         }
@@ -452,6 +489,18 @@ final class ActivityStore: ObservableObject {
     func repairSetup() {
         Task {
             await repairAutopsySetup()
+        }
+    }
+
+    func configureSharedServerFromOwnerConfig() {
+        Task {
+            await configureSharedServer()
+        }
+    }
+
+    func checkSharedServer() {
+        Task {
+            await loadSharedServerStatus(checkRemote: true)
         }
     }
 
@@ -597,6 +646,48 @@ final class ActivityStore: ObservableObject {
             UserDefaults.standard.set(output, forKey: Defaults.cachedSetupStatus)
         } catch {
             setupStatusError = error.localizedDescription
+        }
+    }
+
+    private func loadSharedServerStatus(checkRemote: Bool = false) async {
+        guard !isCheckingSharedServer else { return }
+        isCheckingSharedServer = true
+        sharedServerError = nil
+        defer {
+            isCheckingSharedServer = false
+        }
+
+        do {
+            let command = checkRemote ? "health" : "status"
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: checkRemote ? 20 : 10).run([
+                "shared-server",
+                command,
+            ])
+            sharedServerStatus = try JSONDecoder().decode(SharedServerPayload.self, from: Data(output.utf8))
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
+    }
+
+    private func configureSharedServer() async {
+        guard !isCheckingSharedServer else { return }
+        isCheckingSharedServer = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isCheckingSharedServer = false
+        }
+
+        do {
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 15).run([
+                "shared-server",
+                "configure",
+                "--from-owner-config",
+            ])
+            sharedServerStatus = try JSONDecoder().decode(SharedServerPayload.self, from: Data(output.utf8))
+            lastActionMessage = "Shared memory configured"
+        } catch {
+            sharedServerError = error.localizedDescription
         }
     }
 

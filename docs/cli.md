@@ -70,6 +70,7 @@ autopsy context --current-only --query "current task"
 autopsy context --current-only --format text --query "current task"
 autopsy audit --current-only
 autopsy activity
+autopsy shared-server health
 autopsy benchmark --sample-size 5 --include-sync
 autopsy menubar
 ```
@@ -81,6 +82,15 @@ autopsy menubar
 `repair-embedded-snapshot` is for embedded FalkorDBLite rollback events reported by `health`, `status`, or `diagnostics --log memory-guard`. The default is a dry run that plans which stale database, settings, and guard files would be quarantined and lists recent validated default backup candidates with staleness risk relative to the guard timestamp or guard generation. Its `backup_candidates.recovery_summary.best_candidate` ranks valid backups by recovery evidence, so a guard-covered backup can outrank a newer timestamp-only backup. Use `--salvage-output <path>` to write a read-only JSON export from the stale embedded snapshot before any quarantine; Autopsy closes that loaded snapshot with NOSAVE and marks the export as stale-snapshot salvage metadata. Actual repair requires both `--yes` and `--accept-data-loss`; it first writes an automatic salvage export unless `--skip-salvage` is supplied, then moves the stale snapshot into an application-support backup bundle instead of lowering the guard in place. Add `--restore-backup <backup.json>` or `--restore-latest-backup` to import a validated semantic backup into the fresh embedded store after quarantine.
 
 `activity` is the lightweight JSON feed for UI clients. It returns recent memory writes, recent consult telemetry, attention items, and current status.
+
+`shared-server` configures and inspects the Autopsy shared memory server used for
+team graphs. `shared-server configure --from-owner-config` imports the private
+owner token file created by `autopsy-server` bootstrap into
+`~/Library/Application Support/Autopsy/SharedServer/config.json` with `0600`
+permissions. `shared-server health` checks the remote `/health` and `/v1/me`
+endpoints and always redacts the bearer token from output. The `activity` feed
+includes redacted `shared_server` state so the macOS menu bar can show and check
+shared-memory connectivity.
 
 `menubar` stages the native macOS menu bar app as a small `.app` bundle and, in a normal GUI session, installs and kickstarts the supervised LaunchAgent. Current bundles launch without rebuilding; use `autopsy menubar --build` to build and stage without launching, `autopsy menubar --rebuild` to force a rebuild before launch, `autopsy menubar --install-launch-agent` to explicitly install the supervised login item, and `autopsy menubar --print-path` to inspect resolved app paths. Installed LaunchAgents run the app executable directly with `KeepAlive`, and the app silently checks the resident worker so local memory routes stay warm.
 
