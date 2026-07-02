@@ -1142,7 +1142,25 @@ final class ActivityStore: ObservableObject {
                 "--repo-scope",
                 normalizedRepoScope(repoScope),
             ],
-            successMessage: "Shared grant updated"
+            successMessage: "Shared grant updated",
+            successMessageFromOutput: { output in
+                guard let payload = self.jsonObject(from: output) else {
+                    return "Shared grant updated"
+                }
+                let revoked = self.auditInt(payload["revoked_scoped_token_count"]) ?? 0
+                let alreadyRevoked = self.auditInt(payload["already_revoked_scoped_token_count"]) ?? 0
+                var details: [String] = []
+                if revoked > 0 {
+                    details.append("\(revoked) stale invite token\(revoked == 1 ? "" : "s") revoked")
+                }
+                if alreadyRevoked > 0 {
+                    details.append("\(alreadyRevoked) stale invite token\(alreadyRevoked == 1 ? "" : "s") already revoked")
+                }
+                guard !details.isEmpty else {
+                    return "Shared grant updated"
+                }
+                return "Shared grant updated; \(details.joined(separator: ", "))"
+            }
         )
     }
 
