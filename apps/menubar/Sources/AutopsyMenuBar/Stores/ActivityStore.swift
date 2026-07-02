@@ -287,7 +287,9 @@ final class ActivityStore: ObservableObject {
             let enabled = [
                 ("owner_handoff", "owner handoff"),
                 ("grant_downgrade_token_revocation", "downgrade cleanup"),
+                ("token_last_used_inventory", "token last use"),
                 ("tamper_evident_audit_chain", "audit chain"),
+                ("audit_event_summaries", "audit summaries"),
                 ("repo_policies", "repo policies"),
                 ("repo_policy_inventory", "policy inventory"),
                 ("repo_policy_fingerprints", "policy fingerprints"),
