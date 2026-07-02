@@ -4551,6 +4551,10 @@ def shared_server_admin_tokens_path(
     return f"/v1/admin/tokens?{urllib.parse.urlencode(query)}"
 
 
+def shared_server_admin_token_bulk_revoke_path() -> str:
+    return "/v1/admin/tokens/revoke"
+
+
 def shared_server_access_check_path(graph_slug: str, repo: str, *, mode: str = "read") -> str:
     query = {
         "repo": repo,
@@ -5829,6 +5833,31 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
                 scope_filter=str(getattr(args, "token_scope", "all") or "all"),
             ),
             timeout=10,
+        )
+        print(json.dumps(payload, indent=2))
+        return
+    if action == "bulk-revoke-tokens":
+        status_filter = str(getattr(args, "token_status", "all") or "all")
+        hygiene_filter = str(getattr(args, "token_hygiene", "all") or "all")
+        scope_filter = str(getattr(args, "token_scope", "all") or "all")
+        if status_filter == "all" and hygiene_filter == "all" and scope_filter == "all":
+            fail("shared-server bulk-revoke-tokens requires at least one --token-status, --token-hygiene, or --token-scope filter", 2)
+        confirmed = bool(getattr(args, "confirm_token_revoke", False))
+        payload = shared_server_request_or_fail(
+            config,
+            shared_server_admin_token_bulk_revoke_path(),
+            method="POST",
+            payload={
+                "include_revoked": bool(getattr(args, "include_revoked", False)),
+                "limit": max(1, min(1000, int(getattr(args, "limit", 50) or 50))),
+                "status": status_filter,
+                "hygiene": hygiene_filter,
+                "scope": scope_filter,
+                "dry_run": not confirmed,
+                "confirm": confirmed,
+                "reason": str(getattr(args, "reason", "") or ""),
+            },
+            timeout=20,
         )
         print(json.dumps(payload, indent=2))
         return

@@ -229,6 +229,21 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "--token-scope",
             "global",
         ])
+        bulk_revoke_tokens_args = parser.parse_args([
+            "shared-server",
+            "bulk-revoke-tokens",
+            "--limit",
+            "25",
+            "--token-status",
+            "active",
+            "--token-hygiene",
+            "never_used",
+            "--token-scope",
+            "global",
+            "--confirm-token-revoke",
+            "--reason",
+            "rotation",
+        ])
         handoff_args = parser.parse_args([
             "shared-server",
             "handoff-owner",
@@ -470,6 +485,13 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(admin_tokens_args.token_status, "active")
         self.assertEqual(admin_tokens_args.token_hygiene, "never_used")
         self.assertEqual(admin_tokens_args.token_scope, "global")
+        self.assertEqual(bulk_revoke_tokens_args.shared_server_action, "bulk-revoke-tokens")
+        self.assertEqual(bulk_revoke_tokens_args.limit, 25)
+        self.assertEqual(bulk_revoke_tokens_args.token_status, "active")
+        self.assertEqual(bulk_revoke_tokens_args.token_hygiene, "never_used")
+        self.assertEqual(bulk_revoke_tokens_args.token_scope, "global")
+        self.assertTrue(bulk_revoke_tokens_args.confirm_token_revoke)
+        self.assertEqual(bulk_revoke_tokens_args.reason, "rotation")
         self.assertEqual(handoff_args.shared_server_action, "handoff-owner")
         self.assertEqual(handoff_args.from_user_id, "usr_owner")
         self.assertEqual(handoff_args.to_user_id, "usr_peer")
@@ -645,6 +667,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
             ),
             "/v1/admin/tokens?limit=25&status=active&hygiene=never_used&scope=global",
         )
+        self.assertEqual(cli.shared_server_admin_token_bulk_revoke_path(), "/v1/admin/tokens/revoke")
 
     def test_shared_server_repo_scope_prefers_normalized_git_remote(self):
         parser = cli.build_parser()
@@ -2099,6 +2122,121 @@ class AutopsyCLIContractTests(unittest.TestCase):
         payload = json.loads(stream.getvalue())
         self.assertEqual(payload["items"][0]["id"], "tok_1")
         self.assertNotIn("token_hash", stream.getvalue())
+
+    def test_shared_server_bulk_revoke_tokens_action_posts_filtered_dry_run_payload(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "shared-server",
+            "bulk-revoke-tokens",
+            "--limit",
+            "25",
+            "--token-status",
+            "active",
+            "--token-hygiene",
+            "never_used",
+            "--token-scope",
+            "global",
+            "--reason",
+            "rotation",
+        ])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+
+        def fake_request(_config, path, **kwargs):
+            self.assertEqual(path, "/v1/admin/tokens/revoke")
+            self.assertEqual(kwargs["method"], "POST")
+            self.assertEqual(kwargs["timeout"], 20)
+            self.assertEqual(
+                kwargs["payload"],
+                {
+                    "include_revoked": False,
+                    "limit": 25,
+                    "status": "active",
+                    "hygiene": "never_used",
+                    "scope": "global",
+                    "dry_run": True,
+                    "confirm": False,
+                    "reason": "rotation",
+                },
+            )
+            return {
+                "dry_run": True,
+                "matched_count": 1,
+                "candidate_count": 1,
+                "would_revoke_count": 1,
+                "revoked_count": 0,
+                "items": [{"id": "tok_1", "label": "laptop"}],
+            }
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        payload = json.loads(stream.getvalue())
+        self.assertTrue(payload["dry_run"])
+        self.assertEqual(payload["items"][0]["id"], "tok_1")
+
+    def test_shared_server_bulk_revoke_tokens_action_posts_confirmed_payload(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "shared-server",
+            "bulk-revoke-tokens",
+            "--include-revoked",
+            "--limit",
+            "5000",
+            "--token-status",
+            "revoked",
+            "--confirm-token-revoke",
+        ])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+
+        def fake_request(_config, path, **kwargs):
+            self.assertEqual(path, "/v1/admin/tokens/revoke")
+            self.assertEqual(kwargs["method"], "POST")
+            self.assertEqual(
+                kwargs["payload"],
+                {
+                    "include_revoked": True,
+                    "limit": 1000,
+                    "status": "revoked",
+                    "hygiene": "all",
+                    "scope": "all",
+                    "dry_run": False,
+                    "confirm": True,
+                    "reason": "",
+                },
+            )
+            return {"dry_run": False, "revoked_count": 0, "items": []}
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        self.assertFalse(json.loads(stream.getvalue())["dry_run"])
+
+    def test_shared_server_bulk_revoke_tokens_requires_filter_before_request(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["shared-server", "bulk-revoke-tokens"])
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value={"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}),
+            mock.patch.object(cli, "shared_server_request") as request,
+            contextlib.redirect_stderr(stream),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            args.func(args)
+
+        self.assertEqual(raised.exception.code, 2)
+        request.assert_not_called()
+        self.assertIn("bulk-revoke-tokens requires at least one", stream.getvalue())
 
     def test_shared_server_verify_receipt_checks_expected_fields(self):
         parser = cli.build_parser()

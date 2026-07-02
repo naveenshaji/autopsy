@@ -1100,6 +1100,18 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    func copySharedServerTokenRevokePreview(statusFilter: String, hygieneFilter: String, scopeFilter: String) {
+        Task {
+            await bulkRevokeSharedAdminTokens(statusFilter: statusFilter, hygieneFilter: hygieneFilter, scopeFilter: scopeFilter, confirmed: false)
+        }
+    }
+
+    func revokeSharedServerMatchingTokens(statusFilter: String, hygieneFilter: String, scopeFilter: String) {
+        Task {
+            await bulkRevokeSharedAdminTokens(statusFilter: statusFilter, hygieneFilter: hygieneFilter, scopeFilter: scopeFilter, confirmed: true)
+        }
+    }
+
     func copySharedServerAudit(repoScope: String) {
         Task {
             await copySharedAudit(repoScope: repoScope)
@@ -2449,6 +2461,55 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    private func bulkRevokeSharedAdminTokens(statusFilter: String, hygieneFilter: String, scopeFilter: String, confirmed: Bool) async {
+        guard !isManagingSharedAccess else { return }
+        isManagingSharedAccess = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingSharedAccess = false
+        }
+
+        let normalizedStatus = normalizedTokenStatusFilter(statusFilter)
+        let normalizedHygiene = normalizedTokenHygieneFilter(hygieneFilter)
+        let normalizedScope = normalizedTokenScopeFilter(scopeFilter)
+        if normalizedStatus == "all" && normalizedHygiene == "all" && normalizedScope == "all" {
+            sharedServerError = "Choose at least one token filter before bulk revoke."
+            return
+        }
+
+        do {
+            var arguments = [
+                "shared-server",
+                "bulk-revoke-tokens",
+                "--limit",
+                "200",
+                "--token-status",
+                normalizedStatus,
+                "--token-hygiene",
+                normalizedHygiene,
+                "--token-scope",
+                normalizedScope,
+                "--reason",
+                confirmed ? "menubar filtered bulk revoke" : "menubar filtered bulk revoke preview",
+            ]
+            if normalizedStatus == "all" || normalizedStatus == "revoked" {
+                arguments.append("--include-revoked")
+            }
+            if confirmed {
+                arguments.append("--confirm-token-revoke")
+            }
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 25).run(arguments)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(sharedAdminTokenBulkRevokeReport(from: output), forType: .string)
+            let message = confirmed ? "Matching tokens revoked" : "Token revoke preview copied"
+            lastActionMessage = message
+            clearLastActionMessageAfterDelay(expected: message)
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
+    }
+
     private func copySharedAudit(repoScope: String) async {
         guard !isManagingSharedAccess else { return }
         isManagingSharedAccess = true
@@ -2913,16 +2974,7 @@ final class ActivityStore: ObservableObject {
             "Hygiene: no expiration \(noExpirationCount), never used \(neverUsedCount), disabled-user \(disabledUserCount)",
             "Scope: global \(globalCount), scoped \(scopedCount)",
         ]
-        if !filters.isEmpty {
-            let status = auditString(filters["status"]) ?? "all"
-            let hygiene = auditString(filters["hygiene"]) ?? "all"
-            let scope = auditString(filters["scope"]) ?? "all"
-            let includeRevoked = auditBool(filters["include_revoked"]) == true ? "yes" : "no"
-            let limit = auditString(filters["limit"]) ?? ""
-            var filterLine = "Filters: status \(status), hygiene \(hygiene), scope \(scope), revoked \(includeRevoked)"
-            if !limit.isEmpty {
-                filterLine.append(", limit \(limit)")
-            }
+        if let filterLine = sharedAdminTokenFilterLine(filters) {
             lines.append(filterLine)
         }
         lines.append("")
@@ -2931,57 +2983,113 @@ final class ActivityStore: ObservableObject {
             return lines.joined(separator: "\n")
         }
         for item in items.prefix(100) {
-            let tokenID = auditString(item["id"]) ?? "unknown token"
-            let email = auditString(item["email"]) ?? "unknown email"
-            let userID = auditString(item["user_id"]) ?? "unknown user"
-            var parts = ["\(email)", "user \(userID)", "token \(tokenID)"]
-            if let label = auditString(item["label"]) {
-                parts.append("label \(label)")
-            }
-            let graphSlug = auditString(item["issued_graph_slug"]) ?? ""
-            let repo = auditString(item["issued_repo"]) ?? ""
-            let role = auditString(item["issued_role"]) ?? ""
-            if graphSlug.isEmpty {
-                parts.append("scope global")
-            } else {
-                var scopeParts = ["graph \(graphSlug)"]
-                if !repo.isEmpty {
-                    scopeParts.append("repo \(repo)")
-                }
-                if !role.isEmpty {
-                    scopeParts.append("role \(role)")
-                }
-                parts.append(scopeParts.joined(separator: " "))
-            }
-            if auditBool(item["disabled"]) == true {
-                parts.append("disabled user")
-            }
-            if auditBool(item["revoked"]) == true {
-                parts.append("revoked")
-            } else if auditBool(item["expired"]) == true {
-                parts.append("expired")
-            } else {
-                parts.append("active")
-            }
-            if let expiresAt = auditString(item["expires_at"]) {
-                parts.append("expires \(expiresAt)")
-            } else {
-                parts.append("no expiration")
-            }
-            if let lastUsedAt = auditString(item["last_used_at"]) {
-                parts.append("last used \(lastUsedAt)")
-            } else {
-                parts.append("never used")
-            }
-            if let issuedBy = auditString(item["issued_by"]) {
-                parts.append("issued by \(issuedBy)")
-            }
-            lines.append("- \(parts.joined(separator: ", "))")
+            lines.append(sharedAdminTokenReportLine(item))
         }
         if items.count > 100 {
             lines.append("- \(items.count - 100) more token rows omitted")
         }
         return lines.joined(separator: "\n")
+    }
+
+    private func sharedAdminTokenBulkRevokeReport(from output: String) -> String {
+        guard let payload = jsonObject(from: output),
+              let rawItems = payload["items"] as? [Any]
+        else {
+            return output.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let items = rawItems.compactMap { $0 as? [String: Any] }
+        let filters = payload["filters"] as? [String: Any] ?? [:]
+        let dryRun = auditBool(payload["dry_run"]) == true
+        var lines = [
+            dryRun ? "Shared Token Revoke Preview" : "Shared Token Bulk Revoke",
+            "Matched: \(auditString(payload["matched_count"]) ?? "0"), candidates \(auditString(payload["candidate_count"]) ?? "0"), would revoke \(auditString(payload["would_revoke_count"]) ?? "0")",
+            "Revoked: \(auditString(payload["revoked_count"]) ?? "0"), already revoked \(auditString(payload["already_revoked_count"]) ?? "0"), skipped actor \(auditString(payload["skipped_actor_token_count"]) ?? "0")",
+        ]
+        if let filterLine = sharedAdminTokenFilterLine(filters) {
+            lines.append(filterLine)
+        }
+        lines.append("")
+        if items.isEmpty {
+            lines.append(dryRun ? "No token rows would be revoked." : "No token rows were revoked.")
+            return lines.joined(separator: "\n")
+        }
+        for item in items.prefix(100) {
+            var line = sharedAdminTokenReportLine(item)
+            if auditBool(item["already_revoked"]) == true {
+                line.append(", already revoked")
+            }
+            lines.append(line)
+        }
+        if items.count > 100 {
+            lines.append("- \(items.count - 100) more token rows omitted")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func sharedAdminTokenFilterLine(_ filters: [String: Any]) -> String? {
+        if filters.isEmpty {
+            return nil
+        }
+        let status = auditString(filters["status"]) ?? "all"
+        let hygiene = auditString(filters["hygiene"]) ?? "all"
+        let scope = auditString(filters["scope"]) ?? "all"
+        let includeRevoked = auditBool(filters["include_revoked"]) == true ? "yes" : "no"
+        let limit = auditString(filters["limit"]) ?? ""
+        var filterLine = "Filters: status \(status), hygiene \(hygiene), scope \(scope), revoked \(includeRevoked)"
+        if !limit.isEmpty {
+            filterLine.append(", limit \(limit)")
+        }
+        return filterLine
+    }
+
+    private func sharedAdminTokenReportLine(_ item: [String: Any]) -> String {
+        let tokenID = auditString(item["id"]) ?? "unknown token"
+        let email = auditString(item["email"]) ?? "unknown email"
+        let userID = auditString(item["user_id"]) ?? "unknown user"
+        var parts = ["\(email)", "user \(userID)", "token \(tokenID)"]
+        if let label = auditString(item["label"]) {
+            parts.append("label \(label)")
+        }
+        let graphSlug = auditString(item["issued_graph_slug"]) ?? ""
+        let repo = auditString(item["issued_repo"]) ?? ""
+        let role = auditString(item["issued_role"]) ?? ""
+        if graphSlug.isEmpty {
+            parts.append("scope global")
+        } else {
+            var scopeParts = ["graph \(graphSlug)"]
+            if !repo.isEmpty {
+                scopeParts.append("repo \(repo)")
+            }
+            if !role.isEmpty {
+                scopeParts.append("role \(role)")
+            }
+            parts.append(scopeParts.joined(separator: " "))
+        }
+        if auditBool(item["disabled"]) == true {
+            parts.append("disabled user")
+        }
+        if auditBool(item["revoked"]) == true {
+            parts.append("revoked")
+        } else if auditBool(item["expired"]) == true {
+            parts.append("expired")
+        } else {
+            parts.append("active")
+        }
+        if let expiresAt = auditString(item["expires_at"]) {
+            parts.append("expires \(expiresAt)")
+        } else {
+            parts.append("no expiration")
+        }
+        if let lastUsedAt = auditString(item["last_used_at"]) {
+            parts.append("last used \(lastUsedAt)")
+        } else {
+            parts.append("never used")
+        }
+        if let issuedBy = auditString(item["issued_by"]) {
+            parts.append("issued by \(issuedBy)")
+        }
+        return "- \(parts.joined(separator: ", "))"
     }
 
     private func sharedGrantsReport(from output: String, repoScope: String) -> String {
