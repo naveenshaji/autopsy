@@ -166,6 +166,9 @@ private struct SharedSettingsTab: View {
     @State private var tokenExpiresAt = ""
     @State private var revokeTokenID = ""
     @State private var revokeTokenRepoScope = ""
+    @State private var tokenInventoryStatus = "all"
+    @State private var tokenInventoryHygiene = "all"
+    @State private var tokenInventoryScope = "all"
     @State private var auditRepoScope = ""
     @State private var auditReceiptID = ""
     @State private var auditReceiptHash = ""
@@ -177,6 +180,9 @@ private struct SharedSettingsTab: View {
     private let sourceRoleAfterOptions = ["writer", "reader", "none"]
     private let accessModes = ["read", "write", "admin"]
     private let relationOptions = ["references", "depends_on", "informed_by", "implements", "answers", "refines"]
+    private let tokenInventoryStatuses = ["all", "active", "revoked", "expired"]
+    private let tokenInventoryHygieneFilters = ["all", "no_expiration", "never_used", "stale", "disabled_user"]
+    private let tokenInventoryScopes = ["all", "global", "scoped"]
 
     var body: some View {
         Form {
@@ -660,9 +666,31 @@ private struct SharedSettingsTab: View {
                     .textFieldStyle(.roundedBorder)
                 TextField("Token Repo Scope", text: $revokeTokenRepoScope)
                     .textFieldStyle(.roundedBorder)
+                Picker("Inventory Status", selection: $tokenInventoryStatus) {
+                    ForEach(tokenInventoryStatuses, id: \.self) { value in
+                        Text(tokenInventoryLabel(value)).tag(value)
+                    }
+                }
+                .pickerStyle(.segmented)
+                Picker("Inventory Hygiene", selection: $tokenInventoryHygiene) {
+                    ForEach(tokenInventoryHygieneFilters, id: \.self) { value in
+                        Text(tokenInventoryLabel(value)).tag(value)
+                    }
+                }
+                .pickerStyle(.menu)
+                Picker("Inventory Scope", selection: $tokenInventoryScope) {
+                    ForEach(tokenInventoryScopes, id: \.self) { value in
+                        Text(tokenInventoryLabel(value)).tag(value)
+                    }
+                }
+                .pickerStyle(.segmented)
                 HStack {
                     Button("Copy Token Inventory") {
-                        store.copySharedServerAdminTokens()
+                        store.copySharedServerAdminTokens(
+                            statusFilter: tokenInventoryStatus,
+                            hygieneFilter: tokenInventoryHygiene,
+                            scopeFilter: tokenInventoryScope
+                        )
                     }
                     .disabled(sharedActionDisabled)
 
@@ -799,5 +827,18 @@ private struct SharedSettingsTab: View {
 
     private var sharedActionDisabled: Bool {
         store.isCheckingSharedServer || store.isManagingSharedAccess
+    }
+
+    private func tokenInventoryLabel(_ value: String) -> String {
+        switch value {
+        case "no_expiration":
+            return "No Expiry"
+        case "never_used":
+            return "Never Used"
+        case "disabled_user":
+            return "Disabled User"
+        default:
+            return value.replacingOccurrences(of: "_", with: " ").capitalized
+        }
     }
 }

@@ -1094,9 +1094,9 @@ final class ActivityStore: ObservableObject {
         }
     }
 
-    func copySharedServerAdminTokens() {
+    func copySharedServerAdminTokens(statusFilter: String, hygieneFilter: String, scopeFilter: String) {
         Task {
-            await copySharedAdminTokens()
+            await copySharedAdminTokens(statusFilter: statusFilter, hygieneFilter: hygieneFilter, scopeFilter: scopeFilter)
         }
     }
 
@@ -2411,7 +2411,7 @@ final class ActivityStore: ObservableObject {
         }
     }
 
-    private func copySharedAdminTokens() async {
+    private func copySharedAdminTokens(statusFilter: String, hygieneFilter: String, scopeFilter: String) async {
         guard !isManagingSharedAccess else { return }
         isManagingSharedAccess = true
         sharedServerError = nil
@@ -2421,13 +2421,25 @@ final class ActivityStore: ObservableObject {
         }
 
         do {
-            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run([
+            let normalizedStatus = normalizedTokenStatusFilter(statusFilter)
+            let normalizedHygiene = normalizedTokenHygieneFilter(hygieneFilter)
+            let normalizedScope = normalizedTokenScopeFilter(scopeFilter)
+            var arguments = [
                 "shared-server",
                 "admin-tokens",
-                "--include-revoked",
                 "--limit",
                 "200",
-            ])
+                "--token-status",
+                normalizedStatus,
+                "--token-hygiene",
+                normalizedHygiene,
+                "--token-scope",
+                normalizedScope,
+            ]
+            if normalizedStatus == "all" || normalizedStatus == "revoked" {
+                arguments.append("--include-revoked")
+            }
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run(arguments)
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(sharedAdminTokenInventoryReport(from: output), forType: .string)
             lastActionMessage = "Token inventory copied"
@@ -2749,6 +2761,22 @@ final class ActivityStore: ObservableObject {
         return label
     }
 
+    private func normalizedTokenStatusFilter(_ value: String) -> String {
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return ["all", "active", "revoked", "expired"].contains(normalized) ? normalized : "all"
+    }
+
+    private func normalizedTokenHygieneFilter(_ value: String) -> String {
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let allowed = ["all", "no_expiration", "never_used", "stale", "disabled_user"]
+        return allowed.contains(normalized) ? normalized : "all"
+    }
+
+    private func normalizedTokenScopeFilter(_ value: String) -> String {
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return ["all", "global", "scoped"].contains(normalized) ? normalized : "all"
+    }
+
     private func sharedStorageStatusReport(from output: String) -> String {
         guard let payload = jsonObject(from: output) else {
             return output.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2864,6 +2892,7 @@ final class ActivityStore: ObservableObject {
         }
 
         let items = rawItems.compactMap { $0 as? [String: Any] }
+        let filters = payload["filters"] as? [String: Any] ?? [:]
         let revokedCount = items.filter { auditBool($0["revoked"]) == true }.count
         let expiredCount = items.filter { auditBool($0["expired"]) == true }.count
         let disabledUserCount = items.filter { auditBool($0["disabled"]) == true }.count
@@ -2883,8 +2912,20 @@ final class ActivityStore: ObservableObject {
             "Tokens: \(items.count) (active \(activeCount), revoked \(revokedCount), expired \(expiredCount))",
             "Hygiene: no expiration \(noExpirationCount), never used \(neverUsedCount), disabled-user \(disabledUserCount)",
             "Scope: global \(globalCount), scoped \(scopedCount)",
-            "",
         ]
+        if !filters.isEmpty {
+            let status = auditString(filters["status"]) ?? "all"
+            let hygiene = auditString(filters["hygiene"]) ?? "all"
+            let scope = auditString(filters["scope"]) ?? "all"
+            let includeRevoked = auditBool(filters["include_revoked"]) == true ? "yes" : "no"
+            let limit = auditString(filters["limit"]) ?? ""
+            var filterLine = "Filters: status \(status), hygiene \(hygiene), scope \(scope), revoked \(includeRevoked)"
+            if !limit.isEmpty {
+                filterLine.append(", limit \(limit)")
+            }
+            lines.append(filterLine)
+        }
+        lines.append("")
         if items.isEmpty {
             lines.append("No token rows were returned.")
             return lines.joined(separator: "\n")

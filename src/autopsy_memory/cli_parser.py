@@ -492,6 +492,9 @@ def build_parser(
     shared_server_parser.add_argument("--expected-version-ns", type=int, help="With shared-server publish or restore-version, reject the write unless the current shared memory version_ns matches this value.")
     shared_server_parser.add_argument("--include-archived", action="store_true", help="With shared-server list, context, or personal-context, include archived shared memories.")
     shared_server_parser.add_argument("--include-revoked", action="store_true", help="With shared-server admin-tokens, include revoked token rows.")
+    shared_server_parser.add_argument("--token-status", choices=("all", "active", "revoked", "expired"), default="all", help="With shared-server admin-tokens, filter by token lifecycle status.")
+    shared_server_parser.add_argument("--token-hygiene", choices=("all", "no_expiration", "never_used", "stale", "disabled_user"), default="all", help="With shared-server admin-tokens, filter by token hygiene risk.")
+    shared_server_parser.add_argument("--token-scope", choices=("all", "global", "scoped"), default="all", help="With shared-server admin-tokens, filter by token issue scope.")
     shared_server_parser.add_argument("--no-relations", action="store_true", help="With shared-server context or personal-context, omit adjacent shared graph relations.")
     shared_server_parser.add_argument("--min-fact-rating", type=float, help="With shared-server context or personal-context, omit adjacent shared relations below this 0.0-1.0 evidence rating.")
     shared_server_parser.add_argument(

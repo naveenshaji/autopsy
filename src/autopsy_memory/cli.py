@@ -4531,10 +4531,23 @@ def shared_server_storage_status_path() -> str:
     return "/v1/admin/storage-status"
 
 
-def shared_server_admin_tokens_path(*, limit: int = 500, include_revoked: bool = False) -> str:
+def shared_server_admin_tokens_path(
+    *,
+    limit: int = 500,
+    include_revoked: bool = False,
+    status_filter: str = "all",
+    hygiene_filter: str = "all",
+    scope_filter: str = "all",
+) -> str:
     query: dict[str, Any] = {"limit": max(1, min(1000, int(limit)))}
     if include_revoked:
         query["include_revoked"] = "true"
+    if status_filter != "all":
+        query["status"] = status_filter
+    if hygiene_filter != "all":
+        query["hygiene"] = hygiene_filter
+    if scope_filter != "all":
+        query["scope"] = scope_filter
     return f"/v1/admin/tokens?{urllib.parse.urlencode(query)}"
 
 
@@ -5811,6 +5824,9 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
             shared_server_admin_tokens_path(
                 limit=int(getattr(args, "limit", 50) or 50),
                 include_revoked=bool(getattr(args, "include_revoked", False)),
+                status_filter=str(getattr(args, "token_status", "all") or "all"),
+                hygiene_filter=str(getattr(args, "token_hygiene", "all") or "all"),
+                scope_filter=str(getattr(args, "token_scope", "all") or "all"),
             ),
             timeout=10,
         )
