@@ -3785,6 +3785,7 @@ final class ActivityStore: ObservableObject {
         if auditBool(metadata["token_scoped"]) == true {
             parts.append("token scoped")
         }
+        parts += sharedActorTokenScopeParts(metadata)
         if let includeArchived = auditBool(metadata["include_archived"]) {
             parts.append("archived \(includeArchived ? "yes" : "no")")
         }
