@@ -374,7 +374,11 @@ final class ActivityStore: ObservableObject {
                 parts.append("never used: \(neverUsed)")
             }
             if let stale = team.staleActiveTokensCount, stale > 0 {
-                parts.append("stale: \(stale)")
+                if let days = team.staleTokenDays, days > 0 {
+                    parts.append("stale >\(days)d: \(stale)")
+                } else {
+                    parts.append("stale: \(stale)")
+                }
             }
             if let latest = team.latestActiveTokenLastUsedAt, !latest.isEmpty {
                 parts.append("last use: \(compactSharedServerDate(latest))")
