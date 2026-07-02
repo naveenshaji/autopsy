@@ -553,6 +553,11 @@ private struct SharedSettingsTab: View {
                 }
 
                 HStack {
+                    Button("Copy Access Changes") {
+                        store.copySharedServerAccessChangeAudit(repoScope: auditRepoScope)
+                    }
+                    .disabled(sharedActionDisabled)
+
                     Button("Copy Context Audit") {
                         store.copySharedServerContextAudit(repoScope: auditRepoScope)
                     }

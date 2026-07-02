@@ -49,6 +49,16 @@ final class ActivityStore: ObservableObject {
         "authorization_denied",
         "disable_user",
         "enable_user",
+        "grant_access",
+        "invite_user",
+        "revoke_grant",
+        "revoke_scoped_token",
+    ]
+    private static let sharedAccessChangeAuditActions = [
+        "grant_access",
+        "invite_user",
+        "revoke_grant",
+        "revoke_scoped_token",
     ]
     private static let sharedActivityAuditActions = [
         "read_users",
@@ -799,6 +809,12 @@ final class ActivityStore: ObservableObject {
     func copySharedServerActivityAudit(repoScope: String) {
         Task {
             await copySharedActivityAudit(repoScope: repoScope)
+        }
+    }
+
+    func copySharedServerAccessChangeAudit(repoScope: String) {
+        Task {
+            await copySharedAccessChangeAudit(repoScope: repoScope)
         }
     }
 
@@ -1780,6 +1796,38 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    private func copySharedAccessChangeAudit(repoScope: String) async {
+        guard !isManagingSharedAccess else { return }
+        isManagingSharedAccess = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingSharedAccess = false
+        }
+
+        do {
+            let scope = normalizedRepoScope(repoScope)
+            var arguments = [
+                "shared-server",
+                "audit",
+                "--repo-scope",
+                scope,
+            ]
+            for action in Self.sharedAccessChangeAuditActions {
+                arguments += ["--action", action]
+            }
+            arguments += ["--limit", "50"]
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run(arguments)
+            let summary = sharedAccessChangeAuditReport(from: output, repoScope: scope)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(summary, forType: .string)
+            lastActionMessage = "Access changes copied"
+            clearLastActionMessageAfterDelay(expected: "Access changes copied")
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
+    }
+
     private func copySharedSecurityAudit() async {
         guard !isManagingSharedAccess else { return }
         isManagingSharedAccess = true
@@ -2066,6 +2114,141 @@ final class ActivityStore: ObservableObject {
         return "- \(createdAt) \(label) \(repo): \(parts.joined(separator: ", "))"
     }
 
+    private func sharedAccessChangeAuditReport(from output: String, repoScope: String) -> String {
+        guard let payload = jsonObject(from: output),
+              let rawItems = payload["items"] as? [Any]
+        else {
+            return output.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let items = rawItems.compactMap { $0 as? [String: Any] }
+        let accessChanges = items.filter { item in
+            guard let action = auditString(item["action"]) else { return false }
+            return Self.sharedAccessChangeAuditActions.contains(action)
+        }
+        let counts = Dictionary(grouping: accessChanges) { item in
+            auditString(item["action"]) ?? "unknown"
+        }.mapValues(\.count)
+        let scopedActorChanges = accessChanges.filter { item in
+            let metadata = item["metadata"] as? [String: Any] ?? [:]
+            return auditBool(metadata["actor_token_scoped"]) == true
+        }.count
+
+        var lines = [
+            "Autopsy Shared Access Change Audit",
+            "Repo: \(repoScope)",
+            "Audit window: \(items.count) latest events",
+            "Access changes: \(accessChanges.count)",
+            "Scoped actor tokens: \(scopedActorChanges)",
+        ]
+
+        let countSummary = Self.sharedAccessChangeAuditActions
+            .compactMap { action -> String? in
+                guard let count = counts[action], count > 0 else { return nil }
+                return "\(action) \(count)"
+            }
+        if !countSummary.isEmpty {
+            lines.append("Counts: \(countSummary.joined(separator: ", "))")
+        }
+
+        guard !accessChanges.isEmpty else {
+            lines.append("")
+            lines.append("No shared access-change events were found in the latest audit window.")
+            return lines.joined(separator: "\n")
+        }
+
+        lines.append("")
+        for item in accessChanges.prefix(16) {
+            lines.append(formatSharedAccessChangeAuditItem(item))
+        }
+        if accessChanges.count > 16 {
+            lines.append("- \(accessChanges.count - 16) more access changes omitted")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func formatSharedAccessChangeAuditItem(_ item: [String: Any]) -> String {
+        let action = auditString(item["action"]) ?? "access_change"
+        let createdAt = auditString(item["created_at"]) ?? "unknown time"
+        let repo = auditString(item["repo"]) ?? "unknown repo"
+        let metadata = item["metadata"] as? [String: Any] ?? [:]
+
+        var parts: [String] = []
+        if let actor = auditString(item["actor_id"]) {
+            parts.append("actor \(actor)")
+        }
+        if let target = auditString(item["target"]) {
+            parts.append("target \(target)")
+        }
+        if let role = auditString(metadata["role"]), !role.isEmpty {
+            parts.append("role \(role)")
+        }
+        if let email = auditString(metadata["email"]), !email.isEmpty {
+            parts.append("email \(email)")
+        }
+        if let issuedToken = auditString(metadata["token_id"]), !issuedToken.isEmpty {
+            parts.append("issued token \(issuedToken)")
+        }
+        if let createdUser = auditBool(metadata["created_user"]) {
+            parts.append("created user \(createdUser ? "yes" : "no")")
+        }
+        if let expiresAt = auditString(metadata["expires_at"]), !expiresAt.isEmpty {
+            parts.append("expires \(expiresAt)")
+        }
+        if let alreadyRevoked = auditBool(metadata["already_revoked"]) {
+            parts.append("already revoked \(alreadyRevoked ? "yes" : "no")")
+        }
+        parts += sharedActorTokenScopeParts(metadata)
+        if let integrityStatus = auditString(item["integrity_status"]) {
+            parts.append("integrity \(integrityStatus)")
+        }
+        if parts.isEmpty {
+            parts.append("recorded")
+        }
+
+        return "- \(createdAt) \(sharedAccessChangeLabel(action)) \(repo): \(parts.joined(separator: ", "))"
+    }
+
+    private func sharedAccessChangeLabel(_ action: String) -> String {
+        switch action {
+        case "grant_access":
+            return "grant access"
+        case "invite_user":
+            return "invite user"
+        case "revoke_grant":
+            return "revoke grant"
+        case "revoke_scoped_token":
+            return "revoke scoped token"
+        default:
+            return action.replacingOccurrences(of: "_", with: " ")
+        }
+    }
+
+    private func sharedActorTokenScopeParts(_ metadata: [String: Any]) -> [String] {
+        guard let scoped = auditBool(metadata["actor_token_scoped"]) else {
+            return []
+        }
+        if !scoped {
+            return ["actor token direct"]
+        }
+
+        var parts = ["actor token scoped"]
+        if let tokenID = auditString(metadata["actor_token_id"]), !tokenID.isEmpty {
+            parts.append("actor token \(tokenID)")
+        }
+        let graph = auditString(metadata["actor_token_scope_graph_slug"]) ?? ""
+        let repo = auditString(metadata["actor_token_scope_repo"]) ?? ""
+        let role = auditString(metadata["actor_token_scope_role"]) ?? ""
+        let scope = [graph, repo, role].filter { !$0.isEmpty }.joined(separator: " ")
+        if !scope.isEmpty {
+            parts.append("actor scope \(scope)")
+        }
+        if let matches = auditBool(metadata["actor_token_scope_matches"]) {
+            parts.append("actor scope match \(matches ? "yes" : "no")")
+        }
+        return parts
+    }
+
     private func sharedSecurityAuditReport(from auditOutput: String, integrityOutput: String) -> String {
         guard let payload = jsonObject(from: auditOutput),
               let rawItems = payload["items"] as? [Any]
@@ -2087,6 +2270,10 @@ final class ActivityStore: ObservableObject {
         let userLifecycleEvents = securityEvents.filter { item in
             guard let action = auditString(item["action"]) else { return false }
             return action == "disable_user" || action == "enable_user"
+        }
+        let accessChangeEvents = securityEvents.filter { item in
+            guard let action = auditString(item["action"]) else { return false }
+            return Self.sharedAccessChangeAuditActions.contains(action)
         }
         let actionCounts = Dictionary(grouping: securityEvents) { item in
             auditString(item["action"]) ?? "unknown"
@@ -2125,6 +2312,10 @@ final class ActivityStore: ObservableObject {
             let metadata = item["metadata"] as? [String: Any] ?? [:]
             return auditBool(metadata["token_scoped"]) == true
         }.count
+        let tokenScopedAccessChanges = accessChangeEvents.filter { item in
+            let metadata = item["metadata"] as? [String: Any] ?? [:]
+            return auditBool(metadata["actor_token_scoped"]) == true
+        }.count
 
         let integrityPayload = jsonObject(from: integrityOutput)
         let integrityCounts = integrityPayload?["integrity_counts"] as? [String: Any] ?? [:]
@@ -2148,10 +2339,12 @@ final class ActivityStore: ObservableObject {
             "Auth failures: \(authFailures.count)",
             "Authorization denials: \(authorizationDenials.count)",
             "User lifecycle: \(userLifecycleEvents.count)",
+            "Access changes: \(accessChangeEvents.count)",
             "Token fingerprints: \(fingerprints.count) unique across \(fingerprintEventCount) events",
             "Client fingerprints: \(clientFingerprints.count) unique",
             "Rate limited: \(rateLimitedCount)",
             "Token-scoped denials: \(tokenScopedDenials)",
+            "Token-scoped access changes: \(tokenScopedAccessChanges)",
             "Integrity: \(auditString(integrityPayload?["status"]) ?? "unknown") (verified \(verified), missing \(missing), mismatch \(mismatch), unknown \(unknown))",
             "Chain: \(chainStatus), linked \(linkedPairs)/\(checkedPairs), gaps \(externalGaps), breaks \(chainBreaks)",
         ]
@@ -2221,6 +2414,9 @@ final class ActivityStore: ObservableObject {
         }
         if action == "disable_user" || action == "enable_user" {
             return formatSharedUserLifecycleAuditItem(item, action: action)
+        }
+        if Self.sharedAccessChangeAuditActions.contains(action) {
+            return formatSharedAccessChangeAuditItem(item)
         }
 
         let createdAt = auditString(item["created_at"]) ?? "unknown time"
