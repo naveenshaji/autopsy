@@ -1519,7 +1519,14 @@ final class ActivityStore: ObservableObject {
                 "--repo-scope",
                 normalizedRepoScope(repoScope),
             ],
-            successMessage: "Shared token revoked"
+            successMessage: "Shared token revoked",
+            successMessageFromOutput: { output in
+                guard let payload = self.jsonObject(from: output),
+                      (payload["already_revoked"] as? Bool) == true else {
+                    return "Shared token revoked"
+                }
+                return "Shared token already revoked"
+            }
         )
     }
 
@@ -1575,7 +1582,12 @@ final class ActivityStore: ObservableObject {
         }
     }
 
-    private func runSharedAccessCommand(_ arguments: [String], successMessage: String, refreshTeam: Bool = true) async {
+    private func runSharedAccessCommand(
+        _ arguments: [String],
+        successMessage: String,
+        refreshTeam: Bool = true,
+        successMessageFromOutput: ((String) -> String)? = nil
+    ) async {
         guard !isManagingSharedAccess else { return }
         isManagingSharedAccess = true
         sharedServerError = nil
@@ -1585,8 +1597,8 @@ final class ActivityStore: ObservableObject {
         }
 
         do {
-            _ = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run(arguments)
-            lastActionMessage = successMessage
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run(arguments)
+            lastActionMessage = successMessageFromOutput?(output) ?? successMessage
             if refreshTeam {
                 await loadSharedServerTeamStatus()
             }
