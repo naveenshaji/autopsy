@@ -192,7 +192,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "--reason",
             "bad publish",
         ])
-        relate_args = parser.parse_args(["shared-server", "relate", "shared:1", "shared:2", "--repo-scope", "repo-a", "--relation", "depends_on"])
+        relate_args = parser.parse_args(["shared-server", "relate", "shared:1", "shared:2", "--repo-scope", "repo-a", "--relation", "depends_on", "--fact-rating", "0.85"])
         shared_relations_args = parser.parse_args([
             "shared-server",
             "shared-relations",
@@ -284,6 +284,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(relate_args.stable_key, "shared:1")
         self.assertEqual(relate_args.target_key, "shared:2")
         self.assertEqual(relate_args.relation, "depends_on")
+        self.assertEqual(relate_args.fact_rating, 0.85)
         self.assertEqual(shared_relations_args.shared_server_action, "shared-relations")
         self.assertEqual(shared_relations_args.source_key, "shared:1")
         self.assertEqual(shared_relations_args.target_shared_key, "shared:2")
@@ -970,6 +971,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "depends_on",
             "--fact",
             "one depends on two",
+            "--fact-rating",
+            "0.85",
         ])
         config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
         calls: list[tuple[str, str, dict[str, str] | None]] = []
@@ -998,6 +1001,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "target_key": "shared:2",
                         "relation": "depends_on",
                         "fact": "one depends on two",
+                        "fact_rating": 0.85,
                         "repo": "repo-a",
                     },
                 )

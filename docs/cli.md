@@ -87,7 +87,7 @@ autopsy shared-server memory-history shared:key --repo-scope /path/to/repo
 autopsy shared-server restore-version shared:key --repo-scope /path/to/repo --version-id ver_123
 autopsy shared-server context --repo-scope /path/to/repo --query "current task"
 autopsy shared-server restore shared:key --repo-scope /path/to/repo --reason needed
-autopsy shared-server relate shared:source shared:target --repo-scope /path/to/repo --relation depends_on
+autopsy shared-server relate shared:source shared:target --repo-scope /path/to/repo --relation depends_on --fact-rating 0.9
 autopsy shared-server shared-relations --repo-scope /path/to/repo --source-key shared:source
 autopsy shared-server unrelate rel_123 --repo-scope /path/to/repo
 autopsy shared-server personal-links --repo-scope /path/to/repo --personal-key graph-note:local
@@ -183,7 +183,8 @@ through your private personal links, plus adjacent shared graph relations unless
 `--no-relations` is supplied. `shared-server unlink <relation-id> --repo-scope
 <repo>` revokes one of your private relation records. `shared-server relate
 <source-shared-key> <target-shared-key> --repo-scope <repo> --relation <name>`
-creates a team-visible relation between two active shared memories, while
+creates a team-visible relation between two active shared memories; add
+`--fact-rating 0.0..1.0` to attach evidence quality for future filtering, while
 `shared-server shared-relations --repo-scope <repo>` lists shared graph edges
 with optional `--source-key` and `--target-shared-key` filters. `shared-server
 unrelate <relation-id> --repo-scope <repo>` revokes one shared graph edge and

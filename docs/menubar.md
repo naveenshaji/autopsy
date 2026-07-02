@@ -80,7 +80,8 @@ Run checks:
   repo grants, invite-token hygiene counts, expiring invite/token issuance,
   invite-token inventory copy, token cleanup, audit copy, shared memory archive/restore, and
   shared memory history copy/version restore, shared context copy, shared
-  relation and private personal-to-shared link create/list/unlink. Audit copies
+  relation create/list/unlink with evidence rating, and private
+  personal-to-shared link create/list/unlink. Audit copies
   include privacy-preserving context-read events with hashed queries and counts
   when the server records them.
 - Attention items when available.

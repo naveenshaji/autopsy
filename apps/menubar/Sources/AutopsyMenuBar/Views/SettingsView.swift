@@ -139,6 +139,7 @@ private struct SharedSettingsTab: View {
     @State private var sharedRelationRepoScope = ""
     @State private var sharedRelation = "references"
     @State private var sharedRelationFact = ""
+    @State private var sharedRelationFactRating = "0.5"
     @State private var sharedRelationID = ""
     @State private var personalLinkKey = ""
     @State private var personalSharedKey = ""
@@ -343,6 +344,8 @@ private struct SharedSettingsTab: View {
                 .pickerStyle(.menu)
                 TextField("Fact", text: $sharedRelationFact)
                     .textFieldStyle(.roundedBorder)
+                TextField("Fact Rating", text: $sharedRelationFactRating)
+                    .textFieldStyle(.roundedBorder)
                 HStack {
                     Button("Relate") {
                         store.relateSharedServerMemories(
@@ -350,7 +353,8 @@ private struct SharedSettingsTab: View {
                             targetKey: sharedRelationTargetKey,
                             repoScope: sharedRelationRepoScope,
                             relation: sharedRelation,
-                            fact: sharedRelationFact
+                            fact: sharedRelationFact,
+                            factRating: sharedRelationFactRating
                         )
                     }
                     .disabled(

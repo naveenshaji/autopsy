@@ -648,9 +648,9 @@ final class ActivityStore: ObservableObject {
         }
     }
 
-    func relateSharedServerMemories(sourceKey: String, targetKey: String, repoScope: String, relation: String, fact: String) {
+    func relateSharedServerMemories(sourceKey: String, targetKey: String, repoScope: String, relation: String, fact: String, factRating: String) {
         Task {
-            await relateSharedMemories(sourceKey: sourceKey, targetKey: targetKey, repoScope: repoScope, relation: relation, fact: fact)
+            await relateSharedMemories(sourceKey: sourceKey, targetKey: targetKey, repoScope: repoScope, relation: relation, fact: fact, factRating: factRating)
         }
     }
 
@@ -1271,7 +1271,7 @@ final class ActivityStore: ObservableObject {
         }
     }
 
-    private func relateSharedMemories(sourceKey: String, targetKey: String, repoScope: String, relation: String, fact: String) async {
+    private func relateSharedMemories(sourceKey: String, targetKey: String, repoScope: String, relation: String, fact: String, factRating: String) async {
         let trimmedSourceKey = sourceKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedTargetKey = targetKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedRelation = relation.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1287,19 +1287,24 @@ final class ActivityStore: ObservableObject {
             sharedServerError = "Relation required"
             return
         }
+        var arguments = [
+            "shared-server",
+            "relate",
+            trimmedSourceKey,
+            trimmedTargetKey,
+            "--repo-scope",
+            normalizedRepoScope(repoScope),
+            "--relation",
+            trimmedRelation,
+            "--fact",
+            fact.trimmingCharacters(in: .whitespacesAndNewlines),
+        ]
+        let trimmedFactRating = factRating.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedFactRating.isEmpty {
+            arguments += ["--fact-rating", trimmedFactRating]
+        }
         await runSharedAccessCommand(
-            [
-                "shared-server",
-                "relate",
-                trimmedSourceKey,
-                trimmedTargetKey,
-                "--repo-scope",
-                normalizedRepoScope(repoScope),
-                "--relation",
-                trimmedRelation,
-                "--fact",
-                fact.trimmingCharacters(in: .whitespacesAndNewlines),
-            ],
+            arguments,
             successMessage: "Shared relation created",
             refreshTeam: false
         )

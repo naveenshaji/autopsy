@@ -5549,17 +5549,21 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         relation = str(getattr(args, "relation", "") or "").strip()
         if not source_key or not target_key or not relation:
             fail("shared-server relate requires source_key, target_key, and --relation", 2)
+        relation_payload: dict[str, Any] = {
+            "source_key": source_key,
+            "target_key": target_key,
+            "relation": relation,
+            "fact": str(getattr(args, "fact", "") or ""),
+            "repo": repo,
+        }
+        fact_rating = normalize_fact_rating(getattr(args, "fact_rating", None))
+        if fact_rating is not None:
+            relation_payload["fact_rating"] = fact_rating
         related = shared_server_request_or_fail(
             config,
             shared_server_path(graph_slug, "/relations"),
             method="POST",
-            payload={
-                "source_key": source_key,
-                "target_key": target_key,
-                "relation": relation,
-                "fact": str(getattr(args, "fact", "") or ""),
-                "repo": repo,
-            },
+            payload=relation_payload,
             timeout=15,
         )
         print(json.dumps({
