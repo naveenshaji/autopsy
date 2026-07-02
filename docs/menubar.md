@@ -85,7 +85,8 @@ Run checks:
   personal-to-shared link create/list/unlink with link evidence rating and linked-context evidence
   threshold. Raw audit copies include privacy-preserving context-read events
   with hashed queries and counts when the server records them. Context-audit
-  summaries copy only read counts and relation provenance counters, not raw
-  query text or personal stable keys.
+  summaries request only shared-context and personal-linked-context read events
+  and copy only read counts and relation provenance counters, not raw query text
+  or personal stable keys.
 - Attention items when available.
 - Quit action.

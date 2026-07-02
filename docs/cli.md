@@ -78,7 +78,7 @@ autopsy shared-server users
 autopsy shared-server grants --repo-scope /path/to/repo
 autopsy shared-server scoped-tokens --repo-scope /path/to/repo
 autopsy shared-server access-check --repo-scope /path/to/repo --mode write
-autopsy shared-server audit --repo-scope /path/to/repo
+autopsy shared-server audit --repo-scope /path/to/repo --action read_shared_context
 autopsy shared-server invite --email dev@example.com --role writer --repo-scope /path/to/repo
 autopsy shared-server revoke-token tok_123 --repo-scope /path/to/repo
 autopsy shared-server archive shared:key --repo-scope /path/to/repo --reason duplicate
@@ -151,6 +151,8 @@ selected repo. `revoke-token` first uses the global-admin endpoint and
 falls back to graph-scoped revocation, so graph owners can clean up invite-issued
 tokens for repos they own without global token access. `shared-server audit
 --repo-scope <repo>` lists scoped server audit events for graph owners or admins.
+Add repeated or comma-separated `--action <event>` filters when you only need a
+specific event class such as `read_shared_context` or `read_personal_context`.
 Successful shared-context and personal-linked-context reads are audited with
 returned counts, flags, read-guard totals, and a SHA-256 query hash where
 applicable; raw query text and personal stable keys are not stored in those read

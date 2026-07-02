@@ -161,7 +161,16 @@ class AutopsyCLIContractTests(unittest.TestCase):
         revoke_args = parser.parse_args(["shared-server", "revoke-token", "tok_1"])
         scoped_tokens_args = parser.parse_args(["shared-server", "scoped-tokens", "--repo-scope", "repo-a"])
         access_check_args = parser.parse_args(["shared-server", "access-check", "--repo-scope", "repo-a", "--mode", "write"])
-        audit_args = parser.parse_args(["shared-server", "audit", "--repo-scope", "repo-a", "--limit", "25"])
+        audit_args = parser.parse_args([
+            "shared-server",
+            "audit",
+            "--repo-scope",
+            "repo-a",
+            "--limit",
+            "25",
+            "--action",
+            "read_shared_context,read_personal_context",
+        ])
         publish_args = parser.parse_args(["shared-server", "publish", "graph-note:1", "--repo-scope", "repo-a", "--expected-version-ns", "123"])
         list_args = parser.parse_args(["shared-server", "list", "--repo-scope", "repo-a", "--include-archived", "--limit", "10"])
         history_args = parser.parse_args(["shared-server", "memory-history", "shared:1", "--repo-scope", "repo-a", "--limit", "10"])
@@ -261,6 +270,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(audit_args.shared_server_action, "audit")
         self.assertEqual(audit_args.repo_scope, "repo-a")
         self.assertEqual(audit_args.limit, 25)
+        self.assertEqual(audit_args.action, ["read_shared_context,read_personal_context"])
         self.assertEqual(publish_args.shared_server_action, "publish")
         self.assertEqual(publish_args.stable_key, "graph-note:1")
         self.assertEqual(publish_args.expected_version_ns, 123)
@@ -317,9 +327,26 @@ class AutopsyCLIContractTests(unittest.TestCase):
 
     def test_shared_server_audit_path_scopes_graph_repo_and_limit(self):
         path = cli.shared_server_audit_path("autopsy", "repo-a", limit=25)
+        filtered_path = cli.shared_server_audit_path(
+            "autopsy",
+            "repo-a",
+            limit=25,
+            actions=["read_shared_context", "read_personal_context"],
+        )
+        csv_filtered_path = cli.shared_server_audit_path(
+            "autopsy",
+            "repo-a",
+            limit=25,
+            actions=["read_shared_context,read_personal_context"],
+        )
         unscoped_path = cli.shared_server_audit_path("autopsy", "*", limit=1000)
 
         self.assertEqual(path, "/v1/audit-events?graph_slug=autopsy&limit=25&repo=repo-a")
+        self.assertEqual(
+            filtered_path,
+            "/v1/audit-events?graph_slug=autopsy&limit=25&repo=repo-a&action=read_shared_context&action=read_personal_context",
+        )
+        self.assertEqual(csv_filtered_path, filtered_path)
         self.assertEqual(unscoped_path, "/v1/audit-events?graph_slug=autopsy&limit=500")
 
     def test_shared_server_access_check_path_is_graph_scoped(self):

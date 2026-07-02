@@ -4480,13 +4480,15 @@ def shared_server_access_check_path(graph_slug: str, repo: str, *, mode: str = "
     return shared_server_path(graph_slug, f"/access-check?{urllib.parse.urlencode(query)}")
 
 
-def shared_server_audit_path(graph_slug: str, repo: str | None, *, limit: int) -> str:
-    query: dict[str, Any] = {
-        "graph_slug": graph_slug,
-        "limit": max(1, min(int(limit), 500)),
-    }
+def shared_server_audit_path(graph_slug: str, repo: str | None, *, limit: int, actions: list[str] | tuple[str, ...] | str | None = None) -> str:
+    query: list[tuple[str, Any]] = [
+        ("graph_slug", graph_slug),
+        ("limit", max(1, min(int(limit), 500))),
+    ]
     if repo and repo != "*":
-        query["repo"] = repo
+        query.append(("repo", repo))
+    for action in split_cli_csv_values(actions):
+        query.append(("action", action))
     return f"/v1/audit-events?{urllib.parse.urlencode(query)}"
 
 
@@ -5310,7 +5312,12 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
     if action == "audit":
         payload = shared_server_request_or_fail(
             config,
-            shared_server_audit_path(graph_slug, repo, limit=int(getattr(args, "limit", 100) or 100)),
+            shared_server_audit_path(
+                graph_slug,
+                repo,
+                limit=int(getattr(args, "limit", 100) or 100),
+                actions=split_cli_csv_values(getattr(args, "action", None)),
+            ),
             timeout=10,
         )
         print(json.dumps(payload, indent=2))

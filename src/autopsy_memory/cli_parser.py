@@ -455,6 +455,7 @@ def build_parser(
     shared_server_parser.add_argument("--version-ns", type=int, help="Shared memory version_ns for shared-server restore-version.")
     shared_server_parser.add_argument("--query", default="", help="Query text for shared-server context retrieval.")
     shared_server_parser.add_argument("--limit", type=int, default=50, help="Maximum shared records to list or retrieve.")
+    shared_server_parser.add_argument("--action", action="append", help="With shared-server audit, restrict to one or more audit event actions. Repeat or comma-separate values.")
     shared_server_parser.add_argument("--expected-version-ns", type=int, help="With shared-server publish or restore-version, reject the write unless the current shared memory version_ns matches this value.")
     shared_server_parser.add_argument("--include-archived", action="store_true", help="With shared-server list, context, or personal-context, include archived shared memories.")
     shared_server_parser.add_argument("--no-relations", action="store_true", help="With shared-server context or personal-context, omit adjacent shared graph relations.")

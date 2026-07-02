@@ -1604,6 +1604,10 @@ final class ActivityStore: ObservableObject {
                 "audit",
                 "--repo-scope",
                 scope,
+                "--action",
+                "read_shared_context",
+                "--action",
+                "read_personal_context",
                 "--limit",
                 "50",
             ])
