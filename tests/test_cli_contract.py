@@ -2348,6 +2348,16 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "status": "verified",
                         "continuity_status": "verified",
                     },
+                    "token_hygiene": {
+                        "stale_after_days": 30,
+                        "stale_cutoff_at": "2026-06-02T11:46:32Z",
+                        "active_without_expiration_count": 3,
+                        "active_never_used_count": 2,
+                        "stale_active_count": 1,
+                        "active_for_disabled_users_count": 0,
+                        "active_global_tokens_count": 3,
+                        "active_scoped_tokens_count": 0,
+                    },
                 }
             if path == "/v1/users":
                 return {"items": [{"id": "usr_1", "disabled": False}, {"id": "usr_2", "disabled": True}]}
@@ -2489,6 +2499,14 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["team"]["storage_active_token_count"], 3)
         self.assertEqual(payload["team"]["storage_revoked_token_count"], 10)
         self.assertEqual(payload["team"]["storage_audit_event_count"], 329)
+        self.assertEqual(payload["team"]["storage_token_hygiene_stale_after_days"], 30)
+        self.assertEqual(payload["team"]["storage_token_hygiene_stale_cutoff_at"], "2026-06-02T11:46:32Z")
+        self.assertEqual(payload["team"]["storage_active_tokens_without_expiration_count"], 3)
+        self.assertEqual(payload["team"]["storage_active_tokens_never_used_count"], 2)
+        self.assertEqual(payload["team"]["storage_stale_active_tokens_count"], 1)
+        self.assertEqual(payload["team"]["storage_active_tokens_for_disabled_users_count"], 0)
+        self.assertEqual(payload["team"]["storage_active_global_tokens_count"], 3)
+        self.assertEqual(payload["team"]["storage_active_scoped_tokens_count"], 0)
         self.assertEqual(payload["team"]["storage_audit_chain_status"], "verified")
         self.assertEqual(payload["team"]["storage_audit_chain_continuity_status"], "verified")
         self.assertEqual(payload["team"]["users_count"], 2)

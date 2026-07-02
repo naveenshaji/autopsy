@@ -5029,6 +5029,7 @@ def summarize_shared_server_invite_expiration_summary(summary: dict[str, Any]) -
 
 def summarize_shared_server_storage_status(status: dict[str, Any]) -> dict[str, Any]:
     counts = status.get("counts") if isinstance(status.get("counts"), dict) else {}
+    token_hygiene = status.get("token_hygiene") if isinstance(status.get("token_hygiene"), dict) else {}
     audit_chain = status.get("audit_chain") if isinstance(status.get("audit_chain"), dict) else {}
     return {
         "storage_ok": bool(status.get("ok")),
@@ -5047,6 +5048,14 @@ def summarize_shared_server_storage_status(status: dict[str, Any]) -> dict[str, 
         "storage_revoked_token_count": _safe_int(counts.get("revoked_tokens")),
         "storage_expired_token_count": _safe_int(counts.get("expired_tokens")),
         "storage_audit_event_count": _safe_int(counts.get("audit_events")),
+        "storage_token_hygiene_stale_after_days": _safe_int(token_hygiene.get("stale_after_days")),
+        "storage_token_hygiene_stale_cutoff_at": str(token_hygiene.get("stale_cutoff_at") or ""),
+        "storage_active_tokens_without_expiration_count": _safe_int(token_hygiene.get("active_without_expiration_count")),
+        "storage_active_tokens_never_used_count": _safe_int(token_hygiene.get("active_never_used_count")),
+        "storage_stale_active_tokens_count": _safe_int(token_hygiene.get("stale_active_count")),
+        "storage_active_tokens_for_disabled_users_count": _safe_int(token_hygiene.get("active_for_disabled_users_count")),
+        "storage_active_global_tokens_count": _safe_int(token_hygiene.get("active_global_tokens_count")),
+        "storage_active_scoped_tokens_count": _safe_int(token_hygiene.get("active_scoped_tokens_count")),
         "storage_audit_chain_status": str(audit_chain.get("status") or ""),
         "storage_audit_chain_continuity_status": str(audit_chain.get("continuity_status") or ""),
     }

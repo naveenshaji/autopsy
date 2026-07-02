@@ -294,6 +294,7 @@ final class ActivityStore: ObservableObject {
                 ("tamper_evident_audit_chain", "audit chain"),
                 ("audit_event_summaries", "audit summaries"),
                 ("admin_storage_status", "storage status"),
+                ("admin_storage_token_hygiene", "token hygiene"),
                 ("repo_policies", "repo policies"),
                 ("repo_policy_inventory", "policy inventory"),
                 ("repo_policy_fingerprints", "policy fingerprints"),
@@ -502,6 +503,22 @@ final class ActivityStore: ObservableObject {
             }
             if let activeTokens = team.storageActiveTokenCount {
                 parts.append("active tokens: \(activeTokens)")
+            }
+            if let noExpiry = team.storageActiveTokensWithoutExpirationCount, noExpiry > 0 {
+                parts.append("no expiry: \(noExpiry)")
+            }
+            if let neverUsed = team.storageActiveTokensNeverUsedCount, neverUsed > 0 {
+                parts.append("never used: \(neverUsed)")
+            }
+            if let stale = team.storageStaleActiveTokensCount, stale > 0 {
+                if let days = team.storageTokenHygieneStaleAfterDays, days > 0 {
+                    parts.append("stale >\(days)d: \(stale)")
+                } else {
+                    parts.append("stale: \(stale)")
+                }
+            }
+            if let disabledUserTokens = team.storageActiveTokensForDisabledUsersCount, disabledUserTokens > 0 {
+                parts.append("disabled-user tokens: \(disabledUserTokens)")
             }
             if let auditEvents = team.storageAuditEventCount {
                 parts.append("audits: \(auditEvents)")
@@ -2704,6 +2721,7 @@ final class ActivityStore: ObservableObject {
         }
 
         let counts = payload["counts"] as? [String: Any] ?? [:]
+        let tokenHygiene = payload["token_hygiene"] as? [String: Any] ?? [:]
         let auditChain = payload["audit_chain"] as? [String: Any] ?? [:]
         let backend = auditString(payload["backend"]) ?? "unknown"
         let ok = auditBool(payload["ok"]) == true ? "ok" : "not ok"
@@ -2734,6 +2752,23 @@ final class ActivityStore: ObservableObject {
             "Tokens: \(tokens) (active \(activeTokens), revoked \(revokedTokens), expired \(expiredTokens))",
             "Audit events: \(auditEvents)",
         ]
+        if !tokenHygiene.isEmpty {
+            let staleAfterDays = auditInt(tokenHygiene["stale_after_days"]) ?? 0
+            let staleLabel = staleAfterDays > 0 ? "stale >\(staleAfterDays)d" : "stale"
+            let activeWithoutExpiration = auditInt(tokenHygiene["active_without_expiration_count"]) ?? 0
+            let activeNeverUsed = auditInt(tokenHygiene["active_never_used_count"]) ?? 0
+            let staleActive = auditInt(tokenHygiene["stale_active_count"]) ?? 0
+            let activeForDisabledUsers = auditInt(tokenHygiene["active_for_disabled_users_count"]) ?? 0
+            let activeGlobal = auditInt(tokenHygiene["active_global_tokens_count"]) ?? 0
+            let activeScoped = auditInt(tokenHygiene["active_scoped_tokens_count"]) ?? 0
+            lines += [
+                "Token hygiene: no expiration \(activeWithoutExpiration), never used \(activeNeverUsed), \(staleLabel) \(staleActive)",
+                "Token scope: global \(activeGlobal), scoped \(activeScoped), disabled-user active \(activeForDisabledUsers)",
+            ]
+            if let staleCutoff = auditString(tokenHygiene["stale_cutoff_at"]) {
+                lines.append("Stale cutoff: \(staleCutoff)")
+            }
+        }
         if !auditChain.isEmpty {
             let status = auditString(auditChain["status"]) ?? "unknown"
             let continuity = auditString(auditChain["continuity_status"]) ?? "unknown"

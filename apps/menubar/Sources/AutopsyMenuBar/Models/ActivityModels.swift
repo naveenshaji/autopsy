@@ -163,6 +163,14 @@ struct SharedServerTeamPayload: Decodable {
     var storageRevokedTokenCount: Int?
     var storageExpiredTokenCount: Int?
     var storageAuditEventCount: Int?
+    var storageTokenHygieneStaleAfterDays: Int?
+    var storageTokenHygieneStaleCutoffAt: String?
+    var storageActiveTokensWithoutExpirationCount: Int?
+    var storageActiveTokensNeverUsedCount: Int?
+    var storageStaleActiveTokensCount: Int?
+    var storageActiveTokensForDisabledUsersCount: Int?
+    var storageActiveGlobalTokensCount: Int?
+    var storageActiveScopedTokensCount: Int?
     var storageAuditChainStatus: String?
     var storageAuditChainContinuityStatus: String?
     var usersError: String?
@@ -250,6 +258,14 @@ struct SharedServerTeamPayload: Decodable {
         case storageRevokedTokenCount = "storage_revoked_token_count"
         case storageExpiredTokenCount = "storage_expired_token_count"
         case storageAuditEventCount = "storage_audit_event_count"
+        case storageTokenHygieneStaleAfterDays = "storage_token_hygiene_stale_after_days"
+        case storageTokenHygieneStaleCutoffAt = "storage_token_hygiene_stale_cutoff_at"
+        case storageActiveTokensWithoutExpirationCount = "storage_active_tokens_without_expiration_count"
+        case storageActiveTokensNeverUsedCount = "storage_active_tokens_never_used_count"
+        case storageStaleActiveTokensCount = "storage_stale_active_tokens_count"
+        case storageActiveTokensForDisabledUsersCount = "storage_active_tokens_for_disabled_users_count"
+        case storageActiveGlobalTokensCount = "storage_active_global_tokens_count"
+        case storageActiveScopedTokensCount = "storage_active_scoped_tokens_count"
         case storageAuditChainStatus = "storage_audit_chain_status"
         case storageAuditChainContinuityStatus = "storage_audit_chain_continuity_status"
         case usersError = "users_error"
