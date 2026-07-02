@@ -2133,6 +2133,14 @@ final class ActivityStore: ObservableObject {
             let metadata = item["metadata"] as? [String: Any] ?? [:]
             return auditBool(metadata["actor_token_scoped"]) == true
         }.count
+        let revokedScopedTokens = accessChanges.reduce(0) { total, item in
+            let metadata = item["metadata"] as? [String: Any] ?? [:]
+            return total + (auditInt(metadata["revoked_scoped_token_count"]) ?? 0)
+        }
+        let alreadyRevokedScopedTokens = accessChanges.reduce(0) { total, item in
+            let metadata = item["metadata"] as? [String: Any] ?? [:]
+            return total + (auditInt(metadata["already_revoked_scoped_token_count"]) ?? 0)
+        }
 
         var lines = [
             "Autopsy Shared Access Change Audit",
@@ -2140,6 +2148,8 @@ final class ActivityStore: ObservableObject {
             "Audit window: \(items.count) latest events",
             "Access changes: \(accessChanges.count)",
             "Scoped actor tokens: \(scopedActorChanges)",
+            "Revoked scoped tokens: \(revokedScopedTokens)",
+            "Already revoked scoped tokens: \(alreadyRevokedScopedTokens)",
         ]
 
         let countSummary = Self.sharedAccessChangeAuditActions
@@ -2197,6 +2207,12 @@ final class ActivityStore: ObservableObject {
         }
         if let alreadyRevoked = auditBool(metadata["already_revoked"]) {
             parts.append("already revoked \(alreadyRevoked ? "yes" : "no")")
+        }
+        if let revokedScopedTokens = auditInt(metadata["revoked_scoped_token_count"]) {
+            parts.append("revoked scoped tokens \(revokedScopedTokens)")
+        }
+        if let alreadyRevokedScopedTokens = auditInt(metadata["already_revoked_scoped_token_count"]) {
+            parts.append("already revoked scoped tokens \(alreadyRevokedScopedTokens)")
         }
         parts += sharedActorTokenScopeParts(metadata)
         if let integrityStatus = auditString(item["integrity_status"]) {
