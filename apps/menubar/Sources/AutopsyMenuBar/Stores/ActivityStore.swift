@@ -75,6 +75,10 @@ final class ActivityStore: ObservableObject {
         "read_repo_policy",
         "read_repo_policies",
         "check_relation_policy",
+        "create_shared_relation",
+        "revoke_shared_relation",
+        "create_personal_relation",
+        "revoke_personal_relation",
         "read_audit_events",
         "read_audit_integrity",
         "verify_audit_receipt",
@@ -2927,11 +2931,11 @@ final class ActivityStore: ObservableObject {
         }
 
         let items = rawItems.compactMap { $0 as? [String: Any] }
-        let activityReads = items.filter { item in
+        let activityEvents = items.filter { item in
             guard let action = auditString(item["action"]) else { return false }
             return Self.sharedActivityAuditActions.contains(action)
         }
-        let counts = Dictionary(grouping: activityReads) { item in
+        let counts = Dictionary(grouping: activityEvents) { item in
             auditString(item["action"]) ?? "unknown"
         }.mapValues(\.count)
 
@@ -2939,7 +2943,7 @@ final class ActivityStore: ObservableObject {
             "Autopsy Shared Activity Audit",
             "Repo: \(repoScope)",
             "Audit window: \(items.count) latest events",
-            "Activity reads: \(activityReads.count)",
+            "Activity events: \(activityEvents.count)",
         ]
 
         let countSummary = Self.sharedActivityAuditActions
@@ -2951,18 +2955,18 @@ final class ActivityStore: ObservableObject {
             lines.append("Counts: \(countSummary.joined(separator: ", "))")
         }
 
-        guard !activityReads.isEmpty else {
+        guard !activityEvents.isEmpty else {
             lines.append("")
-            lines.append("No shared activity read events were found in the latest audit window.")
+            lines.append("No shared activity events were found in the latest audit window.")
             return lines.joined(separator: "\n")
         }
 
         lines.append("")
-        for item in activityReads.prefix(16) {
+        for item in activityEvents.prefix(16) {
             lines.append(formatSharedActivityAuditItem(item))
         }
-        if activityReads.count > 16 {
-            lines.append("- \(activityReads.count - 16) more activity reads omitted")
+        if activityEvents.count > 16 {
+            lines.append("- \(activityEvents.count - 16) more activity events omitted")
         }
         return lines.joined(separator: "\n")
     }
@@ -2977,6 +2981,15 @@ final class ActivityStore: ObservableObject {
         var parts: [String] = []
         if let target {
             parts.append("target \(target)")
+        }
+        if let relationID = auditString(metadata["id"]) {
+            parts.append("relation id \(relationID)")
+        }
+        if let sharedKey = auditString(metadata["shared_key"]) {
+            parts.append("shared \(sharedKey)")
+        }
+        if let targetKey = auditString(metadata["target_key"]) {
+            parts.append("target key \(targetKey)")
         }
         if let itemCount = auditInt(metadata["item_count"]) {
             parts.append("items \(itemCount)")
@@ -3034,6 +3047,15 @@ final class ActivityStore: ObservableObject {
         }
         if let policyVersion = auditString(metadata["policy_version_ns"]) {
             parts.append("policy version \(policyVersion)")
+        }
+        if let expectedPolicyFingerprint = auditString(metadata["expected_policy_fingerprint"]) {
+            parts.append("expected fingerprint \(shortAuditHash(expectedPolicyFingerprint))")
+        }
+        if let expectedPolicyVersion = auditString(metadata["expected_policy_version_ns"]) {
+            parts.append("expected policy version \(expectedPolicyVersion)")
+        }
+        if let personalKeyPresent = auditBool(metadata["personal_key_present"]) {
+            parts.append("personal key \(personalKeyPresent ? "present" : "absent")")
         }
         if let status = auditString(metadata["status"]) {
             parts.append("status \(status)")

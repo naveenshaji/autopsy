@@ -95,12 +95,15 @@ Run checks:
   the returned policy fingerprint/version into the write so stale policy changes
   fail instead of writing against a different rule. Raw audit copies include privacy-preserving context-read events
   with hashed queries and counts when the server records them. Activity-audit
-  summaries request sensitive shared-server read events such as access checks,
+  summaries request sensitive shared-server activity events such as access checks,
   token/grant/user inventories, policy reads/inventories, relation policy checks,
-  memory lists/history, shared relation lists, and audit reads, then copy counts, limits, statuses,
-  roles/reasons, relation scopes, relation labels, relation ratings, dry-run
-  markers, short policy fingerprints, policy versions/metadata, token-scope
-  markers, and filter-presence flags. Context-audit
+  shared/personal relation creates and revokes, memory lists/history, shared
+  relation lists, and audit reads, then copy counts, limits, statuses,
+  roles/reasons, relation ids, shared and target keys when exposed by the
+  privacy-preserving audit metadata, relation scopes, relation labels, relation
+  ratings, dry-run markers, short current/expected policy fingerprints, current
+  and expected policy versions, personal-key presence, token-scope markers, and
+  filter-presence flags. Context-audit
   summaries request only shared-context and
   personal-linked-context read events and copy only read counts, relation
   provenance counters, and audit integrity status, not raw query text or
