@@ -288,6 +288,7 @@ final class ActivityStore: ObservableObject {
                 ("owner_handoff", "owner handoff"),
                 ("grant_downgrade_token_revocation", "downgrade cleanup"),
                 ("token_last_used_inventory", "token last use"),
+                ("token_label_constraints", "label guards"),
                 ("tamper_evident_audit_chain", "audit chain"),
                 ("audit_event_summaries", "audit summaries"),
                 ("repo_policies", "repo policies"),
