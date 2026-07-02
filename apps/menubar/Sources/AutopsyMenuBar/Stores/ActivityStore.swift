@@ -1721,6 +1721,9 @@ final class ActivityStore: ObservableObject {
         if let minFactRating = auditDecimal(metadata["min_fact_rating"]) {
             parts.append("min rating \(minFactRating)")
         }
+        if let integrityStatus = auditString(item["integrity_status"]) {
+            parts.append("integrity \(integrityStatus)")
+        }
         parts.append("guard \(auditInt(metadata["read_guard_blocked_count"]) ?? 0)")
 
         return "- \(createdAt) \(label) \(repo): \(parts.joined(separator: ", "))"

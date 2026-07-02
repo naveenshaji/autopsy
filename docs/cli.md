@@ -156,7 +156,8 @@ specific event class such as `read_shared_context` or `read_personal_context`.
 Successful shared-context and personal-linked-context reads are audited with
 returned counts, flags, read-guard totals, and a SHA-256 query hash where
 applicable; raw query text and personal stable keys are not stored in those read
-audit events.
+audit events. New shared-server audit events also include hash-chain integrity
+fields and read-time `integrity_status` values.
 `shared-server access-check --repo-scope <repo> --mode read|write|admin`
 explains the configured caller's effective access for one graph/repo action,
 including the matching caller-owned grant and capabilities.

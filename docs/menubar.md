@@ -86,7 +86,7 @@ Run checks:
   threshold. Raw audit copies include privacy-preserving context-read events
   with hashed queries and counts when the server records them. Context-audit
   summaries request only shared-context and personal-linked-context read events
-  and copy only read counts and relation provenance counters, not raw query text
-  or personal stable keys.
+  and copy only read counts, relation provenance counters, and audit integrity
+  status, not raw query text or personal stable keys.
 - Attention items when available.
 - Quit action.
