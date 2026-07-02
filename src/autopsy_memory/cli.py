@@ -4400,8 +4400,12 @@ def format_shared_server_error_detail(value: Any) -> str:
                 ("target", "target"),
                 ("repo", "repo"),
                 ("mode", "mode"),
+                ("active_owner_count", "active_owners"),
+                ("removed_owner_count", "removing"),
+                ("remaining_owner_count", "remaining"),
             ):
-                entry = str(value.get(key) or "").strip()
+                raw_entry = value.get(key)
+                entry = "" if raw_entry is None else str(raw_entry).strip()
                 if entry:
                     parts.append(f"{label}={entry}")
             return "; ".join(parts)

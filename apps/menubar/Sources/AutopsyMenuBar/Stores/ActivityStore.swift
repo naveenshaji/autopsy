@@ -1936,8 +1936,35 @@ final class ActivityStore: ObservableObject {
                 await loadSharedServerTeamStatus()
             }
         } catch {
-            sharedServerError = error.localizedDescription
+            sharedServerError = sharedAccessErrorMessage(error)
         }
+    }
+
+    private func sharedAccessErrorMessage(_ error: Error) -> String {
+        let message = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard message.contains("last active owner grant must remain") else {
+            return message
+        }
+        var details: [String] = []
+        if let repo = sharedErrorValue("repo", in: message), !repo.isEmpty {
+            details.append("repo \(repo)")
+        }
+        if let activeOwners = sharedErrorValue("active_owners", in: message), !activeOwners.isEmpty {
+            details.append("active owners \(activeOwners)")
+        }
+        details.append("keep one owner or ask a global admin")
+        return "Cannot change last shared owner; \(details.joined(separator: ", "))"
+    }
+
+    private func sharedErrorValue(_ key: String, in message: String) -> String? {
+        let prefix = "\(key)="
+        for segment in message.split(separator: ";") {
+            let trimmed = segment.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.hasPrefix(prefix) {
+                return String(trimmed.dropFirst(prefix.count))
+            }
+        }
+        return nil
     }
 
     private func normalizedRepoScope(_ value: String) -> String {

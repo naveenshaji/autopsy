@@ -710,6 +710,34 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "HTTP 409: shared graph already exists; graph=autopsy",
         )
 
+    def test_shared_server_http_error_formats_last_owner_conflict_detail(self):
+        error = urllib.error.HTTPError(
+            "/v1/grants/revoke",
+            409,
+            "Conflict",
+            {},
+            io.BytesIO(
+                json.dumps(
+                    {
+                        "detail": {
+                            "error": "last active owner grant must remain",
+                            "graph_slug": "autopsy",
+                            "repo": "repo-a",
+                            "user_id": "usr_1",
+                            "active_owner_count": 1,
+                            "removed_owner_count": 1,
+                            "remaining_owner_count": 0,
+                        }
+                    }
+                ).encode()
+            ),
+        )
+
+        self.assertEqual(
+            cli.shared_server_http_error_message(error),
+            "HTTP 409: last active owner grant must remain; user=usr_1; graph=autopsy; repo=repo-a; active_owners=1; removing=1; remaining=0",
+        )
+
     def test_shared_server_create_token_posts_expiration_payload(self):
         parser = cli.build_parser()
         args = parser.parse_args([
