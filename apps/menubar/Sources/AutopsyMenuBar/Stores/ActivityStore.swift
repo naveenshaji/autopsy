@@ -46,6 +46,8 @@ final class ActivityStore: ObservableObject {
     private let workerKeepaliveIntervalSeconds: UInt64 = 60
     private static let sharedSecurityAuditActions = [
         "auth_failure",
+        "disable_user",
+        "enable_user",
     ]
     private static let sharedActivityAuditActions = [
         "read_users",
@@ -2070,7 +2072,17 @@ final class ActivityStore: ObservableObject {
             guard let action = auditString(item["action"]) else { return false }
             return Self.sharedSecurityAuditActions.contains(action)
         }
-        let reasonCounts = Dictionary(grouping: securityEvents) { item in
+        let authFailures = securityEvents.filter { item in
+            auditString(item["action"]) == "auth_failure"
+        }
+        let userLifecycleEvents = securityEvents.filter { item in
+            guard let action = auditString(item["action"]) else { return false }
+            return action == "disable_user" || action == "enable_user"
+        }
+        let actionCounts = Dictionary(grouping: securityEvents) { item in
+            auditString(item["action"]) ?? "unknown"
+        }.mapValues(\.count)
+        let reasonCounts = Dictionary(grouping: authFailures) { item in
             let metadata = item["metadata"] as? [String: Any] ?? [:]
             return auditString(metadata["reason"]) ?? "unknown"
         }.mapValues(\.count)
@@ -2079,7 +2091,7 @@ final class ActivityStore: ObservableObject {
         var fingerprints: Set<String> = []
         var clientFingerprints: Set<String> = []
         var rateLimitedCount = 0
-        for item in securityEvents {
+        for item in authFailures {
             let metadata = item["metadata"] as? [String: Any] ?? [:]
             if let fingerprint = auditString(metadata["token_fingerprint"]) {
                 fingerprintEventCount += 1
@@ -2111,7 +2123,9 @@ final class ActivityStore: ObservableObject {
             "Scope: global",
             "Filters: \(Self.sharedSecurityAuditActions.joined(separator: ", "))",
             "Audit window: \(items.count) latest events",
-            "Auth failures: \(securityEvents.count)",
+            "Security events: \(securityEvents.count)",
+            "Auth failures: \(authFailures.count)",
+            "User lifecycle: \(userLifecycleEvents.count)",
             "Token fingerprints: \(fingerprints.count) unique across \(fingerprintEventCount) events",
             "Client fingerprints: \(clientFingerprints.count) unique",
             "Rate limited: \(rateLimitedCount)",
@@ -2130,10 +2144,18 @@ final class ActivityStore: ObservableObject {
         if !reasonSummary.isEmpty {
             lines.append("Reasons: \(reasonSummary.joined(separator: ", "))")
         }
+        let actionSummary = Self.sharedSecurityAuditActions
+            .compactMap { action -> String? in
+                guard let count = actionCounts[action], count > 0 else { return nil }
+                return "\(action) \(count)"
+            }
+        if !actionSummary.isEmpty {
+            lines.append("Actions: \(actionSummary.joined(separator: ", "))")
+        }
 
         guard !securityEvents.isEmpty else {
             lines.append("")
-            lines.append("No global auth-failure events were found in the latest audit window.")
+            lines.append("No global security events were found in the latest audit window.")
             return lines.joined(separator: "\n")
         }
 
@@ -2148,6 +2170,11 @@ final class ActivityStore: ObservableObject {
     }
 
     private func formatSharedSecurityAuditItem(_ item: [String: Any]) -> String {
+        let action = auditString(item["action"]) ?? "security_event"
+        if action == "disable_user" || action == "enable_user" {
+            return formatSharedUserLifecycleAuditItem(item, action: action)
+        }
+
         let createdAt = auditString(item["created_at"]) ?? "unknown time"
         let metadata = item["metadata"] as? [String: Any] ?? [:]
 
@@ -2177,6 +2204,37 @@ final class ActivityStore: ObservableObject {
         }
 
         return "- \(createdAt) auth failure: \(parts.joined(separator: ", "))"
+    }
+
+    private func formatSharedUserLifecycleAuditItem(_ item: [String: Any], action: String) -> String {
+        let createdAt = auditString(item["created_at"]) ?? "unknown time"
+        let metadata = item["metadata"] as? [String: Any] ?? [:]
+        let label = action == "disable_user" ? "disable user" : "enable user"
+
+        var parts: [String] = []
+        if let actor = auditString(item["actor_id"]) {
+            parts.append("actor \(actor)")
+        }
+        if let target = auditString(item["target"]) {
+            parts.append("target \(target)")
+        }
+        if let previousDisabled = auditBool(metadata["previous_disabled"]) {
+            parts.append("previous disabled \(previousDisabled ? "yes" : "no")")
+        }
+        if action == "disable_user", let alreadyDisabled = auditBool(metadata["already_disabled"]) {
+            parts.append("already disabled \(alreadyDisabled ? "yes" : "no")")
+        }
+        if action == "enable_user", let alreadyEnabled = auditBool(metadata["already_enabled"]) {
+            parts.append("already enabled \(alreadyEnabled ? "yes" : "no")")
+        }
+        if let integrityStatus = auditString(item["integrity_status"]) {
+            parts.append("integrity \(integrityStatus)")
+        }
+        if parts.isEmpty {
+            parts.append("recorded")
+        }
+
+        return "- \(createdAt) \(label): \(parts.joined(separator: ", "))"
     }
 
     private func sharedAuditIntegrityReport(from output: String, repoScope: String) -> String {

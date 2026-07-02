@@ -99,10 +99,11 @@ Run checks:
   use the server-side integrity report to count recent verified, missing,
   mismatch, and unknown audit events, chain status, uncheckable pairs, filtered
   external gaps, and real unfiltered chain breaks in the copied audit window.
-  Security-audit summaries request global `auth_failure` events only, copy
-  reason counts, throttle counts, keyed client fingerprints, and server-side
-  token fingerprints when present, and require a global-admin shared-server
-  token because they intentionally omit graph and repo filters.
+  Security-audit summaries request global `auth_failure`, `disable_user`, and
+  `enable_user` events, copy reason counts, throttle counts, keyed client
+  fingerprints, server-side token fingerprints when present, and user lifecycle
+  targets, and require a global-admin shared-server token because they
+  intentionally omit graph and repo filters.
   Team status is requested for the current workspace repo scope by default and
   also surfaces disabled-user counts and the server-side audit integrity status
   inline.
