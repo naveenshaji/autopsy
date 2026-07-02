@@ -282,6 +282,7 @@ final class ActivityStore: ObservableObject {
                 ("grant_downgrade_token_revocation", "downgrade cleanup"),
                 ("tamper_evident_audit_chain", "audit chain"),
                 ("repo_policies", "repo policies"),
+                ("repo_policy_inventory", "policy inventory"),
                 ("mutation_audit_receipts", "audit receipts"),
                 ("audit_receipt_verification", "audit verification"),
                 ("personal_shared_relations", "personal links"),
