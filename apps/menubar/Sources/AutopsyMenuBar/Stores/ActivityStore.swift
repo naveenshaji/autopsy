@@ -2916,6 +2916,12 @@ final class ActivityStore: ObservableObject {
         if let mode = auditString(metadata["mode"]) {
             parts.append("mode \(mode)")
         }
+        if let relation = auditString(metadata["relation"]), !relation.isEmpty {
+            parts.append("relation \(relation)")
+        }
+        if let factRating = auditDecimal(metadata["fact_rating"]) {
+            parts.append("rating \(factRating)")
+        }
         if let allowed = auditBool(metadata["allowed"]) {
             parts.append("allowed \(allowed ? "yes" : "no")")
         }
@@ -2960,6 +2966,9 @@ final class ActivityStore: ObservableObject {
         }
         if let targetFilter = auditBool(metadata["target_key_filter_present"]) {
             parts.append("target filter \(targetFilter ? "yes" : "no")")
+        }
+        if auditBool(metadata["token_scoped"]) == true {
+            parts.append("token scoped")
         }
         if let includeArchived = auditBool(metadata["include_archived"]) {
             parts.append("archived \(includeArchived ? "yes" : "no")")

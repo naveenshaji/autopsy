@@ -95,8 +95,8 @@ Run checks:
   summaries request sensitive shared-server read events such as access checks,
   token/grant/user inventories, policy reads/inventories, relation policy checks,
   memory lists/history, shared relation lists, and audit reads, then copy counts, limits, statuses,
-  roles/reasons, short policy fingerprints, policy metadata, and filter-presence
-  flags. Context-audit
+  roles/reasons, relation labels, relation ratings, short policy fingerprints,
+  policy metadata, token-scope markers, and filter-presence flags. Context-audit
   summaries request only shared-context and
   personal-linked-context read events and copy only read counts, relation
   provenance counters, and audit integrity status, not raw query text or
