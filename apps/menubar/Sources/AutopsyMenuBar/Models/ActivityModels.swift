@@ -55,12 +55,22 @@ struct SharedServerCapabilitiesPayload: Decodable {
     var apiVersion: Int?
     var features: [String]?
     var capabilities: [String: Bool]?
+    var security: SharedServerSecurityPayload?
 
     enum CodingKeys: String, CodingKey {
         case service
         case apiVersion = "api_version"
         case features
         case capabilities
+        case security
+    }
+}
+
+struct SharedServerSecurityPayload: Decodable {
+    var defaultInviteTokenExpirationDays: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case defaultInviteTokenExpirationDays = "default_invite_token_expiration_days"
     }
 }
 

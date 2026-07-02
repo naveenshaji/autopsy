@@ -290,7 +290,7 @@ final class ActivityStore: ObservableObject {
                 ("grant_downgrade_token_revocation", "downgrade cleanup"),
                 ("token_last_used_inventory", "token last use"),
                 ("token_label_constraints", "label guards"),
-                ("default_invite_token_expiration", "invite expiry"),
+                ("default_invite_token_expiration", defaultInviteTokenExpirationLabel(capabilities)),
                 ("tamper_evident_audit_chain", "audit chain"),
                 ("audit_event_summaries", "audit summaries"),
                 ("repo_policies", "repo policies"),
@@ -316,6 +316,13 @@ final class ActivityStore: ObservableObject {
             return error.clippedForMenuBar(limit: 28)
         }
         return ""
+    }
+
+    private func defaultInviteTokenExpirationLabel(_ capabilities: SharedServerCapabilitiesPayload) -> String {
+        guard let days = capabilities.security?.defaultInviteTokenExpirationDays, days > 0 else {
+            return "invite expiry"
+        }
+        return "invite expiry \(days)d"
     }
 
     var sharedServerUsersText: String {
