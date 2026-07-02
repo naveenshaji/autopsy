@@ -2397,6 +2397,24 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "filtered_window": True,
                     },
                 }
+            if path == (
+                "/v1/audit-events/summary?graph_slug=autopsy&limit=50&repo=repo-a"
+                "&action=invite_user&metadata_field=expires_at_defaulted"
+            ):
+                return {
+                    "event_count": 5,
+                    "metadata_counts": {
+                        "expires_at_defaulted": {"true": 3, "false": 1, "unknown": 1},
+                    },
+                    "latest_created_at": "2026-07-02T10:00:00Z",
+                    "scope": {
+                        "graph_slug": "autopsy",
+                        "repo": "repo-a",
+                        "actions": ["invite_user"],
+                        "metadata_fields": ["expires_at_defaulted"],
+                        "filtered_window": True,
+                    },
+                }
             raise AssertionError(path)
 
         with mock.patch.object(cli, "load_shared_server_config", return_value=config), mock.patch.object(cli, "shared_server_request", side_effect=fake_request):
@@ -2457,6 +2475,13 @@ class AutopsyCLIContractTests(unittest.TestCase):
             {"fact_rating_too_low": 1, "relation_label_not_allowed": 2},
         )
         self.assertEqual(payload["team"]["latest_relation_policy_conflict_at"], "2026-07-02T09:00:00Z")
+        self.assertTrue(payload["team"]["can_read_invite_expiration_summary"])
+        self.assertEqual(payload["team"]["invite_expiration_summary_source"], "summary")
+        self.assertEqual(payload["team"]["invite_expiration_audit_count"], 5)
+        self.assertEqual(payload["team"]["invite_expiration_defaulted_count"], 3)
+        self.assertEqual(payload["team"]["invite_expiration_explicit_count"], 1)
+        self.assertEqual(payload["team"]["invite_expiration_unknown_count"], 1)
+        self.assertEqual(payload["team"]["latest_invite_expiration_audit_at"], "2026-07-02T10:00:00Z")
         self.assertNotIn("audit_1", json.dumps(payload["team"]["audit_integrity"]))
         self.assertNotIn("audit_conflict_1", json.dumps(payload["team"]))
         self.assertNotIn("secret-shared-target", json.dumps(payload["team"]))

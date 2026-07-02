@@ -97,6 +97,7 @@ struct SharedServerTeamPayload: Decodable {
     var canReadPolicy: Bool?
     var canReadAuditIntegrity: Bool?
     var canReadRelationPolicyConflicts: Bool?
+    var canReadInviteExpirationSummary: Bool?
     var usersCount: Int?
     var activeUsersCount: Int?
     var disabledUsersCount: Int?
@@ -140,6 +141,11 @@ struct SharedServerTeamPayload: Decodable {
     var relationPolicyConflictScopeCounts: [String: Int]?
     var relationPolicyConflictCurrentReasonCounts: [String: Int]?
     var latestRelationPolicyConflictAt: String?
+    var inviteExpirationAuditCount: Int?
+    var inviteExpirationDefaultedCount: Int?
+    var inviteExpirationExplicitCount: Int?
+    var inviteExpirationUnknownCount: Int?
+    var latestInviteExpirationAuditAt: String?
     var usersError: String?
     var grantsError: String?
     var tokensError: String?
@@ -147,6 +153,7 @@ struct SharedServerTeamPayload: Decodable {
     var policyError: String?
     var auditIntegrityError: String?
     var relationPolicyConflictsError: String?
+    var inviteExpirationSummaryError: String?
 
     enum CodingKeys: String, CodingKey {
         case repo
@@ -157,6 +164,7 @@ struct SharedServerTeamPayload: Decodable {
         case canReadPolicy = "can_read_policy"
         case canReadAuditIntegrity = "can_read_audit_integrity"
         case canReadRelationPolicyConflicts = "can_read_relation_policy_conflicts"
+        case canReadInviteExpirationSummary = "can_read_invite_expiration_summary"
         case usersCount = "users_count"
         case activeUsersCount = "active_users_count"
         case disabledUsersCount = "disabled_users_count"
@@ -200,6 +208,11 @@ struct SharedServerTeamPayload: Decodable {
         case relationPolicyConflictScopeCounts = "relation_policy_conflict_scope_counts"
         case relationPolicyConflictCurrentReasonCounts = "relation_policy_conflict_current_reason_counts"
         case latestRelationPolicyConflictAt = "latest_relation_policy_conflict_at"
+        case inviteExpirationAuditCount = "invite_expiration_audit_count"
+        case inviteExpirationDefaultedCount = "invite_expiration_defaulted_count"
+        case inviteExpirationExplicitCount = "invite_expiration_explicit_count"
+        case inviteExpirationUnknownCount = "invite_expiration_unknown_count"
+        case latestInviteExpirationAuditAt = "latest_invite_expiration_audit_at"
         case usersError = "users_error"
         case grantsError = "grants_error"
         case tokensError = "tokens_error"
@@ -207,6 +220,7 @@ struct SharedServerTeamPayload: Decodable {
         case policyError = "policy_error"
         case auditIntegrityError = "audit_integrity_error"
         case relationPolicyConflictsError = "relation_policy_conflicts_error"
+        case inviteExpirationSummaryError = "invite_expiration_summary_error"
     }
 }
 

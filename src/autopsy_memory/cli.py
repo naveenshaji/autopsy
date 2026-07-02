@@ -5011,6 +5011,18 @@ def summarize_shared_server_relation_policy_conflict_summary(summary: dict[str, 
     }
 
 
+def summarize_shared_server_invite_expiration_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    metadata_counts = summary.get("metadata_counts") if isinstance(summary.get("metadata_counts"), dict) else {}
+    defaulted_counts = _int_count_map(metadata_counts.get("expires_at_defaulted"))
+    return {
+        "invite_expiration_audit_count": _safe_int(summary.get("event_count")),
+        "invite_expiration_defaulted_count": defaulted_counts.get("true", 0),
+        "invite_expiration_explicit_count": defaulted_counts.get("false", 0),
+        "invite_expiration_unknown_count": defaulted_counts.get("unknown", 0),
+        "latest_invite_expiration_audit_at": str(summary.get("latest_created_at") or ""),
+    }
+
+
 def build_shared_server_team_status_payload(*, config_path: str | None = None, repo: str | None = None) -> dict[str, Any]:
     config = load_shared_server_config(config_path)
     payload = build_shared_server_status_payload(check_remote=True, config_path=config_path)
@@ -5023,6 +5035,7 @@ def build_shared_server_team_status_payload(*, config_path: str | None = None, r
         "can_read_policy": False,
         "can_read_audit_integrity": False,
         "can_read_relation_policy_conflicts": False,
+        "can_read_invite_expiration_summary": False,
     }
     payload["team"] = team
     if not payload.get("configured") or not config:
@@ -5139,6 +5152,26 @@ def build_shared_server_team_status_payload(*, config_path: str | None = None, r
         team["can_read_relation_policy_conflicts"] = True
         team["relation_policy_conflicts_source"] = "summary"
         team.update(summarize_shared_server_relation_policy_conflict_summary(conflict_summary_payload))
+    try:
+        invite_summary_payload = shared_server_request(
+            config,
+            shared_server_audit_summary_path(
+                graph_slug,
+                repo or "*",
+                limit=50,
+                actions=["invite_user"],
+                metadata_fields=["expires_at_defaulted"],
+            ),
+            timeout=10,
+        )
+    except urllib.error.HTTPError as exc:
+        team["invite_expiration_summary_error"] = shared_server_http_error_message(exc)
+    except Exception as exc:
+        team["invite_expiration_summary_error"] = str(exc)
+    else:
+        team["can_read_invite_expiration_summary"] = True
+        team["invite_expiration_summary_source"] = "summary"
+        team.update(summarize_shared_server_invite_expiration_summary(invite_summary_payload))
     if read_raw_conflict_audits:
         try:
             conflict_payload = shared_server_request(

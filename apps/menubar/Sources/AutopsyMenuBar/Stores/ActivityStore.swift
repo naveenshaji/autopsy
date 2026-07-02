@@ -514,6 +514,31 @@ final class ActivityStore: ObservableObject {
         return ""
     }
 
+    var sharedServerInviteExpirationText: String {
+        guard let team = currentSharedServer?.team else { return "" }
+        if let count = team.inviteExpirationAuditCount {
+            var parts: [String] = []
+            if let defaulted = team.inviteExpirationDefaultedCount, defaulted > 0 {
+                parts.append("defaulted: \(defaulted)")
+            }
+            if let explicit = team.inviteExpirationExplicitCount, explicit > 0 {
+                parts.append("explicit: \(explicit)")
+            }
+            if let unknown = team.inviteExpirationUnknownCount, unknown > 0 {
+                parts.append("unknown: \(unknown)")
+            }
+            if let latest = team.latestInviteExpirationAuditAt, !latest.isEmpty {
+                parts.append("latest \(compactSharedServerDate(latest))")
+            }
+            let text = parts.isEmpty ? "\(count)" : "\(count) (\(parts.joined(separator: ", ")))"
+            return text.clippedForMenuBar(limit: 90)
+        }
+        if let error = team.inviteExpirationSummaryError, !error.isEmpty {
+            return error.clippedForMenuBar(limit: 28)
+        }
+        return ""
+    }
+
     var shouldShowOnboardingPrompt: Bool {
         (hasEmptyMemoryState || instructionStatus != nil) && !hasPriorMemory && !hasInstalledInstructions
     }
