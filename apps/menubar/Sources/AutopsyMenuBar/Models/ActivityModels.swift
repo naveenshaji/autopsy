@@ -98,6 +98,7 @@ struct SharedServerTeamPayload: Decodable {
     var canReadAuditIntegrity: Bool?
     var canReadRelationPolicyConflicts: Bool?
     var canReadInviteExpirationSummary: Bool?
+    var canReadStorageStatus: Bool?
     var usersCount: Int?
     var activeUsersCount: Int?
     var disabledUsersCount: Int?
@@ -146,6 +147,24 @@ struct SharedServerTeamPayload: Decodable {
     var inviteExpirationExplicitCount: Int?
     var inviteExpirationUnknownCount: Int?
     var latestInviteExpirationAuditAt: String?
+    var storageOK: Bool?
+    var storageBackend: String?
+    var storageCheckedAt: String?
+    var storageUserCount: Int?
+    var storageDisabledUserCount: Int?
+    var storageSharedGraphCount: Int?
+    var storageSharedMemoryCount: Int?
+    var storageActiveSharedMemoryCount: Int?
+    var storageArchivedSharedMemoryCount: Int?
+    var storageSharedRelationCount: Int?
+    var storagePersonalRelationCount: Int?
+    var storageTokenCount: Int?
+    var storageActiveTokenCount: Int?
+    var storageRevokedTokenCount: Int?
+    var storageExpiredTokenCount: Int?
+    var storageAuditEventCount: Int?
+    var storageAuditChainStatus: String?
+    var storageAuditChainContinuityStatus: String?
     var usersError: String?
     var grantsError: String?
     var tokensError: String?
@@ -154,6 +173,7 @@ struct SharedServerTeamPayload: Decodable {
     var auditIntegrityError: String?
     var relationPolicyConflictsError: String?
     var inviteExpirationSummaryError: String?
+    var storageStatusError: String?
 
     enum CodingKeys: String, CodingKey {
         case repo
@@ -165,6 +185,7 @@ struct SharedServerTeamPayload: Decodable {
         case canReadAuditIntegrity = "can_read_audit_integrity"
         case canReadRelationPolicyConflicts = "can_read_relation_policy_conflicts"
         case canReadInviteExpirationSummary = "can_read_invite_expiration_summary"
+        case canReadStorageStatus = "can_read_storage_status"
         case usersCount = "users_count"
         case activeUsersCount = "active_users_count"
         case disabledUsersCount = "disabled_users_count"
@@ -213,6 +234,24 @@ struct SharedServerTeamPayload: Decodable {
         case inviteExpirationExplicitCount = "invite_expiration_explicit_count"
         case inviteExpirationUnknownCount = "invite_expiration_unknown_count"
         case latestInviteExpirationAuditAt = "latest_invite_expiration_audit_at"
+        case storageOK = "storage_ok"
+        case storageBackend = "storage_backend"
+        case storageCheckedAt = "storage_checked_at"
+        case storageUserCount = "storage_user_count"
+        case storageDisabledUserCount = "storage_disabled_user_count"
+        case storageSharedGraphCount = "storage_shared_graph_count"
+        case storageSharedMemoryCount = "storage_shared_memory_count"
+        case storageActiveSharedMemoryCount = "storage_active_shared_memory_count"
+        case storageArchivedSharedMemoryCount = "storage_archived_shared_memory_count"
+        case storageSharedRelationCount = "storage_shared_relation_count"
+        case storagePersonalRelationCount = "storage_personal_relation_count"
+        case storageTokenCount = "storage_token_count"
+        case storageActiveTokenCount = "storage_active_token_count"
+        case storageRevokedTokenCount = "storage_revoked_token_count"
+        case storageExpiredTokenCount = "storage_expired_token_count"
+        case storageAuditEventCount = "storage_audit_event_count"
+        case storageAuditChainStatus = "storage_audit_chain_status"
+        case storageAuditChainContinuityStatus = "storage_audit_chain_continuity_status"
         case usersError = "users_error"
         case grantsError = "grants_error"
         case tokensError = "tokens_error"
@@ -221,6 +260,7 @@ struct SharedServerTeamPayload: Decodable {
         case auditIntegrityError = "audit_integrity_error"
         case relationPolicyConflictsError = "relation_policy_conflicts_error"
         case inviteExpirationSummaryError = "invite_expiration_summary_error"
+        case storageStatusError = "storage_status_error"
     }
 }
 

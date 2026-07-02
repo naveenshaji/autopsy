@@ -231,6 +231,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         access_check_args = parser.parse_args(["shared-server", "access-check", "--repo-scope", "repo-a", "--mode", "write"])
         policy_args = parser.parse_args(["shared-server", "policy", "--repo-scope", "repo-a"])
         policies_args = parser.parse_args(["shared-server", "policies", "--repo-scope", "repo-a", "--limit", "25"])
+        storage_status_args = parser.parse_args(["shared-server", "storage-status"])
         update_policy_args = parser.parse_args([
             "shared-server",
             "update-policy",
@@ -463,6 +464,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(policies_args.shared_server_action, "policies")
         self.assertEqual(policies_args.repo_scope, "repo-a")
         self.assertEqual(policies_args.limit, 25)
+        self.assertEqual(storage_status_args.shared_server_action, "storage-status")
         self.assertEqual(update_policy_args.shared_server_action, "update-policy")
         self.assertEqual(update_policy_args.allowed_relation_label, ["supports,depends_on"])
         self.assertEqual(update_policy_args.min_fact_rating, 0.8)
@@ -1991,6 +1993,33 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["service"], "autopsy-server")
         self.assertTrue(payload["capabilities"]["owner_handoff"])
 
+    def test_shared_server_storage_status_action_prints_remote_payload(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["shared-server", "storage-status"])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+
+        def fake_request(_config, path, **_kwargs):
+            self.assertEqual(path, "/v1/admin/storage-status")
+            return {
+                "ok": True,
+                "backend": "falkordb",
+                "counts": {"shared_memories": 54},
+                "audit_chain": {"status": "verified", "continuity_status": "verified"},
+            }
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        payload = json.loads(stream.getvalue())
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["backend"], "falkordb")
+        self.assertEqual(payload["counts"]["shared_memories"], 54)
+
     def test_shared_server_verify_receipt_checks_expected_fields(self):
         parser = cli.build_parser()
         args = parser.parse_args([
@@ -2295,6 +2324,31 @@ class AutopsyCLIContractTests(unittest.TestCase):
                 return {"ok": True}
             if path == "/v1/me":
                 return {"id": "usr_1", "email": "owner@example.com", "name": "Owner", "is_admin": True}
+            if path == "/v1/admin/storage-status":
+                return {
+                    "ok": True,
+                    "backend": "falkordb",
+                    "checked_at": "2026-07-02T11:27:08Z",
+                    "counts": {
+                        "users": 10,
+                        "disabled_users": 0,
+                        "shared_graphs": 1,
+                        "shared_memories": 54,
+                        "active_shared_memories": 7,
+                        "archived_shared_memories": 47,
+                        "shared_relations": 0,
+                        "personal_relations": 1,
+                        "tokens": 13,
+                        "active_tokens": 3,
+                        "revoked_tokens": 10,
+                        "expired_tokens": 0,
+                        "audit_events": 329,
+                    },
+                    "audit_chain": {
+                        "status": "verified",
+                        "continuity_status": "verified",
+                    },
+                }
             if path == "/v1/users":
                 return {"items": [{"id": "usr_1", "disabled": False}, {"id": "usr_2", "disabled": True}]}
             if path == "/v1/shared-graphs/autopsy/grants?repo=repo-a":
@@ -2421,6 +2475,22 @@ class AutopsyCLIContractTests(unittest.TestCase):
             payload = cli.build_shared_server_team_status_payload(repo="repo-a")
 
         self.assertTrue(payload["remote_ok"])
+        self.assertTrue(payload["team"]["can_read_storage_status"])
+        self.assertTrue(payload["team"]["storage_ok"])
+        self.assertEqual(payload["team"]["storage_backend"], "falkordb")
+        self.assertEqual(payload["team"]["storage_checked_at"], "2026-07-02T11:27:08Z")
+        self.assertEqual(payload["team"]["storage_user_count"], 10)
+        self.assertEqual(payload["team"]["storage_shared_graph_count"], 1)
+        self.assertEqual(payload["team"]["storage_shared_memory_count"], 54)
+        self.assertEqual(payload["team"]["storage_active_shared_memory_count"], 7)
+        self.assertEqual(payload["team"]["storage_archived_shared_memory_count"], 47)
+        self.assertEqual(payload["team"]["storage_personal_relation_count"], 1)
+        self.assertEqual(payload["team"]["storage_token_count"], 13)
+        self.assertEqual(payload["team"]["storage_active_token_count"], 3)
+        self.assertEqual(payload["team"]["storage_revoked_token_count"], 10)
+        self.assertEqual(payload["team"]["storage_audit_event_count"], 329)
+        self.assertEqual(payload["team"]["storage_audit_chain_status"], "verified")
+        self.assertEqual(payload["team"]["storage_audit_chain_continuity_status"], "verified")
         self.assertEqual(payload["team"]["users_count"], 2)
         self.assertEqual(payload["team"]["active_users_count"], 1)
         self.assertEqual(payload["team"]["disabled_users_count"], 1)
@@ -2488,6 +2558,44 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertNotIn("sha256:secret-old", json.dumps(payload["team"]))
         self.assertNotIn("keep private", json.dumps(payload["team"]))
         self.assertNotIn("secret-token", json.dumps(payload))
+
+    def test_shared_server_team_status_skips_storage_status_for_non_admin(self):
+        config = {
+            "base_url": "https://autopsy-server.fly.dev",
+            "graph_slug": "autopsy",
+            "user_id": "usr_1",
+            "token": "secret-token",
+        }
+        calls: list[str] = []
+
+        def fake_request(_config, path, **_kwargs):
+            calls.append(path)
+            if path == "/v1/capabilities":
+                return {"service": "autopsy-server", "api_version": 1, "capabilities": {}}
+            if path == "/health":
+                return {"ok": True}
+            if path == "/v1/me":
+                return {"id": "usr_1", "email": "owner@example.com", "name": "Owner", "is_admin": False}
+            if path.startswith("/v1/shared-graphs/autopsy/grants"):
+                return {"items": []}
+            if path.startswith("/v1/shared-graphs/autopsy/tokens"):
+                return {"items": []}
+            if path.startswith("/v1/shared-graphs/autopsy/policies"):
+                return {"items": []}
+            if path.startswith("/v1/shared-graphs/autopsy/policy"):
+                return {"repo": "repo-a"}
+            if path.startswith("/v1/audit-events/integrity"):
+                return {"status": "verified", "event_count": 0, "integrity_counts": {}, "chain": {}}
+            if path.startswith("/v1/audit-events/summary"):
+                return {"event_count": 0, "metadata_counts": {}, "latest_created_at": ""}
+            raise AssertionError(path)
+
+        with mock.patch.object(cli, "load_shared_server_config", return_value=config), mock.patch.object(cli, "shared_server_request", side_effect=fake_request):
+            payload = cli.build_shared_server_team_status_payload(repo="repo-a")
+
+        self.assertTrue(payload["remote_ok"])
+        self.assertFalse(payload["team"]["can_read_storage_status"])
+        self.assertNotIn("/v1/admin/storage-status", calls)
 
     def test_restore_offline_requires_dry_run(self):
         parser = cli.build_parser()

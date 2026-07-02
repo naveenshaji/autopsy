@@ -194,6 +194,9 @@ private struct SharedSettingsTab: View {
                 if !store.sharedServerFeaturesText.isEmpty {
                     LabeledContent("Features", value: store.sharedServerFeaturesText)
                 }
+                if !store.sharedServerStorageText.isEmpty {
+                    LabeledContent("Storage", value: store.sharedServerStorageText)
+                }
                 if !store.sharedServerUsersText.isEmpty {
                     LabeledContent("Team Users", value: store.sharedServerUsersText)
                 }
@@ -228,6 +231,11 @@ private struct SharedSettingsTab: View {
 
                     Button("Refresh Team") {
                         store.refreshSharedServerTeam()
+                    }
+                    .disabled(sharedActionDisabled)
+
+                    Button("Copy Storage") {
+                        store.copySharedServerStorageStatus()
                     }
                     .disabled(sharedActionDisabled)
                 }

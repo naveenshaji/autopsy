@@ -293,6 +293,7 @@ final class ActivityStore: ObservableObject {
                 ("default_invite_token_expiration", defaultInviteTokenExpirationLabel(capabilities)),
                 ("tamper_evident_audit_chain", "audit chain"),
                 ("audit_event_summaries", "audit summaries"),
+                ("admin_storage_status", "storage status"),
                 ("repo_policies", "repo policies"),
                 ("repo_policy_inventory", "policy inventory"),
                 ("repo_policy_fingerprints", "policy fingerprints"),
@@ -481,6 +482,38 @@ final class ActivityStore: ObservableObject {
             return parts.joined(separator: ", ")
         }
         if let error = team.auditIntegrityError, !error.isEmpty {
+            return error.clippedForMenuBar(limit: 28)
+        }
+        return ""
+    }
+
+    var sharedServerStorageText: String {
+        guard let team = currentSharedServer?.team else { return "" }
+        if let backend = team.storageBackend, !backend.isEmpty {
+            var parts = [backend]
+            if let ok = team.storageOK, ok == false {
+                parts.append("not ok")
+            }
+            if let memories = team.storageSharedMemoryCount {
+                parts.append("memories: \(memories)")
+            }
+            if let archived = team.storageArchivedSharedMemoryCount, archived > 0 {
+                parts.append("archived: \(archived)")
+            }
+            if let activeTokens = team.storageActiveTokenCount {
+                parts.append("active tokens: \(activeTokens)")
+            }
+            if let auditEvents = team.storageAuditEventCount {
+                parts.append("audits: \(auditEvents)")
+            }
+            if let continuity = team.storageAuditChainContinuityStatus, !continuity.isEmpty {
+                parts.append("chain: \(continuity)")
+            } else if let status = team.storageAuditChainStatus, !status.isEmpty {
+                parts.append("chain: \(status)")
+            }
+            return parts.joined(separator: ", ").clippedForMenuBar(limit: 110)
+        }
+        if let error = team.storageStatusError, !error.isEmpty {
             return error.clippedForMenuBar(limit: 28)
         }
         return ""
@@ -822,6 +855,12 @@ final class ActivityStore: ObservableObject {
     func refreshSharedServerTeam() {
         Task {
             await loadSharedServerTeamStatus()
+        }
+    }
+
+    func copySharedServerStorageStatus() {
+        Task {
+            await copySharedStorageStatus()
         }
     }
 
@@ -1266,6 +1305,30 @@ final class ActivityStore: ObservableObject {
                 repoScope,
             ])
             sharedServerStatus = try JSONDecoder().decode(SharedServerPayload.self, from: Data(output.utf8))
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
+    }
+
+    private func copySharedStorageStatus() async {
+        guard !isManagingSharedAccess else { return }
+        isManagingSharedAccess = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingSharedAccess = false
+        }
+
+        do {
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run([
+                "shared-server",
+                "storage-status",
+            ])
+            let summary = sharedStorageStatusReport(from: output)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(summary, forType: .string)
+            lastActionMessage = "Storage status copied"
+            clearLastActionMessageAfterDelay(expected: "Storage status copied")
         } catch {
             sharedServerError = error.localizedDescription
         }
@@ -2633,6 +2696,59 @@ final class ActivityStore: ObservableObject {
             throw CLIError.failed("Token label contains unsupported control characters")
         }
         return label
+    }
+
+    private func sharedStorageStatusReport(from output: String) -> String {
+        guard let payload = jsonObject(from: output) else {
+            return output.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let counts = payload["counts"] as? [String: Any] ?? [:]
+        let auditChain = payload["audit_chain"] as? [String: Any] ?? [:]
+        let backend = auditString(payload["backend"]) ?? "unknown"
+        let ok = auditBool(payload["ok"]) == true ? "ok" : "not ok"
+        let users = auditInt(counts["users"]) ?? 0
+        let disabledUsers = auditInt(counts["disabled_users"]) ?? 0
+        let memories = auditInt(counts["shared_memories"]) ?? 0
+        let activeMemories = auditInt(counts["active_shared_memories"]) ?? 0
+        let archivedMemories = auditInt(counts["archived_shared_memories"]) ?? 0
+        let sharedRelations = auditInt(counts["shared_relations"]) ?? 0
+        let personalRelations = auditInt(counts["personal_relations"]) ?? 0
+        let tokens = auditInt(counts["tokens"]) ?? 0
+        let activeTokens = auditInt(counts["active_tokens"]) ?? 0
+        let revokedTokens = auditInt(counts["revoked_tokens"]) ?? 0
+        let expiredTokens = auditInt(counts["expired_tokens"]) ?? 0
+        let auditEvents = auditInt(counts["audit_events"]) ?? 0
+
+        var lines = [
+            "Shared Storage Status",
+            "Backend: \(backend) (\(ok))",
+        ]
+        if let checkedAt = auditString(payload["checked_at"]) {
+            lines.append("Checked: \(checkedAt)")
+        }
+        lines += [
+            "Users: \(users) (disabled \(disabledUsers))",
+            "Shared memories: \(memories) (active \(activeMemories), archived \(archivedMemories))",
+            "Relations: shared \(sharedRelations), personal \(personalRelations)",
+            "Tokens: \(tokens) (active \(activeTokens), revoked \(revokedTokens), expired \(expiredTokens))",
+            "Audit events: \(auditEvents)",
+        ]
+        if !auditChain.isEmpty {
+            let status = auditString(auditChain["status"]) ?? "unknown"
+            let continuity = auditString(auditChain["continuity_status"]) ?? "unknown"
+            let eventCount = auditInt(auditChain["event_count"]) ?? 0
+            let windowLimit = auditInt(auditChain["window_limit"]) ?? 0
+            var chainParts = ["status \(status)", "continuity \(continuity)", "events \(eventCount)"]
+            if windowLimit > 0 {
+                chainParts.append("window \(windowLimit)")
+            }
+            lines.append("Audit chain: \(chainParts.joined(separator: ", "))")
+            if let lastEventID = auditString(auditChain["last_event_id"]) {
+                lines.append("Last audit: \(lastEventID)")
+            }
+        }
+        return lines.joined(separator: "\n")
     }
 
     private func sharedUsersReport(from output: String) -> String {

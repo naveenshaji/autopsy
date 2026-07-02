@@ -4527,6 +4527,10 @@ def shared_server_grants_path(graph_slug: str, repo: str | None) -> str:
     return shared_server_path(graph_slug, suffix)
 
 
+def shared_server_storage_status_path() -> str:
+    return "/v1/admin/storage-status"
+
+
 def shared_server_access_check_path(graph_slug: str, repo: str, *, mode: str = "read") -> str:
     query = {
         "repo": repo,
@@ -5023,6 +5027,31 @@ def summarize_shared_server_invite_expiration_summary(summary: dict[str, Any]) -
     }
 
 
+def summarize_shared_server_storage_status(status: dict[str, Any]) -> dict[str, Any]:
+    counts = status.get("counts") if isinstance(status.get("counts"), dict) else {}
+    audit_chain = status.get("audit_chain") if isinstance(status.get("audit_chain"), dict) else {}
+    return {
+        "storage_ok": bool(status.get("ok")),
+        "storage_backend": str(status.get("backend") or ""),
+        "storage_checked_at": str(status.get("checked_at") or ""),
+        "storage_user_count": _safe_int(counts.get("users")),
+        "storage_disabled_user_count": _safe_int(counts.get("disabled_users")),
+        "storage_shared_graph_count": _safe_int(counts.get("shared_graphs")),
+        "storage_shared_memory_count": _safe_int(counts.get("shared_memories")),
+        "storage_active_shared_memory_count": _safe_int(counts.get("active_shared_memories")),
+        "storage_archived_shared_memory_count": _safe_int(counts.get("archived_shared_memories")),
+        "storage_shared_relation_count": _safe_int(counts.get("shared_relations")),
+        "storage_personal_relation_count": _safe_int(counts.get("personal_relations")),
+        "storage_token_count": _safe_int(counts.get("tokens")),
+        "storage_active_token_count": _safe_int(counts.get("active_tokens")),
+        "storage_revoked_token_count": _safe_int(counts.get("revoked_tokens")),
+        "storage_expired_token_count": _safe_int(counts.get("expired_tokens")),
+        "storage_audit_event_count": _safe_int(counts.get("audit_events")),
+        "storage_audit_chain_status": str(audit_chain.get("status") or ""),
+        "storage_audit_chain_continuity_status": str(audit_chain.get("continuity_status") or ""),
+    }
+
+
 def build_shared_server_team_status_payload(*, config_path: str | None = None, repo: str | None = None) -> dict[str, Any]:
     config = load_shared_server_config(config_path)
     payload = build_shared_server_status_payload(check_remote=True, config_path=config_path)
@@ -5036,6 +5065,7 @@ def build_shared_server_team_status_payload(*, config_path: str | None = None, r
         "can_read_audit_integrity": False,
         "can_read_relation_policy_conflicts": False,
         "can_read_invite_expiration_summary": False,
+        "can_read_storage_status": False,
     }
     payload["team"] = team
     if not payload.get("configured") or not config:
@@ -5043,6 +5073,15 @@ def build_shared_server_team_status_payload(*, config_path: str | None = None, r
     graph_slug = shared_server_graph_slug_from_args(argparse.Namespace(graph_slug=None), config)
     me = payload.get("me") if isinstance(payload.get("me"), dict) else {}
     if bool(me.get("is_admin")):
+        try:
+            storage_payload = shared_server_request(config, shared_server_storage_status_path(), timeout=10)
+        except urllib.error.HTTPError as exc:
+            team["storage_status_error"] = shared_server_http_error_message(exc)
+        except Exception as exc:
+            team["storage_status_error"] = str(exc)
+        else:
+            team["can_read_storage_status"] = True
+            team.update(summarize_shared_server_storage_status(storage_payload))
         try:
             users_payload = shared_server_request(config, "/v1/users", timeout=10)
         except urllib.error.HTTPError as exc:
@@ -5745,6 +5784,10 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
     repo = shared_server_repo_scope_from_args(args)
     if action == "team-status":
         print(json.dumps(build_shared_server_team_status_payload(config_path=config_path, repo=repo), indent=2))
+        return
+    if action == "storage-status":
+        payload = shared_server_request_or_fail(config, shared_server_storage_status_path(), timeout=10)
+        print(json.dumps(payload, indent=2))
         return
     if action == "users":
         payload = shared_server_request_or_fail(config, "/v1/users", timeout=10)

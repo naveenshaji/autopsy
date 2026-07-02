@@ -400,6 +400,7 @@ def build_parser(
             "health",
             "capabilities",
             "team-status",
+            "storage-status",
             "users",
             "create-user",
             "disable-user",
