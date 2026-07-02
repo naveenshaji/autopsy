@@ -378,6 +378,30 @@ final class ActivityStore: ObservableObject {
         return ""
     }
 
+    var sharedServerPoliciesText: String {
+        guard let team = currentSharedServer?.team else { return "" }
+        if let count = team.policiesCount {
+            var parts: [String] = []
+            if let constrained = team.constrainedPoliciesCount, constrained > 0 {
+                parts.append("constrained: \(constrained)")
+            }
+            if let disabledShared = team.disabledSharedPolicyCount, disabledShared > 0 {
+                parts.append("shared disabled: \(disabledShared)")
+            }
+            if let disabledPersonal = team.disabledPersonalPolicyCount, disabledPersonal > 0 {
+                parts.append("personal disabled: \(disabledPersonal)")
+            }
+            if team.policyInventoryRepoFilterPresent == true {
+                parts.append("repo filtered")
+            }
+            return parts.isEmpty ? "\(count)" : "\(count) (\(parts.joined(separator: ", ")))"
+        }
+        if let error = team.policiesError, !error.isEmpty {
+            return error.clippedForMenuBar(limit: 28)
+        }
+        return ""
+    }
+
     var sharedServerAuditIntegrityText: String {
         guard let team = currentSharedServer?.team else { return "" }
         if let integrity = team.auditIntegrity {

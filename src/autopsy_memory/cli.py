@@ -4824,6 +4824,38 @@ def summarize_shared_server_tokens(items: list[dict[str, Any]]) -> dict[str, Any
     }
 
 
+def summarize_shared_server_policies(items: list[dict[str, Any]]) -> dict[str, Any]:
+    constrained_count = 0
+    disabled_shared_count = 0
+    disabled_personal_count = 0
+    repos: set[str] = set()
+    for item in items:
+        repo = str(item.get("repo") or "")
+        if repo:
+            repos.add(repo)
+        labels = item.get("allowed_relation_labels") if isinstance(item.get("allowed_relation_labels"), list) else []
+        label_count = len([label for label in labels if str(label or "").strip()])
+        try:
+            min_fact_rating = float(item.get("min_fact_rating") or 0.0)
+        except (TypeError, ValueError):
+            min_fact_rating = 0.0
+        shared_disabled = not bool(item.get("allow_shared_relations", True))
+        personal_disabled = not bool(item.get("allow_personal_relations", True))
+        if label_count > 0 or min_fact_rating > 0.0 or shared_disabled or personal_disabled:
+            constrained_count += 1
+        if shared_disabled:
+            disabled_shared_count += 1
+        if personal_disabled:
+            disabled_personal_count += 1
+    return {
+        "policies_count": len(items),
+        "constrained_policies_count": constrained_count,
+        "disabled_shared_policy_count": disabled_shared_count,
+        "disabled_personal_policy_count": disabled_personal_count,
+        "policy_repos": sorted(repos)[:20],
+    }
+
+
 def build_shared_server_team_status_payload(*, config_path: str | None = None, repo: str | None = None) -> dict[str, Any]:
     config = load_shared_server_config(config_path)
     payload = build_shared_server_status_payload(check_remote=True, config_path=config_path)
@@ -4832,6 +4864,7 @@ def build_shared_server_team_status_payload(*, config_path: str | None = None, r
         "can_list_users": False,
         "can_list_grants": False,
         "can_list_tokens": False,
+        "can_list_policies": False,
         "can_read_audit_integrity": False,
     }
     payload["team"] = team
@@ -4870,6 +4903,21 @@ def build_shared_server_team_status_payload(*, config_path: str | None = None, r
         tokens = tokens_payload.get("items") if isinstance(tokens_payload.get("items"), list) else []
         team["can_list_tokens"] = True
         team.update(summarize_shared_server_tokens(tokens))
+    try:
+        policies_payload = shared_server_request(
+            config,
+            shared_server_policies_path(graph_slug, repo, limit=50),
+            timeout=10,
+        )
+    except urllib.error.HTTPError as exc:
+        team["policies_error"] = shared_server_http_error_message(exc)
+    except Exception as exc:
+        team["policies_error"] = str(exc)
+    else:
+        policies = policies_payload.get("items") if isinstance(policies_payload.get("items"), list) else []
+        team["can_list_policies"] = True
+        team["policy_inventory_repo_filter_present"] = bool(policies_payload.get("repo_filter_present"))
+        team.update(summarize_shared_server_policies(policies))
     try:
         integrity_payload = shared_server_request(
             config,

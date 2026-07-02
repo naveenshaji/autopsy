@@ -200,6 +200,9 @@ private struct SharedSettingsTab: View {
                 if !store.sharedServerGrantsText.isEmpty {
                     LabeledContent("Repo Grants", value: store.sharedServerGrantsText)
                 }
+                if !store.sharedServerPoliciesText.isEmpty {
+                    LabeledContent("Repo Policies", value: store.sharedServerPoliciesText)
+                }
                 if !store.sharedServerTokensText.isEmpty {
                     LabeledContent("Invite Tokens", value: store.sharedServerTokensText)
                 }

@@ -1857,6 +1857,19 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         {"id": "tok_3", "issued_role": "reader", "revoked": True, "expired": False, "disabled": False},
                     ]
                 }
+            if path == "/v1/shared-graphs/autopsy/policies?repo=repo-a&limit=50":
+                return {
+                    "repo_filter_present": True,
+                    "items": [
+                        {
+                            "repo": "repo-a",
+                            "allowed_relation_labels": ["supports"],
+                            "min_fact_rating": 0.8,
+                            "allow_shared_relations": True,
+                            "allow_personal_relations": False,
+                        }
+                    ],
+                }
             if path == "/v1/audit-events/integrity?graph_slug=autopsy&limit=50&repo=repo-a":
                 return {
                     "status": "verified",
@@ -1893,6 +1906,13 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["team"]["revoked_tokens_count"], 1)
         self.assertEqual(payload["team"]["disabled_tokens_count"], 1)
         self.assertEqual(payload["team"]["token_role_counts"], {"writer": 1, "reader": 2})
+        self.assertTrue(payload["team"]["can_list_policies"])
+        self.assertEqual(payload["team"]["policies_count"], 1)
+        self.assertEqual(payload["team"]["constrained_policies_count"], 1)
+        self.assertEqual(payload["team"]["disabled_personal_policy_count"], 1)
+        self.assertEqual(payload["team"]["disabled_shared_policy_count"], 0)
+        self.assertEqual(payload["team"]["policy_repos"], ["repo-a"])
+        self.assertTrue(payload["team"]["policy_inventory_repo_filter_present"])
         self.assertTrue(payload["team"]["can_read_audit_integrity"])
         self.assertEqual(payload["team"]["audit_integrity"]["status"], "verified")
         self.assertEqual(payload["team"]["audit_integrity"]["event_count"], 4)

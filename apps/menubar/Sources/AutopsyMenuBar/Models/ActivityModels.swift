@@ -83,6 +83,7 @@ struct SharedServerTeamPayload: Decodable {
     var canListUsers: Bool?
     var canListGrants: Bool?
     var canListTokens: Bool?
+    var canListPolicies: Bool?
     var canReadAuditIntegrity: Bool?
     var usersCount: Int?
     var activeUsersCount: Int?
@@ -97,12 +98,18 @@ struct SharedServerTeamPayload: Decodable {
     var expiredTokensCount: Int?
     var revokedTokensCount: Int?
     var disabledTokensCount: Int?
+    var policiesCount: Int?
+    var constrainedPoliciesCount: Int?
+    var disabledSharedPolicyCount: Int?
+    var disabledPersonalPolicyCount: Int?
+    var policyInventoryRepoFilterPresent: Bool?
     var roleCounts: [String: Int]?
     var tokenRoleCounts: [String: Int]?
     var auditIntegrity: SharedServerAuditIntegrityPayload?
     var usersError: String?
     var grantsError: String?
     var tokensError: String?
+    var policiesError: String?
     var auditIntegrityError: String?
 
     enum CodingKeys: String, CodingKey {
@@ -110,6 +117,7 @@ struct SharedServerTeamPayload: Decodable {
         case canListUsers = "can_list_users"
         case canListGrants = "can_list_grants"
         case canListTokens = "can_list_tokens"
+        case canListPolicies = "can_list_policies"
         case canReadAuditIntegrity = "can_read_audit_integrity"
         case usersCount = "users_count"
         case activeUsersCount = "active_users_count"
@@ -124,12 +132,18 @@ struct SharedServerTeamPayload: Decodable {
         case expiredTokensCount = "expired_tokens_count"
         case revokedTokensCount = "revoked_tokens_count"
         case disabledTokensCount = "disabled_tokens_count"
+        case policiesCount = "policies_count"
+        case constrainedPoliciesCount = "constrained_policies_count"
+        case disabledSharedPolicyCount = "disabled_shared_policy_count"
+        case disabledPersonalPolicyCount = "disabled_personal_policy_count"
+        case policyInventoryRepoFilterPresent = "policy_inventory_repo_filter_present"
         case roleCounts = "role_counts"
         case tokenRoleCounts = "token_role_counts"
         case auditIntegrity = "audit_integrity"
         case usersError = "users_error"
         case grantsError = "grants_error"
         case tokensError = "tokens_error"
+        case policiesError = "policies_error"
         case auditIntegrityError = "audit_integrity_error"
     }
 }
