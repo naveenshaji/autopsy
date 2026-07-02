@@ -70,6 +70,7 @@ final class ActivityStore: ObservableObject {
         "read_access_check",
         "read_audit_events",
         "read_audit_integrity",
+        "verify_audit_receipt",
         "read_memories",
         "read_memory_history",
         "read_shared_relations",
@@ -275,6 +276,7 @@ final class ActivityStore: ObservableObject {
                 ("grant_downgrade_token_revocation", "downgrade cleanup"),
                 ("tamper_evident_audit_chain", "audit chain"),
                 ("mutation_audit_receipts", "audit receipts"),
+                ("audit_receipt_verification", "audit verification"),
                 ("personal_shared_relations", "personal links"),
                 ("unsafe_shared_write_guard", "write guard"),
             ].compactMap { key, label in
@@ -887,6 +889,18 @@ final class ActivityStore: ObservableObject {
     func copySharedServerAuditIntegrity(repoScope: String) {
         Task {
             await copySharedAuditIntegrity(repoScope: repoScope)
+        }
+    }
+
+    func verifySharedServerAuditReceipt(auditID: String, integrityHash: String, repoScope: String, action: String, target: String) {
+        Task {
+            await verifySharedAuditReceipt(
+                auditID: auditID,
+                integrityHash: integrityHash,
+                repoScope: repoScope,
+                action: action,
+                target: target
+            )
         }
     }
 
@@ -2097,6 +2111,52 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    private func verifySharedAuditReceipt(
+        auditID: String,
+        integrityHash: String,
+        repoScope: String,
+        action: String,
+        target: String
+    ) async {
+        guard !isManagingSharedAccess else { return }
+        isManagingSharedAccess = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingSharedAccess = false
+        }
+
+        do {
+            let scope = normalizedRepoScope(repoScope)
+            var arguments = [
+                "shared-server",
+                "verify-receipt",
+                auditID.trimmingCharacters(in: .whitespacesAndNewlines),
+                "--repo-scope",
+                scope,
+                "--integrity-hash",
+                integrityHash.trimmingCharacters(in: .whitespacesAndNewlines),
+            ]
+            let normalizedAction = action.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !normalizedAction.isEmpty {
+                arguments += ["--receipt-action", normalizedAction]
+            }
+            let normalizedTarget = target.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !normalizedTarget.isEmpty {
+                arguments += ["--receipt-target", normalizedTarget]
+            }
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run(arguments)
+            let summary = sharedAuditReceiptVerificationReport(from: output, repoScope: scope)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(summary, forType: .string)
+            let matches = auditBool(jsonObject(from: output)?["matches"]) == true
+            lastActionMessage = matches ? "Receipt verified" : "Receipt mismatch copied"
+            clearLastActionMessageAfterDelay(expected: lastActionMessage ?? "")
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
+    }
+
     private func runSharedAccessCommand(
         _ arguments: [String],
         successMessage: String,
@@ -2963,6 +3023,62 @@ final class ActivityStore: ObservableObject {
         return String(value.prefix(12))
     }
 
+    private func sharedAuditReceiptVerificationReport(from output: String, repoScope: String) -> String {
+        guard let payload = jsonObject(from: output) else {
+            return output.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let event = payload["event"] as? [String: Any] ?? [:]
+        let receipt = payload["receipt"] as? [String: Any] ?? [:]
+        let checks = payload["checks"] as? [String: Any] ?? [:]
+        let matches = auditBool(payload["matches"]) == true
+        let integrityVerified = auditBool(payload["integrity_verified"]) == true
+        let auditID = auditString(receipt["id"]) ?? auditString(event["id"]) ?? "unknown"
+        let action = auditString(receipt["action"]) ?? auditString(event["action"]) ?? "unknown"
+        let graphSlug = auditString(receipt["graph_slug"]) ?? auditString(event["graph_slug"]) ?? "unknown"
+        let target = auditString(receipt["target"]) ?? auditString(event["target"]) ?? "none"
+        let createdAt = auditString(receipt["created_at"]) ?? auditString(event["created_at"]) ?? "unknown"
+        let integrityStatus = auditString(payload["integrity_status"]) ?? auditString(event["integrity_status"]) ?? "unknown"
+        let integrityHash = auditString(receipt["integrity_hash"]) ?? auditString(event["integrity_hash"])
+        let prevHash = auditString(receipt["prev_hash"]) ?? auditString(event["prev_hash"])
+
+        var checkedCount = 0
+        var mismatchLines: [String] = []
+        for key in checks.keys.sorted() {
+            guard let check = checks[key] as? [String: Any] else { continue }
+            checkedCount += 1
+            if auditBool(check["matches"]) == false {
+                let expected = auditDisplayValue(check["expected"])
+                let provided = auditDisplayValue(check["provided"])
+                mismatchLines.append("- \(key): expected \(expected), provided \(provided)")
+            }
+        }
+
+        var lines: [String] = [
+            "Autopsy Audit Receipt Verification",
+            "Repo: \(repoScope)",
+            "Result: \(matches ? "matched" : "mismatch")",
+            "Audit: \(auditID)",
+            "Action: \(action)",
+            "Graph: \(graphSlug)",
+            "Target: \(target)",
+            "Created: \(createdAt)",
+            "Integrity: \(integrityStatus), verified \(integrityVerified ? "yes" : "no")",
+            "Hash: \(shortAuditHash(integrityHash))",
+            "Previous hash: \(shortAuditHash(prevHash))",
+            "Checked fields: \(checkedCount)",
+        ]
+
+        lines.append("")
+        if mismatchLines.isEmpty {
+            lines.append("All supplied receipt fields matched.")
+        } else {
+            lines.append("Mismatches:")
+            lines += mismatchLines
+        }
+        return lines.joined(separator: "\n")
+    }
+
     private func messageWithAuditReceipt(_ message: String, output: String) -> String {
         messageWithAuditReceipt(message, payload: jsonObject(from: output))
     }
@@ -2990,6 +3106,19 @@ final class ActivityStore: ObservableObject {
             return nil
         }
         return parts.joined(separator: ", ")
+    }
+
+    private func auditDisplayValue(_ value: Any?) -> String {
+        if value == nil || value is NSNull {
+            return "missing"
+        }
+        if let bool = auditBool(value) {
+            return bool ? "true" : "false"
+        }
+        if let string = auditString(value) {
+            return string
+        }
+        return String(describing: value!)
     }
 
     private func auditString(_ value: Any?) -> String? {

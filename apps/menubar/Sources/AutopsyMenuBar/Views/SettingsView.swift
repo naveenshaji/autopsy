@@ -161,6 +161,11 @@ private struct SharedSettingsTab: View {
     @State private var revokeTokenID = ""
     @State private var revokeTokenRepoScope = ""
     @State private var auditRepoScope = ""
+    @State private var auditReceiptID = ""
+    @State private var auditReceiptHash = ""
+    @State private var auditReceiptRepoScope = ""
+    @State private var auditReceiptAction = ""
+    @State private var auditReceiptTarget = ""
 
     private let roles = ["reader", "writer", "owner"]
     private let sourceRoleAfterOptions = ["writer", "reader", "none"]
@@ -622,6 +627,35 @@ private struct SharedSettingsTab: View {
                     }
                     .disabled(sharedActionDisabled)
                 }
+
+                Divider()
+
+                TextField("Receipt Audit ID", text: $auditReceiptID)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Receipt Integrity Hash", text: $auditReceiptHash)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Receipt Repo Scope", text: $auditReceiptRepoScope)
+                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    TextField("Expected Action", text: $auditReceiptAction)
+                        .textFieldStyle(.roundedBorder)
+                    TextField("Expected Target", text: $auditReceiptTarget)
+                        .textFieldStyle(.roundedBorder)
+                }
+                Button("Verify Receipt") {
+                    store.verifySharedServerAuditReceipt(
+                        auditID: auditReceiptID,
+                        integrityHash: auditReceiptHash,
+                        repoScope: auditReceiptRepoScope,
+                        action: auditReceiptAction,
+                        target: auditReceiptTarget
+                    )
+                }
+                .disabled(
+                    sharedActionDisabled ||
+                    auditReceiptID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                    auditReceiptHash.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                )
             }
 
             if let message = store.lastActionMessage, !message.isEmpty {
@@ -651,6 +685,9 @@ private struct SharedSettingsTab: View {
             }
             if auditRepoScope.isEmpty {
                 auditRepoScope = store.sharedServerDefaultRepoScope
+            }
+            if auditReceiptRepoScope.isEmpty {
+                auditReceiptRepoScope = store.sharedServerDefaultRepoScope
             }
             if sharedMemoryRepoScope.isEmpty {
                 sharedMemoryRepoScope = store.sharedServerDefaultRepoScope

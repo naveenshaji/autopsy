@@ -412,6 +412,7 @@ def build_parser(
             "access-check",
             "audit",
             "audit-integrity",
+            "verify-receipt",
             "invite",
             "revoke-token",
             "revoke-grant",
@@ -434,7 +435,7 @@ def build_parser(
         default="status",
         help="Configure, check, administer shared access, publish local memory, list shared memory, inspect shared history, or manage shared and personal relations.",
     )
-    shared_server_parser.add_argument("stable_key", nargs="?", help="Primary id: stable key for publish/link/relate/memory-history, user id for disable-user/enable-user, token id for revoke-token, or relation id for unlink/unrelate.")
+    shared_server_parser.add_argument("stable_key", nargs="?", help="Primary id: stable key for publish/link/relate/memory-history, audit event id for verify-receipt, user id for disable-user/enable-user, token id for revoke-token, or relation id for unlink/unrelate.")
     shared_server_parser.add_argument("target_key", nargs="?", help="Target shared memory stable key for link or relate.")
     shared_server_parser.add_argument("--config", dest="shared_server_config", help="Path to the local shared-server config JSON.")
     shared_server_parser.add_argument("--base-url", help="Shared server base URL, for example https://autopsy-server.fly.dev.")
@@ -461,6 +462,11 @@ def build_parser(
     shared_server_parser.add_argument("--reason", default="", help="Reason for shared-server archive or restore lifecycle actions.")
     shared_server_parser.add_argument("--version-id", help="Shared memory version id for shared-server restore-version.")
     shared_server_parser.add_argument("--version-ns", type=int, help="Shared memory version_ns for shared-server restore-version.")
+    shared_server_parser.add_argument("--integrity-hash", help="Expected audit event integrity hash for shared-server verify-receipt.")
+    shared_server_parser.add_argument("--receipt-action", help="Optional expected audit action for shared-server verify-receipt.")
+    shared_server_parser.add_argument("--receipt-target", help="Optional expected audit target for shared-server verify-receipt.")
+    shared_server_parser.add_argument("--prev-hash", help="Optional expected previous audit hash for shared-server verify-receipt.")
+    shared_server_parser.add_argument("--created-at", help="Optional expected audit timestamp for shared-server verify-receipt.")
     shared_server_parser.add_argument("--query", default="", help="Query text for shared-server context retrieval.")
     shared_server_parser.add_argument("--limit", type=int, default=50, help="Maximum shared records to list or retrieve.")
     shared_server_parser.add_argument("--action", action="append", help="With shared-server audit or audit-integrity, restrict to one or more audit event actions. Repeat or comma-separate values.")

@@ -4544,6 +4544,33 @@ def shared_server_audit_integrity_path(
     return f"/v1/audit-events/integrity?{query}"
 
 
+def shared_server_audit_receipt_path(
+    audit_event_id: str,
+    *,
+    integrity_hash: str,
+    graph_slug: str = "",
+    repo: str | None = None,
+    action: str = "",
+    target: str = "",
+    prev_hash: str = "",
+    created_at: str = "",
+) -> str:
+    query: list[tuple[str, str]] = [("integrity_hash", integrity_hash)]
+    for key, value in (
+        ("graph_slug", graph_slug),
+        ("repo", "" if repo == "*" else (repo or "")),
+        ("action", action),
+        ("target", target),
+        ("prev_hash", prev_hash),
+        ("created_at", created_at),
+    ):
+        normalized = str(value or "").strip()
+        if normalized:
+            query.append((key, normalized))
+    quoted_event_id = urllib.parse.quote(audit_event_id, safe="")
+    return f"/v1/audit-events/{quoted_event_id}/receipt?{urllib.parse.urlencode(query)}"
+
+
 def shared_server_invitation_path(graph_slug: str) -> str:
     return shared_server_path(graph_slug, "/invitations")
 
@@ -5462,6 +5489,29 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
                 audit_repo,
                 limit=int(getattr(args, "limit", 100) or 100),
                 actions=split_cli_csv_values(getattr(args, "action", None)),
+            ),
+            timeout=10,
+        )
+        print(json.dumps(payload, indent=2))
+        return
+    if action == "verify-receipt":
+        audit_event_id = str(getattr(args, "stable_key", "") or "").strip()
+        integrity_hash = str(getattr(args, "integrity_hash", "") or "").strip()
+        if not audit_event_id:
+            fail("shared-server verify-receipt requires an audit event id", 2)
+        if not integrity_hash:
+            fail("shared-server verify-receipt requires --integrity-hash", 2)
+        payload = shared_server_request_or_fail(
+            config,
+            shared_server_audit_receipt_path(
+                audit_event_id,
+                integrity_hash=integrity_hash,
+                graph_slug=graph_slug,
+                repo=repo,
+                action=str(getattr(args, "receipt_action", "") or "").strip(),
+                target=str(getattr(args, "receipt_target", "") or "").strip(),
+                prev_hash=str(getattr(args, "prev_hash", "") or "").strip(),
+                created_at=str(getattr(args, "created_at", "") or "").strip(),
             ),
             timeout=10,
         )

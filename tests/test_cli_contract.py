@@ -256,6 +256,23 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "--action",
             "read_shared_context",
         ])
+        verify_receipt_args = parser.parse_args([
+            "shared-server",
+            "verify-receipt",
+            "aud_1",
+            "--repo-scope",
+            "repo-a",
+            "--integrity-hash",
+            "hash_1",
+            "--receipt-action",
+            "grant_access",
+            "--receipt-target",
+            "usr_1",
+            "--prev-hash",
+            "hash_0",
+            "--created-at",
+            "2026-07-02T00:00:00Z",
+        ])
         publish_args = parser.parse_args(["shared-server", "publish", "graph-note:1", "--repo-scope", "repo-a", "--expected-version-ns", "123"])
         list_args = parser.parse_args(["shared-server", "list", "--repo-scope", "repo-a", "--include-archived", "--limit", "10"])
         history_args = parser.parse_args(["shared-server", "memory-history", "shared:1", "--repo-scope", "repo-a", "--limit", "10"])
@@ -371,6 +388,13 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(audit_integrity_args.repo_scope, "repo-a")
         self.assertEqual(audit_integrity_args.limit, 25)
         self.assertEqual(audit_integrity_args.action, ["read_shared_context"])
+        self.assertEqual(verify_receipt_args.shared_server_action, "verify-receipt")
+        self.assertEqual(verify_receipt_args.stable_key, "aud_1")
+        self.assertEqual(verify_receipt_args.integrity_hash, "hash_1")
+        self.assertEqual(verify_receipt_args.receipt_action, "grant_access")
+        self.assertEqual(verify_receipt_args.receipt_target, "usr_1")
+        self.assertEqual(verify_receipt_args.prev_hash, "hash_0")
+        self.assertEqual(verify_receipt_args.created_at, "2026-07-02T00:00:00Z")
         self.assertEqual(publish_args.shared_server_action, "publish")
         self.assertEqual(publish_args.stable_key, "graph-note:1")
         self.assertEqual(publish_args.expected_version_ns, 123)
@@ -1496,6 +1520,55 @@ class AutopsyCLIContractTests(unittest.TestCase):
         payload = json.loads(stream.getvalue())
         self.assertEqual(payload["service"], "autopsy-server")
         self.assertTrue(payload["capabilities"]["owner_handoff"])
+
+    def test_shared_server_verify_receipt_checks_expected_fields(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "shared-server",
+            "verify-receipt",
+            "aud/1",
+            "--repo-scope",
+            "repo-a",
+            "--integrity-hash",
+            "sha256:abc",
+            "--receipt-action",
+            "grant_access",
+            "--receipt-target",
+            "usr_1",
+            "--prev-hash",
+            "sha256:prev",
+            "--created-at",
+            "2026-07-02T00:00:00Z",
+        ])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        calls: list[str] = []
+
+        def fake_request(_config, path, **_kwargs):
+            calls.append(path)
+            return {
+                "matches": True,
+                "integrity_status": "verified",
+                "receipt": {"id": "aud/1", "integrity_hash": "sha256:abc"},
+            }
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        payload = json.loads(stream.getvalue())
+        self.assertTrue(payload["matches"])
+        self.assertEqual(
+            calls,
+            [
+                "/v1/audit-events/aud%2F1/receipt?"
+                "integrity_hash=sha256%3Aabc&graph_slug=autopsy&repo=repo-a&"
+                "action=grant_access&target=usr_1&prev_hash=sha256%3Aprev&created_at=2026-07-02T00%3A00%3A00Z"
+            ],
+        )
 
     def test_shared_server_publish_payload_carries_local_memory_metadata(self):
         payload = cli.build_shared_server_publish_payload(

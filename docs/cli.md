@@ -90,6 +90,7 @@ autopsy shared-server scoped-tokens --repo-scope /path/to/repo
 autopsy shared-server access-check --repo-scope /path/to/repo --mode write
 autopsy shared-server audit --repo-scope /path/to/repo --action read_shared_context
 autopsy shared-server audit --global-audit --action auth_failure
+autopsy shared-server verify-receipt aud_123 --repo-scope /path/to/repo --integrity-hash <hash>
 autopsy shared-server invite --email dev@example.com --role writer --repo-scope /path/to/repo
 autopsy shared-server revoke-token tok_123 --repo-scope /path/to/repo
 autopsy shared-server archive shared:key --repo-scope /path/to/repo --reason duplicate
@@ -182,6 +183,12 @@ same flag works with `shared-server audit-integrity`.
 bounded integrity summary for the same filters, including per-status counts,
 window chain status, external filtered gaps, uncheckable pairs, and real
 unfiltered chain-break counts.
+`shared-server verify-receipt <audit-event-id> --integrity-hash <hash>
+--repo-scope <repo>` verifies a redacted mutation audit receipt against the
+server event, enforcing the caller's graph/repo audit visibility and returning
+per-field checks. Add `--receipt-action`, `--receipt-target`, `--prev-hash`, or
+`--created-at` when you want the server to confirm more receipt fields than the
+integrity hash alone.
 Successful shared-context and personal-linked-context reads are audited with
 returned counts, flags, read-guard totals, and a SHA-256 query hash where
 applicable; raw query text and personal stable keys are not stored in those read
