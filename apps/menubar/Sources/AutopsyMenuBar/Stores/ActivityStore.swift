@@ -81,6 +81,7 @@ final class ActivityStore: ObservableObject {
         "create_personal_relation",
         "revoke_personal_relation",
         "read_audit_events",
+        "read_audit_summary",
         "read_audit_integrity",
         "verify_audit_receipt",
         "read_memories",
@@ -3105,6 +3106,13 @@ final class ActivityStore: ObservableObject {
         if let actionFilterCount = auditInt(metadata["action_filter_count"]) {
             parts.append("filters \(actionFilterCount)")
         }
+        if let metadataFieldCount = auditInt(metadata["metadata_field_count"]) {
+            parts.append("dimensions \(metadataFieldCount)")
+        }
+        let metadataFields = auditStringList(metadata["metadata_fields"])
+        if !metadataFields.isEmpty {
+            parts.append("metadata \(metadataFields.joined(separator: "/"))")
+        }
         if let repoFilter = auditBool(metadata["repo_filter_present"]) {
             parts.append("repo filter \(repoFilter ? "yes" : "no")")
         }
@@ -3828,6 +3836,27 @@ final class ActivityStore: ObservableObject {
             return number.stringValue
         }
         return nil
+    }
+
+    private func auditStringList(_ value: Any?) -> [String] {
+        if value is NSNull {
+            return []
+        }
+        if let strings = value as? [String] {
+            return strings
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        }
+        if let values = value as? [Any] {
+            return values.compactMap { auditString($0) }
+        }
+        if let string = auditString(value) {
+            return string
+                .split(separator: ",")
+                .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        }
+        return []
     }
 
     private func auditInt(_ value: Any?) -> Int? {
