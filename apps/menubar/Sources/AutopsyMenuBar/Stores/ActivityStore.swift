@@ -667,6 +667,18 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    func copySharedServerUsers() {
+        Task {
+            await copySharedUsers()
+        }
+    }
+
+    func copySharedServerGrants(repoScope: String) {
+        Task {
+            await copySharedGrants(repoScope: repoScope)
+        }
+    }
+
     func createSharedServerUser(email: String, name: String) {
         Task {
             await createSharedUser(email: email, name: name)
@@ -1061,6 +1073,55 @@ final class ActivityStore: ObservableObject {
             NSPasteboard.general.setString(output.trimmingCharacters(in: .whitespacesAndNewlines), forType: .string)
             lastActionMessage = "Access check copied"
             clearLastActionMessageAfterDelay(expected: "Access check copied")
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
+    }
+
+    private func copySharedUsers() async {
+        guard !isManagingSharedAccess else { return }
+        isManagingSharedAccess = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingSharedAccess = false
+        }
+
+        do {
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run([
+                "shared-server",
+                "users",
+            ])
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(sharedUsersReport(from: output), forType: .string)
+            lastActionMessage = "Shared users copied"
+            clearLastActionMessageAfterDelay(expected: "Shared users copied")
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
+    }
+
+    private func copySharedGrants(repoScope: String) async {
+        guard !isManagingSharedAccess else { return }
+        isManagingSharedAccess = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingSharedAccess = false
+        }
+
+        do {
+            let scope = normalizedRepoScope(repoScope)
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run([
+                "shared-server",
+                "grants",
+                "--repo-scope",
+                scope,
+            ])
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(sharedGrantsReport(from: output, repoScope: scope), forType: .string)
+            lastActionMessage = "Shared grants copied"
+            clearLastActionMessageAfterDelay(expected: "Shared grants copied")
         } catch {
             sharedServerError = error.localizedDescription
         }
@@ -2062,6 +2123,89 @@ final class ActivityStore: ObservableObject {
     private func normalizedRepoScope(_ value: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? sharedServerDefaultRepoScope : trimmed
+    }
+
+    private func sharedUsersReport(from output: String) -> String {
+        guard let payload = jsonObject(from: output),
+              let rawItems = payload["items"] as? [Any]
+        else {
+            return output.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let items = rawItems.compactMap { $0 as? [String: Any] }
+        let disabledCount = items.filter { auditBool($0["disabled"]) == true }.count
+        var lines = [
+            "Shared Users",
+            "Users: \(items.count) (disabled \(disabledCount))",
+            "",
+        ]
+        if items.isEmpty {
+            lines.append("No shared users were returned.")
+            return lines.joined(separator: "\n")
+        }
+        for item in items {
+            let email = auditString(item["email"]) ?? "unknown email"
+            let userID = auditString(item["id"]) ?? "unknown id"
+            var parts = ["\(email)", "id \(userID)"]
+            if let name = auditString(item["name"]), !name.isEmpty {
+                parts.append("name \(name)")
+            }
+            if auditBool(item["disabled"]) == true {
+                parts.append("disabled")
+            }
+            if let createdAt = auditString(item["created_at"]), !createdAt.isEmpty {
+                parts.append("created \(createdAt)")
+            }
+            lines.append("- \(parts.joined(separator: ", "))")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func sharedGrantsReport(from output: String, repoScope: String) -> String {
+        guard let payload = jsonObject(from: output),
+              let rawItems = payload["items"] as? [Any]
+        else {
+            return output.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let items = rawItems.compactMap { $0 as? [String: Any] }
+        let disabledCount = items.filter { auditBool($0["disabled"]) == true }.count
+        let activeOwnerCount = items.filter { item in
+            auditString(item["role"]) == "owner" && auditBool(item["disabled"]) != true
+        }.count
+        var lines = [
+            "Shared Grants",
+            "Repo: \(repoScope)",
+            "Grants: \(items.count) (active owners \(activeOwnerCount), disabled \(disabledCount))",
+            "",
+        ]
+        if items.isEmpty {
+            lines.append("No shared grants were returned.")
+            return lines.joined(separator: "\n")
+        }
+        for item in items {
+            let email = auditString(item["email"]) ?? "unknown email"
+            let userID = auditString(item["user_id"]) ?? "unknown user"
+            let repo = auditString(item["repo"]) ?? "unknown repo"
+            let role = auditString(item["role"]) ?? "unknown role"
+            let capabilities = [
+                auditBool(item["can_read"]) == true ? "read" : nil,
+                auditBool(item["can_write"]) == true ? "write" : nil,
+                auditBool(item["can_admin"]) == true ? "admin" : nil,
+            ].compactMap { $0 }
+            var parts = ["\(email)", "user \(userID)", "repo \(repo)", "role \(role)"]
+            if !capabilities.isEmpty {
+                parts.append("caps \(capabilities.joined(separator: "/"))")
+            }
+            if auditBool(item["disabled"]) == true {
+                parts.append("disabled user")
+            }
+            if let updatedAt = auditString(item["updated_at"]), !updatedAt.isEmpty {
+                parts.append("updated \(updatedAt)")
+            }
+            lines.append("- \(parts.joined(separator: ", "))")
+        }
+        return lines.joined(separator: "\n")
     }
 
     private func sharedContextAuditReport(from output: String, repoScope: String) -> String {

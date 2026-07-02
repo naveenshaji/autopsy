@@ -497,6 +497,18 @@ private struct SharedSettingsTab: View {
                     .disabled(sharedActionDisabled || grantUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
 
+                HStack {
+                    Button("Copy Users") {
+                        store.copySharedServerUsers()
+                    }
+                    .disabled(sharedActionDisabled)
+
+                    Button("Copy Grants") {
+                        store.copySharedServerGrants(repoScope: grantRepoScope)
+                    }
+                    .disabled(sharedActionDisabled)
+                }
+
                 Divider()
 
                 TextField("From Owner ID", text: $handoffSourceUserID)
