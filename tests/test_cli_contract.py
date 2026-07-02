@@ -682,6 +682,20 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "HTTP 422: shared write rejected by unsafe-memory guard; operation=upsert_memory; target=shared:unsafe; codes=sensitive_memory_exposure; fields=content; types=credential_assignment",
         )
 
+    def test_shared_server_http_error_formats_structured_conflict_detail(self):
+        error = urllib.error.HTTPError(
+            "/v1/users/usr_1/tokens",
+            409,
+            "Conflict",
+            {},
+            io.BytesIO(json.dumps({"detail": {"error": "target user is disabled", "user_id": "usr_1"}}).encode()),
+        )
+
+        self.assertEqual(
+            cli.shared_server_http_error_message(error),
+            "HTTP 409: target user is disabled; user=usr_1",
+        )
+
     def test_shared_server_create_token_posts_expiration_payload(self):
         parser = cli.build_parser()
         args = parser.parse_args([

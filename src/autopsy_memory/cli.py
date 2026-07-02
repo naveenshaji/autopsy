@@ -4390,6 +4390,20 @@ def format_shared_server_error_detail(value: Any) -> str:
             if types:
                 parts.append(f"types={','.join(types)}")
             return "; ".join(parts)
+        error = str(value.get("error") or "").strip()
+        if error:
+            parts = [error]
+            for key, label in (
+                ("reason", "reason"),
+                ("user_id", "user"),
+                ("target", "target"),
+                ("repo", "repo"),
+                ("mode", "mode"),
+            ):
+                entry = str(value.get(key) or "").strip()
+                if entry:
+                    parts.append(f"{label}={entry}")
+            return "; ".join(parts)
         return json.dumps(value, sort_keys=True)
     return str(value)
 

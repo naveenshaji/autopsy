@@ -159,7 +159,9 @@ UTC timestamp. Global admins can also use
 `revoke-token <token-id>`, and `revoke-grant --user-id <id> --repo-scope <repo>`
 to manage shared access. Disabling a user makes all existing tokens fail
 without deleting token metadata or graph history; enabling reverses that state,
-and both operations are server-audited. `shared-server scoped-tokens --repo-scope <repo>` lists
+blocks new tokens, repo grants, and invitation-created access while disabled,
+and both lifecycle operations plus rejected access attempts are server-audited.
+`shared-server scoped-tokens --repo-scope <repo>` lists
 non-secret invite-token metadata that graph owners are allowed to revoke.
 `team-status` includes active, expired, and revoked scoped-token counts plus
 server-side audit integrity status for the selected repo. `revoke-token` first uses the global-admin endpoint and
