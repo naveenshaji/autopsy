@@ -4480,7 +4480,13 @@ def shared_server_access_check_path(graph_slug: str, repo: str, *, mode: str = "
     return shared_server_path(graph_slug, f"/access-check?{urllib.parse.urlencode(query)}")
 
 
-def shared_server_audit_path(graph_slug: str, repo: str | None, *, limit: int, actions: list[str] | tuple[str, ...] | str | None = None) -> str:
+def shared_server_audit_query_params(
+    graph_slug: str,
+    repo: str | None,
+    *,
+    limit: int,
+    actions: list[str] | tuple[str, ...] | str | None = None,
+) -> list[tuple[str, Any]]:
     query: list[tuple[str, Any]] = [
         ("graph_slug", graph_slug),
         ("limit", max(1, min(int(limit), 500))),
@@ -4489,7 +4495,29 @@ def shared_server_audit_path(graph_slug: str, repo: str | None, *, limit: int, a
         query.append(("repo", repo))
     for action in split_cli_csv_values(actions):
         query.append(("action", action))
-    return f"/v1/audit-events?{urllib.parse.urlencode(query)}"
+    return query
+
+
+def shared_server_audit_path(
+    graph_slug: str,
+    repo: str | None,
+    *,
+    limit: int,
+    actions: list[str] | tuple[str, ...] | str | None = None,
+) -> str:
+    query = urllib.parse.urlencode(shared_server_audit_query_params(graph_slug, repo, limit=limit, actions=actions))
+    return f"/v1/audit-events?{query}"
+
+
+def shared_server_audit_integrity_path(
+    graph_slug: str,
+    repo: str | None,
+    *,
+    limit: int,
+    actions: list[str] | tuple[str, ...] | str | None = None,
+) -> str:
+    query = urllib.parse.urlencode(shared_server_audit_query_params(graph_slug, repo, limit=limit, actions=actions))
+    return f"/v1/audit-events/integrity?{query}"
 
 
 def shared_server_invitation_path(graph_slug: str) -> str:
@@ -5313,6 +5341,19 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         payload = shared_server_request_or_fail(
             config,
             shared_server_audit_path(
+                graph_slug,
+                repo,
+                limit=int(getattr(args, "limit", 100) or 100),
+                actions=split_cli_csv_values(getattr(args, "action", None)),
+            ),
+            timeout=10,
+        )
+        print(json.dumps(payload, indent=2))
+        return
+    if action == "audit-integrity":
+        payload = shared_server_request_or_fail(
+            config,
+            shared_server_audit_integrity_path(
                 graph_slug,
                 repo,
                 limit=int(getattr(args, "limit", 100) or 100),

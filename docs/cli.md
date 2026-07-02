@@ -157,6 +157,10 @@ tokens for repos they own without global token access. `shared-server audit
 --repo-scope <repo>` lists scoped server audit events for graph owners or admins.
 Add repeated or comma-separated `--action <event>` filters when you only need a
 specific event class such as `read_shared_context` or `read_personal_context`.
+`shared-server audit-integrity --repo-scope <repo>` returns the server-side
+bounded integrity summary for the same filters, including per-status counts,
+window chain status, external filtered gaps, uncheckable pairs, and real
+unfiltered chain-break counts.
 Successful shared-context and personal-linked-context reads are audited with
 returned counts, flags, read-guard totals, and a SHA-256 query hash where
 applicable; raw query text and personal stable keys are not stored in those read

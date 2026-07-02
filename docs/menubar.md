@@ -89,7 +89,8 @@ Run checks:
   summaries request only shared-context and personal-linked-context read events
   and copy only read counts, relation provenance counters, and audit integrity
   status, not raw query text or personal stable keys. Audit-integrity summaries
-  count recent verified, missing, mismatch, and unknown audit events plus
-  contiguous hash-chain links in the copied audit window.
+  use the server-side integrity report to count recent verified, missing,
+  mismatch, and unknown audit events, chain status, uncheckable pairs, filtered
+  external gaps, and real unfiltered chain breaks in the copied audit window.
 - Attention items when available.
 - Quit action.

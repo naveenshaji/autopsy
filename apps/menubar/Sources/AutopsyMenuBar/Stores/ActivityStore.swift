@@ -1640,7 +1640,7 @@ final class ActivityStore: ObservableObject {
             let scope = normalizedRepoScope(repoScope)
             let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run([
                 "shared-server",
-                "audit",
+                "audit-integrity",
                 "--repo-scope",
                 scope,
                 "--limit",
@@ -1772,26 +1772,38 @@ final class ActivityStore: ObservableObject {
         }
 
         let items = rawItems.compactMap { $0 as? [String: Any] }
-        var counts = ["verified": 0, "missing": 0, "mismatch": 0, "unknown": 0]
-        for item in items {
-            let status = auditString(item["integrity_status"]) ?? "unknown"
-            if counts.keys.contains(status) {
-                counts[status, default: 0] += 1
-            } else {
-                counts["unknown", default: 0] += 1
+        let serverCounts = payload["integrity_counts"] as? [String: Any] ?? [:]
+        var counts = [
+            "verified": auditInt(serverCounts["verified"]) ?? 0,
+            "missing": auditInt(serverCounts["missing"]) ?? 0,
+            "mismatch": auditInt(serverCounts["mismatch"]) ?? 0,
+            "unknown": auditInt(serverCounts["unknown"]) ?? 0,
+        ]
+        if serverCounts.isEmpty {
+            for item in items {
+                let status = auditString(item["integrity_status"]) ?? "unknown"
+                if counts.keys.contains(status) {
+                    counts[status, default: 0] += 1
+                } else {
+                    counts["unknown", default: 0] += 1
+                }
             }
         }
 
-        var linkedPairs = 0
-        var comparablePairs = 0
-        if items.count >= 2 {
+        let chain = payload["chain"] as? [String: Any] ?? [:]
+        var linkedPairs = auditInt(chain["linked_pairs"]) ?? 0
+        var checkedPairs = auditInt(chain["checked_pairs"]) ?? 0
+        let uncheckablePairs = auditInt(chain["uncheckable_pairs"]) ?? 0
+        let chainBreakCount = auditInt(chain["chain_break_count"]) ?? 0
+        let externalGapCount = auditInt(chain["external_gap_count"]) ?? 0
+        if chain.isEmpty && items.count >= 2 {
             for index in 0..<(items.count - 1) {
                 guard let prevHash = auditString(items[index]["prev_hash"]),
                       let previousIntegrityHash = auditString(items[index + 1]["integrity_hash"])
                 else {
                     continue
                 }
-                comparablePairs += 1
+                checkedPairs += 1
                 if prevHash == previousIntegrityHash {
                     linkedPairs += 1
                 }
@@ -1801,12 +1813,17 @@ final class ActivityStore: ObservableObject {
         var lines = [
             "Autopsy Shared Audit Integrity",
             "Repo: \(repoScope)",
-            "Audit window: \(items.count) latest events",
+            "Status: \(auditString(payload["status"]) ?? "unknown")",
+            "Audit window: \(auditInt(payload["event_count"]) ?? items.count) latest events",
             "Verified: \(counts["verified", default: 0])",
             "Missing: \(counts["missing", default: 0])",
             "Mismatch: \(counts["mismatch", default: 0])",
             "Unknown: \(counts["unknown", default: 0])",
-            "Linked pairs: \(linkedPairs)/\(comparablePairs)",
+            "Chain: \(auditString(chain["status"]) ?? "unknown")",
+            "Linked pairs: \(linkedPairs)/\(checkedPairs)",
+            "Uncheckable pairs: \(uncheckablePairs)",
+            "External gaps: \(externalGapCount)",
+            "Chain breaks: \(chainBreakCount)",
         ]
 
         if items.isEmpty {
