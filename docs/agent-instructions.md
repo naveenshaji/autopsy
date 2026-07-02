@@ -103,7 +103,7 @@ If `workflow.status` is `needs_lineage_review`, inspect `timeline` or `neighbors
 
 Use `retrieval.items[].evidence` in `context` output to see why a memory was selected and what source episode/repo produced it.
 
-Use `context_block` from JSON output, or `--format text`, when passing memory into an agent context window. It is bounded by the same context budget and includes workflow status, lineage warnings, evidence annotations, bounded related-memory graph expansion, and follow-up inspection commands.
+Use `context_block` from JSON output, or `--format text`, when passing memory into an agent context window. It is bounded by the same context budget and includes workflow status, lineage warnings, evidence annotations, relation `fact_rating` when available, bounded related-memory graph expansion, and follow-up inspection commands.
 
 Use exact inspection commands when the answer depends on a specific memory:
 

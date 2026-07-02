@@ -225,9 +225,9 @@ autopsy search --memory-type semantic --min-fact-rating 0.8 --query "Falkor"
 
 Prefer `consult` when the answer will rely on memory.
 
-Use `context` when an agent needs a bounded context pack before work. It combines current operational state, task-specific consult hits, compact memory text, a small one-hop graph neighborhood around strong hits, relation snippets, deterministic evidence/provenance, lineage/currentness warnings, follow-up `item`/`timeline`/`neighbors` commands, and a `context_block` string. Tune the pack with `--max-chars`, `--status-limit`, `--section-limit`, `--limit`, and `--inspect-limit`.
+Use `context` when an agent needs a bounded context pack before work. It combines current operational state, task-specific consult hits, compact memory text, a small one-hop graph neighborhood around strong hits, relation snippets with `fact_rating` evidence when available, deterministic evidence/provenance, lineage/currentness warnings, follow-up `item`/`timeline`/`neighbors` commands, and a `context_block` string. Tune the pack with `--max-chars`, `--status-limit`, `--section-limit`, `--limit`, and `--inspect-limit`.
 
-Use `--format text` when you want only the deterministic context block for direct insertion into an agent prompt or tool-context message. The default JSON output still includes the same string in `context_block`.
+Use `--format text` when you want only the deterministic context block for direct insertion into an agent prompt or tool-context message. The default JSON output still includes the same string in `context_block`. Local, shared, and linked-shared relation lines render evidence ratings as `rating NN.NN` when the relation carries `fact_rating`.
 
 If all retrieved memories are explicitly superseded, reverted, or answered by graph relations, `context` returns `workflow.status: needs_lineage_review` instead of treating stale recall as complete.
 
