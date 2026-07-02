@@ -1642,6 +1642,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
                     "allow_shared_relations": True,
                     "allow_personal_relations": True,
                     "notes": "old",
+                    "version_ns": 42,
                 }
             return {"repo": "repo-a", **(payload or {})}
 
@@ -1669,9 +1670,36 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "allow_shared_relations": True,
                         "allow_personal_relations": False,
                         "notes": "strong only",
+                        "expected_version_ns": 42,
                     },
                 ),
             ],
+        )
+
+    def test_shared_server_http_error_formats_repo_policy_version_conflict(self):
+        error = urllib.error.HTTPError(
+            "/v1/shared-graphs/autopsy/policy",
+            409,
+            "Conflict",
+            {},
+            io.BytesIO(
+                json.dumps(
+                    {
+                        "detail": {
+                            "error": "repo policy version conflict",
+                            "graph_slug": "autopsy",
+                            "repo": "repo-a",
+                            "expected_version_ns": 10,
+                            "current": {"version_ns": 11, "allowed_relation_labels": ["implements"]},
+                        }
+                    }
+                ).encode()
+            ),
+        )
+
+        self.assertEqual(
+            cli.shared_server_http_error_message(error),
+            "HTTP 409: repo policy version conflict; graph=autopsy; repo=repo-a; expected_version=10; current_version=11",
         )
 
     def test_shared_server_publish_payload_carries_local_memory_metadata(self):

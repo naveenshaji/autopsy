@@ -208,8 +208,10 @@ effective repo policy when the caller has read access.
 including any inherited wildcard policy. `shared-server update-policy
 --repo-scope <repo>` lets owners update allowed relation labels, minimum
 `fact_rating`, shared-relation enablement, personal-link enablement, and policy
-notes. Omitted fields preserve the current server policy; use
-`--clear-relation-labels` to intentionally allow any relation label.
+notes. Omitted fields preserve the current server policy. The CLI sends the
+policy `version_ns` it just read as `expected_version_ns`, so stale policy
+updates fail with a server-side version conflict instead of overwriting newer
+rules. Use `--clear-relation-labels` to intentionally allow any relation label.
 `--repo` resolves to a team-stable Git scope such as
 `git:github.com/owner/repo` from `origin` when available, and falls back to the
 local absolute path for non-Git repos. `--repo-scope` passes an exact

@@ -4400,6 +4400,7 @@ def format_shared_server_error_detail(value: Any) -> str:
                 ("target", "target"),
                 ("repo", "repo"),
                 ("mode", "mode"),
+                ("expected_version_ns", "expected_version"),
                 ("active_owner_count", "active_owners"),
                 ("removed_owner_count", "removing"),
                 ("remaining_owner_count", "remaining"),
@@ -4408,6 +4409,10 @@ def format_shared_server_error_detail(value: Any) -> str:
                 entry = "" if raw_entry is None else str(raw_entry).strip()
                 if entry:
                     parts.append(f"{label}={entry}")
+            current = value.get("current") if isinstance(value.get("current"), dict) else {}
+            current_version = "" if current.get("version_ns") is None else str(current.get("version_ns")).strip()
+            if current_version:
+                parts.append(f"current_version={current_version}")
             return "; ".join(parts)
         return json.dumps(value, sort_keys=True)
     return str(value)
@@ -5510,6 +5515,7 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
             "allow_shared_relations": allow_shared_relations,
             "allow_personal_relations": allow_personal_relations,
             "notes": str(existing.get("notes") or "") if notes is None else str(notes),
+            "expected_version_ns": int(existing.get("version_ns") or 0),
         }
         payload = shared_server_request_or_fail(
             config,

@@ -2393,6 +2393,7 @@ final class ActivityStore: ObservableObject {
         let policyRepo = auditString(payload["repo"]) ?? repoScope
         let requestedRepo = auditString(payload["requested_repo"]) ?? repoScope
         let inheritedFrom = auditString(payload["inherited_from"]) ?? ""
+        let version = auditString(payload["version_ns"])
         let minFactRating = auditString(payload["min_fact_rating"]) ?? "0"
         let allowShared = auditBool(payload["allow_shared_relations"]) != false
         let allowPersonal = auditBool(payload["allow_personal_relations"]) != false
@@ -2406,6 +2407,9 @@ final class ActivityStore: ObservableObject {
             "Shared relations: \(allowShared ? "allowed" : "disabled")",
             "Personal links: \(allowPersonal ? "allowed" : "disabled")",
         ]
+        if let version {
+            lines.append("Version: \(version)")
+        }
         if let updatedAt = auditString(payload["updated_at"]) {
             lines.append("Updated: \(updatedAt)")
         }
@@ -2462,6 +2466,7 @@ final class ActivityStore: ObservableObject {
             if auditBool(repoPolicy["available"]) == true {
                 let policyRepo = auditString(repoPolicy["repo"]) ?? requestedRepo
                 let inheritedFrom = auditString(repoPolicy["inherited_from"]) ?? ""
+                let version = auditString(repoPolicy["version_ns"])
                 let labels = (repoPolicy["allowed_relation_labels"] as? [Any] ?? [])
                     .compactMap { auditString($0) }
                 let minFactRating = auditDecimal(repoPolicy["min_fact_rating"]) ?? "0.00"
@@ -2473,6 +2478,9 @@ final class ActivityStore: ObservableObject {
                 lines.append("Minimum fact rating: \(minFactRating)")
                 lines.append("Shared relations: \(allowShared ? "allowed" : "disabled")")
                 lines.append("Personal links: \(allowPersonal ? "allowed" : "disabled")")
+                if let version {
+                    lines.append("Policy version: \(version)")
+                }
                 if let notes = auditString(repoPolicy["notes"]) {
                     lines.append("Policy notes: \(notes)")
                 }
