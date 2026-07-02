@@ -82,7 +82,7 @@ Run checks:
   shared memory history copy/version restore, shared context copy with optional
   relation evidence threshold, shared
   relation create/list/unlink with evidence rating, and private
-  personal-to-shared link create/list/unlink with linked-context evidence
+  personal-to-shared link create/list/unlink with link evidence rating and linked-context evidence
   threshold. Audit copies
   include privacy-preserving context-read events with hashed queries and counts
   when the server records them.

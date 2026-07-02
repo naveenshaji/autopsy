@@ -666,9 +666,9 @@ final class ActivityStore: ObservableObject {
         }
     }
 
-    func linkSharedServerPersonalMemory(personalKey: String, sharedKey: String, repoScope: String, relation: String, fact: String) {
+    func linkSharedServerPersonalMemory(personalKey: String, sharedKey: String, repoScope: String, relation: String, fact: String, factRating: String) {
         Task {
-            await linkPersonalSharedMemory(personalKey: personalKey, sharedKey: sharedKey, repoScope: repoScope, relation: relation, fact: fact)
+            await linkPersonalSharedMemory(personalKey: personalKey, sharedKey: sharedKey, repoScope: repoScope, relation: relation, fact: fact, factRating: factRating)
         }
     }
 
@@ -1369,7 +1369,7 @@ final class ActivityStore: ObservableObject {
         )
     }
 
-    private func linkPersonalSharedMemory(personalKey: String, sharedKey: String, repoScope: String, relation: String, fact: String) async {
+    private func linkPersonalSharedMemory(personalKey: String, sharedKey: String, repoScope: String, relation: String, fact: String, factRating: String) async {
         let trimmedPersonalKey = personalKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedSharedKey = sharedKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedRelation = relation.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1385,19 +1385,24 @@ final class ActivityStore: ObservableObject {
             sharedServerError = "Relation required"
             return
         }
+        var arguments = [
+            "shared-server",
+            "link",
+            trimmedPersonalKey,
+            trimmedSharedKey,
+            "--repo-scope",
+            normalizedRepoScope(repoScope),
+            "--relation",
+            trimmedRelation,
+            "--fact",
+            fact.trimmingCharacters(in: .whitespacesAndNewlines),
+        ]
+        let trimmedFactRating = factRating.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedFactRating.isEmpty {
+            arguments += ["--fact-rating", trimmedFactRating]
+        }
         await runSharedAccessCommand(
-            [
-                "shared-server",
-                "link",
-                trimmedPersonalKey,
-                trimmedSharedKey,
-                "--repo-scope",
-                normalizedRepoScope(repoScope),
-                "--relation",
-                trimmedRelation,
-                "--fact",
-                fact.trimmingCharacters(in: .whitespacesAndNewlines),
-            ],
+            arguments,
             successMessage: "Personal link created",
             refreshTeam: false
         )

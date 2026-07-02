@@ -147,6 +147,7 @@ private struct SharedSettingsTab: View {
     @State private var personalLinkRepoScope = ""
     @State private var personalRelation = "references"
     @State private var personalFact = ""
+    @State private var personalFactRating = "0.5"
     @State private var personalRelationID = ""
     @State private var personalContextIncludeArchived = false
     @State private var personalContextIncludeRelations = true
@@ -406,6 +407,8 @@ private struct SharedSettingsTab: View {
                 .pickerStyle(.menu)
                 TextField("Fact", text: $personalFact)
                     .textFieldStyle(.roundedBorder)
+                TextField("Fact Rating", text: $personalFactRating)
+                    .textFieldStyle(.roundedBorder)
                 HStack {
                     Button("Link") {
                         store.linkSharedServerPersonalMemory(
@@ -413,7 +416,8 @@ private struct SharedSettingsTab: View {
                             sharedKey: personalSharedKey,
                             repoScope: personalLinkRepoScope,
                             relation: personalRelation,
-                            fact: personalFact
+                            fact: personalFact,
+                            factRating: personalFactRating
                         )
                     }
                     .disabled(

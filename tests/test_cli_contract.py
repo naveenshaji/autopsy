@@ -228,6 +228,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "--limit",
             "10",
         ])
+        link_args = parser.parse_args(["shared-server", "link", "graph-note:local", "shared:1", "--repo-scope", "repo-a", "--relation", "references", "--fact-rating", "0.75"])
         unlink_args = parser.parse_args(["shared-server", "unlink", "plink_1", "--repo-scope", "repo-a"])
         invite_args = parser.parse_args([
             "shared-server",
@@ -302,6 +303,10 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(personal_context_args.personal_key, "graph-note:local")
         self.assertEqual(personal_context_args.min_fact_rating, 0.8)
         self.assertEqual(personal_context_args.limit, 10)
+        self.assertEqual(link_args.shared_server_action, "link")
+        self.assertEqual(link_args.stable_key, "graph-note:local")
+        self.assertEqual(link_args.target_key, "shared:1")
+        self.assertEqual(link_args.fact_rating, 0.75)
         self.assertEqual(unlink_args.shared_server_action, "unlink")
         self.assertEqual(unlink_args.stable_key, "plink_1")
         self.assertEqual(invite_args.shared_server_action, "invite")
@@ -1014,6 +1019,56 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "relation": "depends_on",
                         "fact": "one depends on two",
                         "fact_rating": 0.85,
+                        "repo": "repo-a",
+                    },
+                )
+            ],
+        )
+
+    def test_shared_server_link_posts_private_relation_payload(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "shared-server",
+            "link",
+            "graph-note:local",
+            "shared:1",
+            "--repo-scope",
+            "repo-a",
+            "--relation",
+            "references",
+            "--fact",
+            "local references shared",
+            "--fact-rating",
+            "0.75",
+        ])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        calls: list[tuple[str, str, dict[str, str] | None]] = []
+
+        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
+            calls.append((path, method, payload))
+            return {"id": "plink_1", "personal_key": "graph-note:local", "shared_key": "shared:1"}
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        self.assertEqual(json.loads(stream.getvalue())["linked"]["id"], "plink_1")
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "/v1/shared-graphs/autopsy/personal-relations",
+                    "POST",
+                    {
+                        "personal_key": "graph-note:local",
+                        "shared_key": "shared:1",
+                        "relation": "references",
+                        "fact": "local references shared",
+                        "fact_rating": 0.75,
                         "repo": "repo-a",
                     },
                 )

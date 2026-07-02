@@ -5602,17 +5602,21 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         relation = str(getattr(args, "relation", "") or "").strip()
         if not personal_key or not shared_key or not relation:
             fail("shared-server link requires personal_key, shared_key, and --relation", 2)
+        link_payload: dict[str, Any] = {
+            "personal_key": personal_key,
+            "shared_key": shared_key,
+            "relation": relation,
+            "fact": str(getattr(args, "fact", "") or ""),
+            "repo": repo,
+        }
+        fact_rating = normalize_fact_rating(getattr(args, "fact_rating", None))
+        if fact_rating is not None:
+            link_payload["fact_rating"] = fact_rating
         linked = shared_server_request_or_fail(
             config,
             shared_server_path(graph_slug, "/personal-relations"),
             method="POST",
-            payload={
-                "personal_key": personal_key,
-                "shared_key": shared_key,
-                "relation": relation,
-                "fact": str(getattr(args, "fact", "") or ""),
-                "repo": repo,
-            },
+            payload=link_payload,
             timeout=15,
         )
         print(json.dumps({

@@ -90,6 +90,7 @@ autopsy shared-server restore shared:key --repo-scope /path/to/repo --reason nee
 autopsy shared-server relate shared:source shared:target --repo-scope /path/to/repo --relation depends_on --fact-rating 0.9
 autopsy shared-server shared-relations --repo-scope /path/to/repo --source-key shared:source
 autopsy shared-server unrelate rel_123 --repo-scope /path/to/repo
+autopsy shared-server link graph-note:local shared:key --repo-scope /path/to/repo --relation references --fact-rating 0.9
 autopsy shared-server personal-links --repo-scope /path/to/repo --personal-key graph-note:local
 autopsy shared-server personal-context --repo-scope /path/to/repo --personal-key graph-note:local
 autopsy shared-server unlink plink_123 --repo-scope /path/to/repo
@@ -179,8 +180,9 @@ Add `--min-fact-rating 0.0..1.0` to omit low-quality adjacent shared relation
 facts and their related memory expansion.
 `shared-server link <personal-key> <shared-key> --repo <repo> --relation <name>`
 creates a private personal-to-shared relation without uploading the personal
-graph. `shared-server personal-links --repo-scope <repo>` lists only your own
-private personal-to-shared relation records; add `--personal-key` or
+graph; add `--fact-rating 0.0..1.0` to attach evidence quality to that private
+bridge. `shared-server personal-links --repo-scope <repo>` lists only your own
+private personal-to-shared relation records, including each `fact_rating`; add `--personal-key` or
 `--shared-key` to filter. `shared-server personal-context --repo-scope <repo>
 --personal-key <stable-key>` fetches the shared memories currently reachable
 through your private personal links, plus adjacent shared graph relations unless
