@@ -696,6 +696,20 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "HTTP 409: target user is disabled; user=usr_1",
         )
 
+    def test_shared_server_http_error_formats_structured_graph_conflict_detail(self):
+        error = urllib.error.HTTPError(
+            "/v1/shared-graphs",
+            409,
+            "Conflict",
+            {},
+            io.BytesIO(json.dumps({"detail": {"error": "shared graph already exists", "graph_slug": "autopsy"}}).encode()),
+        )
+
+        self.assertEqual(
+            cli.shared_server_http_error_message(error),
+            "HTTP 409: shared graph already exists; graph=autopsy",
+        )
+
     def test_shared_server_create_token_posts_expiration_payload(self):
         parser = cli.build_parser()
         args = parser.parse_args([

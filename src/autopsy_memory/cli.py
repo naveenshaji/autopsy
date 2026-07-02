@@ -4396,6 +4396,7 @@ def format_shared_server_error_detail(value: Any) -> str:
             for key, label in (
                 ("reason", "reason"),
                 ("user_id", "user"),
+                ("graph_slug", "graph"),
                 ("target", "target"),
                 ("repo", "repo"),
                 ("mode", "mode"),
