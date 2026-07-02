@@ -82,6 +82,10 @@ final class ActivityStore: ObservableObject {
         "read_repo_policies",
         "check_relation_policy",
         "relation_policy_version_conflict",
+        "upsert_memory",
+        "archive_memory",
+        "restore_memory",
+        "restore_memory_version",
         "create_shared_relation",
         "revoke_shared_relation",
         "create_personal_relation",
@@ -3775,8 +3779,20 @@ final class ActivityStore: ObservableObject {
         if let eventCount = auditInt(metadata["event_count"]) {
             parts.append("events \(eventCount)")
         }
+        if let kind = auditString(metadata["kind"]), !kind.isEmpty {
+            parts.append("kind \(kind)")
+        }
         if let limit = auditInt(metadata["limit"]) {
             parts.append("limit \(limit)")
+        }
+        if let versionID = auditString(metadata["version_id"]), !versionID.isEmpty {
+            parts.append("version id \(versionID)")
+        }
+        if let version = auditString(metadata["version_ns"]), !version.isEmpty {
+            parts.append("version \(version)")
+        }
+        if let expectedVersion = auditString(metadata["expected_version_ns"]), !expectedVersion.isEmpty {
+            parts.append("expected version \(expectedVersion)")
         }
         if let mode = auditString(metadata["mode"]) {
             parts.append("mode \(mode)")
