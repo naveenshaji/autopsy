@@ -450,7 +450,7 @@ def build_parser(
     shared_server_parser.add_argument("--to-user-id", help="Target owner user id for shared-server handoff-owner.")
     shared_server_parser.add_argument("--email", help="Email for shared-server create-user or invite.")
     shared_server_parser.add_argument("--name", default="", help="Display name for shared-server create-user or invite.")
-    shared_server_parser.add_argument("--label", default="default", help="Token label for shared-server create-token or invite.")
+    shared_server_parser.add_argument("--label", default="", help="Token label for shared-server create-token or invite.")
     shared_server_parser.add_argument("--expires-at", help="ISO-8601 expiration timestamp for shared-server create-token or invite.")
     shared_server_parser.add_argument("--role", choices=("reader", "writer", "owner"), help="Grant role for shared-server grant or invite.")
     shared_server_parser.add_argument("--source-role-after", choices=("reader", "writer", "none"), default="writer", help="Role to leave the source owner with after shared-server handoff-owner.")

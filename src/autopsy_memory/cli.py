@@ -575,6 +575,20 @@ def fail(message: str, code: int = 1) -> None:
     raise SystemExit(code)
 
 
+SHARED_SERVER_TOKEN_LABEL_MAX_LENGTH = 80
+
+
+def normalize_shared_server_token_label(value: Any, *, default: str) -> str:
+    label = str(value or "").strip()
+    if not label:
+        label = default
+    if len(label) > SHARED_SERVER_TOKEN_LABEL_MAX_LENGTH:
+        raise ValueError(f"token label must be {SHARED_SERVER_TOKEN_LABEL_MAX_LENGTH} characters or fewer")
+    if any(ord(char) < 32 or ord(char) == 127 for char in label):
+        raise ValueError("token label contains unsupported control characters")
+    return label
+
+
 class MissingRelationTargetsError(ValueError):
     def __init__(self, missing_specs: list[dict[str, Any]], diagnostics: list[dict[str, Any]] | None = None):
         self.missing_specs = missing_specs
@@ -5743,7 +5757,11 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         user_id = str(getattr(args, "user_id", "") or "").strip()
         if not user_id:
             fail("shared-server create-token requires --user-id", 2)
-        token_payload = {"label": str(getattr(args, "label", "") or "default")}
+        try:
+            token_label = normalize_shared_server_token_label(getattr(args, "label", ""), default="default")
+        except ValueError as error:
+            fail(f"shared-server create-token {error}", 2)
+        token_payload = {"label": token_label}
         expires_at = str(getattr(args, "expires_at", "") or "").strip()
         if expires_at:
             token_payload["expires_at"] = expires_at
@@ -5919,12 +5937,16 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         role = str(getattr(args, "role", "") or "reader").strip()
         if not email:
             fail("shared-server invite requires --email", 2)
+        try:
+            invite_label = normalize_shared_server_token_label(getattr(args, "label", ""), default="invite")
+        except ValueError as error:
+            fail(f"shared-server invite {error}", 2)
         invite_payload = {
             "email": email,
             "name": str(getattr(args, "name", "") or ""),
             "repo": repo,
             "role": role,
-            "label": str(getattr(args, "label", "") or "invite"),
+            "label": invite_label,
         }
         expires_at = str(getattr(args, "expires_at", "") or "").strip()
         if expires_at:

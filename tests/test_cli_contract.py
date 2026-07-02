@@ -916,7 +916,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "--user-id",
             "usr_1",
             "--label",
-            "laptop",
+            "  laptop  ",
             "--expires-at",
             "2999-01-01T00:00:00Z",
         ])
@@ -946,6 +946,44 @@ class AutopsyCLIContractTests(unittest.TestCase):
                 )
             ],
         )
+
+    def test_shared_server_token_label_normalizer_rejects_unsupported_values(self):
+        self.assertEqual(cli.normalize_shared_server_token_label("  laptop  ", default="default"), "laptop")
+        self.assertEqual(cli.normalize_shared_server_token_label("  ", default="invite"), "invite")
+        with self.assertRaisesRegex(ValueError, "80 characters"):
+            cli.normalize_shared_server_token_label("x" * 81, default="default")
+        with self.assertRaisesRegex(ValueError, "control characters"):
+            cli.normalize_shared_server_token_label("bad\tlabel", default="default")
+
+    def test_shared_server_create_token_rejects_invalid_label_before_request(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "shared-server",
+            "create-token",
+            "--user-id",
+            "usr_1",
+            "--label",
+            "bad\tlabel",
+        ])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        calls: list[tuple[str, str, dict[str, str] | None]] = []
+
+        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
+            calls.append((path, method, payload))
+            return {"id": "tok_1", "token": "plain-token"}
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stderr(stream),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            args.func(args)
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("shared-server create-token token label contains unsupported control characters", stream.getvalue())
+        self.assertEqual(calls, [])
 
     def test_shared_server_user_lifecycle_posts_disable_enable_paths(self):
         parser = cli.build_parser()
@@ -1025,6 +1063,68 @@ class AutopsyCLIContractTests(unittest.TestCase):
                 )
             ],
         )
+
+    def test_shared_server_invite_uses_action_default_label(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "shared-server",
+            "invite",
+            "--email",
+            "dev@example.com",
+            "--repo-scope",
+            "repo-a",
+            "--role",
+            "reader",
+        ])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        calls: list[tuple[str, str, dict[str, str] | None]] = []
+
+        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
+            calls.append((path, method, payload))
+            return {"token": "invite-token"}
+
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            args.func(args)
+
+        self.assertEqual(calls[0][2]["label"], "invite")
+
+    def test_shared_server_invite_rejects_overlong_label_before_request(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "shared-server",
+            "invite",
+            "--email",
+            "dev@example.com",
+            "--repo-scope",
+            "repo-a",
+            "--role",
+            "reader",
+            "--label",
+            "x" * 81,
+        ])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        calls: list[tuple[str, str, dict[str, str] | None]] = []
+
+        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
+            calls.append((path, method, payload))
+            return {"token": "invite-token"}
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stderr(stream),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            args.func(args)
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("shared-server invite token label must be 80 characters or fewer", stream.getvalue())
+        self.assertEqual(calls, [])
 
     def test_shared_server_scoped_tokens_fetches_repo_tokens(self):
         parser = cli.build_parser()
