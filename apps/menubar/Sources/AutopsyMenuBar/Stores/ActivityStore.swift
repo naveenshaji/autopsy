@@ -2543,6 +2543,15 @@ final class ActivityStore: ObservableObject {
         if let grantCount = auditInt(metadata["matching_grant_count"]) {
             parts.append("matching grants \(grantCount)")
         }
+        if let activeOwners = auditInt(metadata["active_owner_count"]) {
+            parts.append("active owners \(activeOwners)")
+        }
+        if let removedOwners = auditInt(metadata["removed_owner_count"]) {
+            parts.append("removing owners \(removedOwners)")
+        }
+        if let remainingOwners = auditInt(metadata["remaining_owner_count"]) {
+            parts.append("remaining owners \(remainingOwners)")
+        }
         if auditBool(metadata["token_scoped"]) == true {
             parts.append("token scoped")
             if let scopeRole = auditString(metadata["token_scope_role"]), !scopeRole.isEmpty {
