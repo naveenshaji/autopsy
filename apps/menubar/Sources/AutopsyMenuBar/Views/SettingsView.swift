@@ -125,6 +125,9 @@ private struct SharedSettingsTab: View {
     @State private var grantUserID = ""
     @State private var grantRepoScope = ""
     @State private var grantRole = "reader"
+    @State private var handoffSourceUserID = ""
+    @State private var handoffTargetUserID = ""
+    @State private var handoffSourceRoleAfter = "writer"
     @State private var sharedMemoryStableKey = ""
     @State private var sharedMemoryRepoScope = ""
     @State private var sharedMemoryReason = ""
@@ -160,6 +163,7 @@ private struct SharedSettingsTab: View {
     @State private var auditRepoScope = ""
 
     private let roles = ["reader", "writer", "owner"]
+    private let sourceRoleAfterOptions = ["writer", "reader", "none"]
     private let accessModes = ["read", "write", "admin"]
     private let relationOptions = ["references", "depends_on", "informed_by", "implements", "answers", "refines"]
 
@@ -492,6 +496,34 @@ private struct SharedSettingsTab: View {
                     }
                     .disabled(sharedActionDisabled || grantUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
+
+                Divider()
+
+                TextField("From Owner ID", text: $handoffSourceUserID)
+                    .textFieldStyle(.roundedBorder)
+                TextField("To Owner ID", text: $handoffTargetUserID)
+                    .textFieldStyle(.roundedBorder)
+                Picker("Source After", selection: $handoffSourceRoleAfter) {
+                    ForEach(sourceRoleAfterOptions, id: \.self) { role in
+                        Text(role == "none" ? "Remove" : role.capitalized).tag(role)
+                    }
+                }
+                .pickerStyle(.segmented)
+                Button("Handoff Owner") {
+                    store.handoffSharedServerOwner(
+                        fromUserID: handoffSourceUserID,
+                        toUserID: handoffTargetUserID,
+                        repoScope: grantRepoScope,
+                        sourceRoleAfter: handoffSourceRoleAfter
+                    )
+                }
+                .disabled(
+                    sharedActionDisabled ||
+                    handoffSourceUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                    handoffTargetUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                )
+
+                Divider()
 
                 HStack {
                     Button("Disable User") {

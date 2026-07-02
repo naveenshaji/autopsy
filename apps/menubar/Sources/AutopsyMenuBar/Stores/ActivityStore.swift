@@ -50,12 +50,14 @@ final class ActivityStore: ObservableObject {
         "disable_user",
         "enable_user",
         "grant_access",
+        "handoff_owner",
         "invite_user",
         "revoke_grant",
         "revoke_scoped_token",
     ]
     private static let sharedAccessChangeAuditActions = [
         "grant_access",
+        "handoff_owner",
         "invite_user",
         "revoke_grant",
         "revoke_scoped_token",
@@ -689,6 +691,17 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    func handoffSharedServerOwner(fromUserID: String, toUserID: String, repoScope: String, sourceRoleAfter: String) {
+        Task {
+            await handoffSharedOwner(
+                fromUserID: fromUserID,
+                toUserID: toUserID,
+                repoScope: repoScope,
+                sourceRoleAfter: sourceRoleAfter
+            )
+        }
+    }
+
     func disableSharedServerUser(userID: String) {
         Task {
             await updateSharedUserLifecycle(action: "disable-user", userID: userID)
@@ -1222,6 +1235,58 @@ final class ActivityStore: ObservableObject {
                     return "Shared grant revoked"
                 }
                 return "Shared grant revoked; \(details.joined(separator: ", "))"
+            }
+        )
+    }
+
+    private func handoffSharedOwner(fromUserID: String, toUserID: String, repoScope: String, sourceRoleAfter: String) async {
+        let trimmedFromUserID = fromUserID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedToUserID = toUserID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedFromUserID.isEmpty, !trimmedToUserID.isEmpty else {
+            sharedServerError = "Owner IDs required"
+            return
+        }
+        guard trimmedFromUserID != trimmedToUserID else {
+            sharedServerError = "Owner IDs must differ"
+            return
+        }
+        await runSharedAccessCommand(
+            [
+                "shared-server",
+                "handoff-owner",
+                "--from-user-id",
+                trimmedFromUserID,
+                "--to-user-id",
+                trimmedToUserID,
+                "--repo-scope",
+                normalizedRepoScope(repoScope),
+                "--source-role-after",
+                sourceRoleAfter,
+            ],
+            successMessage: "Shared owner handed off",
+            successMessageFromOutput: { output in
+                guard let payload = self.jsonObject(from: output) else {
+                    return "Shared owner handed off"
+                }
+                let sourceAfter = self.auditString(payload["source_role_after"]) ?? sourceRoleAfter
+                let revoked = self.auditInt(payload["revoked_scoped_token_count"]) ?? 0
+                let alreadyRevoked = self.auditInt(payload["already_revoked_scoped_token_count"]) ?? 0
+                var details: [String] = []
+                if sourceAfter == "none" {
+                    details.append("source removed")
+                } else if !sourceAfter.isEmpty {
+                    details.append("source \(sourceAfter)")
+                }
+                if revoked > 0 {
+                    details.append("\(revoked) invite token\(revoked == 1 ? "" : "s") revoked")
+                }
+                if alreadyRevoked > 0 {
+                    details.append("\(alreadyRevoked) invite token\(alreadyRevoked == 1 ? "" : "s") already revoked")
+                }
+                guard !details.isEmpty else {
+                    return "Shared owner handed off"
+                }
+                return "Shared owner handed off; \(details.joined(separator: ", "))"
             }
         )
     }
@@ -2247,6 +2312,15 @@ final class ActivityStore: ObservableObject {
         if let role = auditString(metadata["role"]), !role.isEmpty {
             parts.append("role \(role)")
         }
+        if let toUserID = auditString(metadata["to_user_id"]), !toUserID.isEmpty {
+            parts.append("new owner \(toUserID)")
+        }
+        if let sourceRoleAfter = auditString(metadata["source_role_after"]), !sourceRoleAfter.isEmpty {
+            parts.append(sourceRoleAfter == "none" ? "source removed" : "source \(sourceRoleAfter)")
+        }
+        if let targetPreviousRole = auditString(metadata["target_previous_role"]), !targetPreviousRole.isEmpty {
+            parts.append("previous target role \(targetPreviousRole)")
+        }
         if let email = auditString(metadata["email"]), !email.isEmpty {
             parts.append("email \(email)")
         }
@@ -2283,6 +2357,8 @@ final class ActivityStore: ObservableObject {
         switch action {
         case "grant_access":
             return "grant access"
+        case "handoff_owner":
+            return "handoff owner"
         case "invite_user":
             return "invite user"
         case "revoke_grant":
