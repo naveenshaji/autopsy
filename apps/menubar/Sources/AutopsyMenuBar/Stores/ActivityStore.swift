@@ -395,6 +395,19 @@ final class ActivityStore: ObservableObject {
             if team.policyInventoryRepoFilterPresent == true {
                 parts.append("repo filtered")
             }
+            if let inheritedFrom = team.effectivePolicyInheritedFrom, !inheritedFrom.isEmpty {
+                parts.append("inherits \(inheritedFrom)")
+            } else if let effectiveRepo = team.effectivePolicyRepo, !effectiveRepo.isEmpty {
+                parts.append("effective \(effectiveRepo)")
+            }
+            if team.effectivePolicyConstrained == true {
+                parts.append("effective constrained")
+            }
+            if let fingerprint = team.effectivePolicyFingerprint, !fingerprint.isEmpty {
+                parts.append("fp \(shortAuditHash(fingerprint))")
+            } else if let error = team.policyError, !error.isEmpty {
+                parts.append("policy read failed")
+            }
             return parts.isEmpty ? "\(count)" : "\(count) (\(parts.joined(separator: ", ")))"
         }
         if let error = team.policiesError, !error.isEmpty {

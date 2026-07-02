@@ -120,6 +120,7 @@ Run checks:
   token because they intentionally omit graph and repo filters.
   Team status is requested for the current workspace repo scope by default and
   also surfaces disabled-user counts, explicit/constrained repo-policy inventory
-  counts, and the server-side audit integrity status inline.
+  counts, effective repo-policy source/fingerprint, and the server-side audit
+  integrity status inline.
 - Attention items when available.
 - Quit action.

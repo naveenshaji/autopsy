@@ -84,6 +84,7 @@ struct SharedServerTeamPayload: Decodable {
     var canListGrants: Bool?
     var canListTokens: Bool?
     var canListPolicies: Bool?
+    var canReadPolicy: Bool?
     var canReadAuditIntegrity: Bool?
     var usersCount: Int?
     var activeUsersCount: Int?
@@ -103,6 +104,15 @@ struct SharedServerTeamPayload: Decodable {
     var disabledSharedPolicyCount: Int?
     var disabledPersonalPolicyCount: Int?
     var policyInventoryRepoFilterPresent: Bool?
+    var effectivePolicyRepo: String?
+    var effectivePolicyInheritedFrom: String?
+    var effectivePolicyVersionNS: String?
+    var effectivePolicyFingerprint: String?
+    var effectivePolicyRelationLabelCount: Int?
+    var effectivePolicyMinFactRating: Double?
+    var effectivePolicySharedRelationsAllowed: Bool?
+    var effectivePolicyPersonalRelationsAllowed: Bool?
+    var effectivePolicyConstrained: Bool?
     var roleCounts: [String: Int]?
     var tokenRoleCounts: [String: Int]?
     var auditIntegrity: SharedServerAuditIntegrityPayload?
@@ -110,6 +120,7 @@ struct SharedServerTeamPayload: Decodable {
     var grantsError: String?
     var tokensError: String?
     var policiesError: String?
+    var policyError: String?
     var auditIntegrityError: String?
 
     enum CodingKeys: String, CodingKey {
@@ -118,6 +129,7 @@ struct SharedServerTeamPayload: Decodable {
         case canListGrants = "can_list_grants"
         case canListTokens = "can_list_tokens"
         case canListPolicies = "can_list_policies"
+        case canReadPolicy = "can_read_policy"
         case canReadAuditIntegrity = "can_read_audit_integrity"
         case usersCount = "users_count"
         case activeUsersCount = "active_users_count"
@@ -137,6 +149,15 @@ struct SharedServerTeamPayload: Decodable {
         case disabledSharedPolicyCount = "disabled_shared_policy_count"
         case disabledPersonalPolicyCount = "disabled_personal_policy_count"
         case policyInventoryRepoFilterPresent = "policy_inventory_repo_filter_present"
+        case effectivePolicyRepo = "effective_policy_repo"
+        case effectivePolicyInheritedFrom = "effective_policy_inherited_from"
+        case effectivePolicyVersionNS = "effective_policy_version_ns"
+        case effectivePolicyFingerprint = "effective_policy_fingerprint"
+        case effectivePolicyRelationLabelCount = "effective_policy_relation_label_count"
+        case effectivePolicyMinFactRating = "effective_policy_min_fact_rating"
+        case effectivePolicySharedRelationsAllowed = "effective_policy_shared_relations_allowed"
+        case effectivePolicyPersonalRelationsAllowed = "effective_policy_personal_relations_allowed"
+        case effectivePolicyConstrained = "effective_policy_constrained"
         case roleCounts = "role_counts"
         case tokenRoleCounts = "token_role_counts"
         case auditIntegrity = "audit_integrity"
@@ -144,6 +165,7 @@ struct SharedServerTeamPayload: Decodable {
         case grantsError = "grants_error"
         case tokensError = "tokens_error"
         case policiesError = "policies_error"
+        case policyError = "policy_error"
         case auditIntegrityError = "audit_integrity_error"
     }
 }

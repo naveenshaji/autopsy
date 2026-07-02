@@ -1870,6 +1870,18 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         }
                     ],
                 }
+            if path == "/v1/shared-graphs/autopsy/policy?repo=repo-a":
+                return {
+                    "repo": "repo-a",
+                    "inherited_from": "",
+                    "allowed_relation_labels": ["supports"],
+                    "min_fact_rating": 0.8,
+                    "allow_shared_relations": True,
+                    "allow_personal_relations": False,
+                    "version_ns": 123,
+                    "policy_fingerprint": "sha256:abc123policy",
+                    "notes": "keep private",
+                }
             if path == "/v1/audit-events/integrity?graph_slug=autopsy&limit=50&repo=repo-a":
                 return {
                     "status": "verified",
@@ -1913,12 +1925,22 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["team"]["disabled_shared_policy_count"], 0)
         self.assertEqual(payload["team"]["policy_repos"], ["repo-a"])
         self.assertTrue(payload["team"]["policy_inventory_repo_filter_present"])
+        self.assertTrue(payload["team"]["can_read_policy"])
+        self.assertEqual(payload["team"]["effective_policy_repo"], "repo-a")
+        self.assertEqual(payload["team"]["effective_policy_version_ns"], "123")
+        self.assertEqual(payload["team"]["effective_policy_fingerprint"], "sha256:abc123policy")
+        self.assertEqual(payload["team"]["effective_policy_relation_label_count"], 1)
+        self.assertEqual(payload["team"]["effective_policy_min_fact_rating"], 0.8)
+        self.assertTrue(payload["team"]["effective_policy_shared_relations_allowed"])
+        self.assertFalse(payload["team"]["effective_policy_personal_relations_allowed"])
+        self.assertTrue(payload["team"]["effective_policy_constrained"])
         self.assertTrue(payload["team"]["can_read_audit_integrity"])
         self.assertEqual(payload["team"]["audit_integrity"]["status"], "verified")
         self.assertEqual(payload["team"]["audit_integrity"]["event_count"], 4)
         self.assertEqual(payload["team"]["audit_integrity"]["integrity_counts"]["verified"], 4)
         self.assertEqual(payload["team"]["audit_integrity"]["chain"]["external_gap_count"], 1)
         self.assertNotIn("audit_1", json.dumps(payload["team"]["audit_integrity"]))
+        self.assertNotIn("keep private", json.dumps(payload["team"]))
         self.assertNotIn("secret-token", json.dumps(payload))
 
     def test_restore_offline_requires_dry_run(self):
