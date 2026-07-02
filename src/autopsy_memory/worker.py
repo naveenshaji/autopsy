@@ -264,17 +264,22 @@ def load_embeddings_config_cached(root_dir: Path) -> dict:
     return config
 
 
+def sentence_transformers_available() -> tuple[bool, str | None]:
+    try:
+        importlib.invalidate_caches()
+        __import__('sentence_transformers')
+    except Exception as exc:
+        return (False, f'sentence-transformers unavailable: {exc}')
+    return (True, None)
+
+
 def embedding_provider_available(config: dict) -> tuple[bool, str | None]:
     provider = str(config.get('provider') or '').strip().lower()
     if not config.get('enabled', True):
         return (False, 'disabled')
     if provider != 'sentence_transformers':
         return (False, f'unsupported provider: {provider}')
-    try:
-        __import__('sentence_transformers')
-    except Exception as exc:
-        return (False, f'sentence-transformers unavailable: {exc}')
-    return (True, None)
+    return sentence_transformers_available()
 
 
 def reranker_config(config: dict | None) -> dict:
@@ -291,11 +296,7 @@ def reranker_provider_available(config: dict | None) -> tuple[bool, str | None]:
     provider = str(reranker.get('provider') or '').strip().lower()
     if provider != 'sentence_transformers':
         return (False, f'unsupported provider: {provider}')
-    try:
-        __import__('sentence_transformers')
-    except Exception as exc:
-        return (False, f'sentence-transformers unavailable: {exc}')
-    return (True, None)
+    return sentence_transformers_available()
 
 
 def embed_texts_with_provider(texts: list[str], config: dict) -> list[list[float]]:
@@ -660,8 +661,19 @@ def falkor_embeddings_status_cached(config: dict) -> dict:
     if cached is not None:
         return copy.deepcopy(cached)
     status = falkor_embeddings_status(config)
-    _EMBEDDINGS_STATUS_CACHE[key] = copy.deepcopy(status)
+    if not embeddings_status_has_transient_import_error(status):
+        _EMBEDDINGS_STATUS_CACHE[key] = copy.deepcopy(status)
     return status
+
+
+def embeddings_status_has_transient_import_error(status: dict) -> bool:
+    error = str(status.get('error') or '')
+    reranker = status.get('reranker') if isinstance(status.get('reranker'), dict) else {}
+    reranker_error = str(reranker.get('error') or '')
+    return (
+        error.startswith('sentence-transformers unavailable:')
+        or reranker_error.startswith('sentence-transformers unavailable:')
+    )
 
 
 def load_falkor_request_context(payload: dict, *, include_embeddings_status: bool = True):

@@ -151,6 +151,61 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
         self.assertEqual(reset_calls, ["/tmp/stale-autopsy.db"])
         self.assertEqual(operation_calls, [])
 
+    def test_embeddings_status_cache_rechecks_transient_import_failure(self):
+        worker = load_worker_module()
+        original_embedding = worker.embedding_provider_available
+        original_reranker = worker.reranker_provider_available
+        config = {
+            "enabled": True,
+            "provider": "sentence_transformers",
+            "model": "embedding-model",
+            "reranker": {
+                "enabled": True,
+                "provider": "sentence_transformers",
+                "model": "reranker-model",
+            },
+        }
+        embedding_results = iter(
+            [
+                (False, "sentence-transformers unavailable: No module named 'sentence_transformers'"),
+                (True, None),
+            ]
+        )
+        reranker_results = iter(
+            [
+                (False, "sentence-transformers unavailable: No module named 'sentence_transformers'"),
+                (True, None),
+            ]
+        )
+        calls: list[str] = []
+
+        def embedding_available(_config):
+            calls.append("embedding")
+            return next(embedding_results)
+
+        def reranker_available(_config):
+            calls.append("reranker")
+            return next(reranker_results)
+
+        worker.embedding_provider_available = embedding_available
+        worker.reranker_provider_available = reranker_available
+        worker._EMBEDDINGS_STATUS_CACHE.clear()
+        try:
+            first = worker.falkor_embeddings_status_cached(config)
+            second = worker.falkor_embeddings_status_cached(config)
+            third = worker.falkor_embeddings_status_cached(config)
+        finally:
+            worker.embedding_provider_available = original_embedding
+            worker.reranker_provider_available = original_reranker
+            worker._EMBEDDINGS_STATUS_CACHE.clear()
+
+        self.assertFalse(first["available"])
+        self.assertFalse(first["reranker"]["available"])
+        self.assertTrue(second["available"])
+        self.assertTrue(second["reranker"]["available"])
+        self.assertTrue(third["available"])
+        self.assertEqual(calls, ["embedding", "reranker", "embedding", "reranker"])
+
     def test_worker_post_write_helper_attaches_ack_before_backup(self):
         worker = load_worker_module()
         calls = []
