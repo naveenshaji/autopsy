@@ -99,6 +99,7 @@ struct SharedServerTeamPayload: Decodable {
     var activeTokensCount: Int?
     var activeTokensWithLastUsedCount: Int?
     var activeTokensNeverUsedCount: Int?
+    var activeTokensWithoutExpirationCount: Int?
     var staleActiveTokensCount: Int?
     var staleTokenDays: Int?
     var expiredTokensCount: Int?
@@ -158,6 +159,7 @@ struct SharedServerTeamPayload: Decodable {
         case activeTokensCount = "active_tokens_count"
         case activeTokensWithLastUsedCount = "active_tokens_with_last_used_count"
         case activeTokensNeverUsedCount = "active_tokens_never_used_count"
+        case activeTokensWithoutExpirationCount = "active_tokens_without_expiration_count"
         case staleActiveTokensCount = "stale_active_tokens_count"
         case staleTokenDays = "stale_token_days"
         case expiredTokensCount = "expired_tokens_count"

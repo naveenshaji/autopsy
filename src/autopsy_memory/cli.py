@@ -4848,6 +4848,7 @@ def summarize_shared_server_tokens(
     active_count = 0
     active_with_last_used_count = 0
     active_never_used_count = 0
+    active_without_expiration_count = 0
     stale_active_count = 0
     expired_count = 0
     revoked_count = 0
@@ -4862,6 +4863,7 @@ def summarize_shared_server_tokens(
         role_counts[role] = role_counts.get(role, 0) + 1
         revoked = bool(item.get("revoked"))
         expired = bool(item.get("expired"))
+        expires_at = str(item.get("expires_at") or item.get("expiresAt") or "").strip()
         last_used_at = str(item.get("last_used_at") or "").strip()
         parsed_last_used_at = parse_iso_datetime(last_used_at)
         if last_used_at:
@@ -4876,6 +4878,8 @@ def summarize_shared_server_tokens(
             expired_count += 1
         if not revoked and not expired:
             active_count += 1
+            if not expires_at:
+                active_without_expiration_count += 1
             if last_used_at:
                 active_with_last_used_count += 1
                 if not latest_active_last_used_at or last_used_at > latest_active_last_used_at:
@@ -4891,6 +4895,7 @@ def summarize_shared_server_tokens(
         "active_tokens_count": active_count,
         "active_tokens_with_last_used_count": active_with_last_used_count,
         "active_tokens_never_used_count": active_never_used_count,
+        "active_tokens_without_expiration_count": active_without_expiration_count,
         "stale_active_tokens_count": stale_active_count,
         "stale_token_days": max(0, stale_after_days),
         "expired_tokens_count": expired_count,

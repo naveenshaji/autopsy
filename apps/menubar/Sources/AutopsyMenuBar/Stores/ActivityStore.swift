@@ -375,6 +375,9 @@ final class ActivityStore: ObservableObject {
             if let neverUsed = team.activeTokensNeverUsedCount, neverUsed > 0 {
                 parts.append("never used: \(neverUsed)")
             }
+            if let noExpiry = team.activeTokensWithoutExpirationCount, noExpiry > 0 {
+                parts.append("no expiry: \(noExpiry)")
+            }
             if let stale = team.staleActiveTokensCount, stale > 0 {
                 if let days = team.staleTokenDays, days > 0 {
                     parts.append("stale >\(days)d: \(stale)")

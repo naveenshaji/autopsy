@@ -2313,6 +2313,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
                             "revoked": False,
                             "expired": False,
                             "disabled": False,
+                            "expires_at": "2999-01-01T00:00:00Z",
                             "last_used_at": "2999-01-01T00:00:00Z",
                         },
                         {"id": "tok_4", "issued_role": "writer", "revoked": False, "expired": False, "disabled": False},
@@ -2322,6 +2323,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
                             "revoked": False,
                             "expired": False,
                             "disabled": False,
+                            "expires_at": "2999-01-01T00:00:00Z",
                             "last_used_at": "2000-01-01T00:00:00Z",
                         },
                         {"id": "tok_2", "issued_role": "reader", "revoked": False, "expired": True, "disabled": True},
@@ -2414,6 +2416,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["team"]["active_tokens_count"], 3)
         self.assertEqual(payload["team"]["active_tokens_with_last_used_count"], 2)
         self.assertEqual(payload["team"]["active_tokens_never_used_count"], 1)
+        self.assertEqual(payload["team"]["active_tokens_without_expiration_count"], 1)
         self.assertEqual(payload["team"]["stale_active_tokens_count"], 1)
         self.assertEqual(payload["team"]["stale_token_days"], 30)
         self.assertEqual(payload["team"]["expired_tokens_count"], 1)
