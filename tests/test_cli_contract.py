@@ -7196,10 +7196,11 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "source_stable_key": "graph-note:decision",
                         "target_stable_key": "graph-note:active",
                         "fact_text": "Release decision informs active release hardening",
+                        "fact_rating": 0.87,
                     }
                 ],
             },
-            max_chars=1400,
+            max_chars=1600,
         )
         self.assertEqual(payload["workflow"]["status"], "ok")
         self.assertLessEqual(payload["context_budget"]["used_chars"], payload["context_budget"]["max_chars"])
@@ -7214,6 +7215,9 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertIn("Workflow: ok; coverage=strong; complete=true", payload["context_block"])
         self.assertIn("Retrieved Memory", payload["context_block"])
         self.assertIn("[graph-note:decision]", payload["context_block"])
+        relation_entries = [entry for entry in payload["agent_context"] if entry["section"] == "relations"]
+        self.assertEqual(relation_entries[0]["text"], "Release decision informs active release hardening [rating 0.87]")
+        self.assertIn("Release decision informs active release hardening [rating 0.87]", payload["context_block"])
         self.assertLessEqual(len(payload["context_block"]), payload["context_budget"]["max_chars"])
 
     def test_context_pack_reports_weak_signals_when_only_side_channels_exist(self):
@@ -7548,6 +7552,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "related_to_title": "Release via standalone installer",
                         "relation": "implements",
                         "fact_text": "Installer smoke test implements release decision",
+                        "fact_rating": 0.92,
                     }
                 ],
             },
@@ -7557,9 +7562,12 @@ class AutopsyCLIContractTests(unittest.TestCase):
         related_entries = [entry for entry in payload["agent_context"] if entry["section"] == "related_memory"]
         self.assertEqual([entry["stable_key"] for entry in related_entries], ["graph-note:attempt"])
         self.assertIn("implements", related_entries[0]["text"])
+        self.assertIn("rating 0.92", related_entries[0]["text"])
         self.assertEqual(payload["retrieval"]["related_memory"]["policy"], cli.RELATED_MEMORY_EXPANSION_POLICY)
         self.assertEqual(payload["retrieval"]["related_memory"]["items"][0]["stable_key"], "graph-note:attempt")
+        self.assertEqual(payload["retrieval"]["related_memory"]["items"][0]["fact_rating"], 0.92)
         self.assertIn("Related Memory", payload["context_block"])
+        self.assertIn("rating 0.92", payload["context_block"])
 
     def test_context_pack_surfaces_procedure_status_section(self):
         class Tool:

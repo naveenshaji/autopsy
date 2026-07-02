@@ -12361,6 +12361,12 @@ def evidence_annotation(evidence: dict[str, Any] | None) -> str:
     return f" [evidence: {'; '.join(bits[:2])}]" if bits else ""
 
 
+def context_fact_rating_annotation(value: Any) -> str:
+    if value in (None, ""):
+        return ""
+    return f"rating {fact_rating_for_read(value):.2f}"
+
+
 def build_context_pack_payload(
     *,
     tool,
@@ -12439,7 +12445,7 @@ def build_context_pack_payload(
         if not stable_key or stable_key in pinned_keys or stable_key in retrieved_keys:
             continue
         compacted = compact_context_item(item, max_body_chars=320)
-        for key in ("related_to", "related_to_title", "relation", "predicate", "fact_text", "direction", "depth", "related_memory_expansion_policy"):
+        for key in ("related_to", "related_to_title", "relation", "predicate", "fact_text", "fact_rating", "direction", "depth", "related_memory_expansion_policy"):
             if item.get(key) not in (None, ""):
                 compacted[key] = item.get(key)
         if stable_key in lineage:
@@ -12463,7 +12469,7 @@ def build_context_pack_payload(
             compacted = compact_context_item(candidate, max_body_chars=260)
             compacted["signal_source"] = source
             compacted["weak"] = True
-            for key in ("source_stable_key", "target_stable_key", "predicate", "fact_text", "relationship_score", "entity_matches", "retrieval_reasons"):
+            for key in ("source_stable_key", "target_stable_key", "predicate", "fact_text", "fact_rating", "relationship_score", "entity_matches", "retrieval_reasons"):
                 if candidate.get(key) not in (None, "", []):
                     compacted[key] = candidate.get(key)
             weak_signal_candidates.append(compacted)
@@ -12553,10 +12559,15 @@ def build_context_pack_payload(
         if item.get("summary"):
             text = f"{text} - {item['summary']}"
         fact_text = summary_snippet(str(item.get("fact_text") or ""), limit=180)
+        fact_rating = context_fact_rating_annotation(item.get("fact_rating"))
+        relation_bits = [f"{relation} with {related_to}"]
+        if fact_rating:
+            relation_bits.append(fact_rating)
         if fact_text:
-            text = f"{text} [related: {relation} with {related_to}; {fact_text}]"
+            relation_bits.append(fact_text)
+            text = f"{text} [related: {'; '.join(relation_bits)}]"
         else:
-            text = f"{text} [related: {relation} with {related_to}]"
+            text = f"{text} [related: {'; '.join(relation_bits)}]"
         text = f"{text}{lineage_annotation(item.get('lineage'))}"
         used_chars, was_truncated = append_context_entry(
             entries,
@@ -12575,13 +12586,15 @@ def build_context_pack_payload(
         fact_text = str(relation.get("fact_text") or "").strip()
         if not fact_text:
             continue
+        fact_rating = context_fact_rating_annotation(relation.get("fact_rating"))
+        relation_text = f"{fact_text} [{fact_rating}]" if fact_rating else fact_text
         used_chars, was_truncated = append_context_entry(
             entries,
             {
                 "section": "relations",
                 "priority": 1,
                 "stable_key": str(relation.get("source_stable_key") or relation.get("target_stable_key") or ""),
-                "text": fact_text,
+                "text": relation_text,
             },
             max_chars=max_chars,
             used_chars=used_chars,
@@ -12596,7 +12609,11 @@ def build_context_pack_payload(
             text = f"{text} - {item['summary']}"
         fact_text = summary_snippet(str(item.get("fact_text") or ""), limit=160)
         if fact_text:
-            text = f"{text} [candidate relation: {fact_text}]"
+            fact_rating = context_fact_rating_annotation(item.get("fact_rating"))
+            relation_bits = [fact_text]
+            if fact_rating:
+                relation_bits.append(fact_rating)
+            text = f"{text} [candidate relation: {'; '.join(relation_bits)}]"
         text = f"{text} [weak: inspect the exact item before relying]"
         used_chars, was_truncated = append_context_entry(
             entries,
