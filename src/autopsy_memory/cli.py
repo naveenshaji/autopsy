@@ -15608,40 +15608,142 @@ def repo_scoped_benchmark_sample(graph) -> dict[str, Any] | None:
     return active[0] if active else None
 
 
+def create_repo_scoped_benchmark_probe(graph, *, tool, workspace: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    probe_id = uuid.uuid4().hex[:8]
+    repo_path = str(Path(tempfile.gettempdir()) / f"autopsy-benchmark-repo-{probe_id}")
+    title = f"Autopsy repo filter benchmark probe {probe_id}"
+    content = "Temporary repo-scoped metadata filter benchmark probe. This item should be removed by the benchmark."
+    cleanup: dict[str, Any] = {
+        "source": "temporary_probe",
+        "stable_key": "",
+        "episode_key": "",
+        "history_event_key": "",
+        "repository_stable_key": repo_path,
+        "created": False,
+    }
+    payload = create_graph_note_payload(
+        graph,
+        tool=tool,
+        workspace=workspace,
+        kind="attempt",
+        title=title,
+        content=content,
+        repository_root_path=repo_path,
+        thread_id=None,
+        tags=["benchmark"],
+        metadata={"benchmark_probe": "metadata_filters"},
+    )
+    stable_key = payload_item_stable_key(payload)
+    cleanup["stable_key"] = stable_key
+    history_event = payload.get("history_event") if isinstance(payload, dict) else None
+    if isinstance(history_event, dict):
+        cleanup["history_event_key"] = str(history_event.get("stable_key") or "")
+    if not stable_key:
+        return None, cleanup
+    cleanup["created"] = True
+    item = fetch_item(graph, stable_key)
+    links = list(item.get("links") or []) if isinstance(item, dict) else []
+    for link in links:
+        if str(link.get("relation") or "") == "captured_in" and str(link.get("entity_kind") or "") == "episode":
+            cleanup["episode_key"] = str(link.get("entity_stable_key") or "")
+        if str(link.get("relation") or "") == "about" and str(link.get("entity_kind") or "") == "repository":
+            cleanup["repository_stable_key"] = str(link.get("entity_stable_key") or repo_path)
+    sample = {
+        "stable_key": stable_key,
+        "kind": str((item or {}).get("kind") or "attempt"),
+        "title": str((item or {}).get("title") or title),
+        "summary": str((item or {}).get("summary") or content),
+        "updated_at": str((item or {}).get("updated_at") or ""),
+        "repository_stable_key": str(cleanup.get("repository_stable_key") or repo_path),
+        "expired_at": "",
+        "sample_source": "temporary_probe",
+    }
+    return sample, cleanup
+
+
+def cleanup_repo_scoped_benchmark_probe(graph, cleanup: dict[str, Any] | None) -> None:
+    if not isinstance(cleanup, dict) or not bool(cleanup.get("created")):
+        return
+    stable_key = str(cleanup.get("stable_key") or "")
+    episode_key = str(cleanup.get("episode_key") or "")
+    history_event_key = str(cleanup.get("history_event_key") or "")
+    repository_stable_key = str(cleanup.get("repository_stable_key") or "")
+    if stable_key and lookup_node_by_stable_key(graph, stable_key) is not None:
+        delete_graph_item_payload(graph, stable_key=stable_key, record_history=False)
+    if episode_key and lookup_node_by_stable_key(graph, episode_key) is not None:
+        delete_graph_item_payload(graph, stable_key=episode_key, record_history=False)
+    if history_event_key and lookup_node_by_stable_key(graph, history_event_key) is not None:
+        delete_graph_item_payload(graph, stable_key=history_event_key, record_history=False)
+    if stable_key:
+        graph.query(
+            """
+            MATCH (event:MemoryNode {kind: $history_kind, target_stable_key: $stable_key})
+            DETACH DELETE event
+            """,
+            params={"history_kind": MEMORY_HISTORY_EVENT_KIND, "stable_key": stable_key},
+        )
+    if repository_stable_key:
+        graph.query(
+            """
+            MATCH (repo:Repository {stable_key: $repository_stable_key})
+            OPTIONAL MATCH (repo)--(item:SemanticItem)
+            WITH repo, count(item) AS semantic_item_count
+            WHERE semantic_item_count = 0
+            DETACH DELETE repo
+            """,
+            params={"repository_stable_key": repository_stable_key},
+        )
+        invalidate_graph_caches(graph)
+
+
 def benchmark_metadata_filters(graph, *, tool, workspace: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     sample = repo_scoped_benchmark_sample(graph)
+    sample_source = "existing"
+    cleanup_probe: dict[str, Any] | None = None
+    sample_error = "No repo-linked semantic memory was available for filter verification."
     if not sample:
-        return benchmark_attribute(
-            "metadata_filters",
-            [
-                {
-                    "name": "repo_scoped_sample_available",
-                    "passed": False,
-                    "error": "No repo-linked semantic memory was available for filter verification.",
-                }
-            ],
+        try:
+            created_sample, cleanup_probe = create_repo_scoped_benchmark_probe(graph, tool=tool, workspace=workspace)
+        except Exception as exc:
+            created_sample = None
+            sample_error = f"No repo-linked semantic memory was available and temporary probe creation failed: {exc}"
+        sample = created_sample
+        sample_source = "temporary_probe"
+    try:
+        if not sample:
+            return benchmark_attribute(
+                "metadata_filters",
+                [
+                    {
+                        "name": "repo_scoped_sample_available",
+                        "passed": False,
+                        "error": sample_error,
+                    }
+                ],
+            )
+        payload, elapsed, error = timed_call(
+            lambda: build_consult_payload(
+                graph,
+                tool=tool,
+                conn=None,
+                workspace=workspace,
+                config=config,
+                query=str(sample.get("title") or ""),
+                limit=5,
+                inspect_limit=1,
+                route="hybrid",
+                scope="repo",
+                repository_root_path=str(sample.get("repository_stable_key") or ""),
+                kinds=[str(sample.get("kind") or "")],
+            )
         )
-    payload, elapsed, error = timed_call(
-        lambda: build_consult_payload(
-            graph,
-            tool=tool,
-            conn=None,
-            workspace=workspace,
-            config=config,
-            query=str(sample.get("title") or ""),
-            limit=5,
-            inspect_limit=1,
-            route="hybrid",
-            scope="repo",
-            repository_root_path=str(sample.get("repository_stable_key") or ""),
-            kinds=[str(sample.get("kind") or "")],
-        )
-    )
-    hits = list(payload.get("hits") or []) if isinstance(payload, dict) else []
-    hit_keys = [str(hit.get("stable_key") or "") for hit in hits]
-    allowed = stable_keys_linked_to_repository(graph, hit_keys, str(sample.get("repository_stable_key") or ""))
-    routing = payload.get("routing") if isinstance(payload, dict) else {}
-    filters = routing.get("filters") if isinstance(routing, dict) else {}
+        hits = list(payload.get("hits") or []) if isinstance(payload, dict) else []
+        hit_keys = [str(hit.get("stable_key") or "") for hit in hits]
+        allowed = stable_keys_linked_to_repository(graph, hit_keys, str(sample.get("repository_stable_key") or ""))
+        routing = payload.get("routing") if isinstance(payload, dict) else {}
+        filters = routing.get("filters") if isinstance(routing, dict) else {}
+    finally:
+        cleanup_repo_scoped_benchmark_probe(graph, cleanup_probe)
     tag_filters = build_consult_filters(graph, tags=["memory-layer", "autopsy"])
     tag_filtered = filter_candidates_by_metadata(
         graph,
@@ -15774,6 +15876,7 @@ def benchmark_metadata_filters(graph, *, tool, workspace: dict[str, Any], config
             "passed": bool(sample.get("stable_key") and sample.get("repository_stable_key")),
             "sample": sample.get("stable_key"),
             "repository": sample.get("repository_stable_key"),
+            "source": sample_source,
         },
         {
             "name": "repo_filter_returns_only_repo_hits",

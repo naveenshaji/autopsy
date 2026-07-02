@@ -9522,6 +9522,73 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertIn("read_time", graph.params)
         self.assertEqual(sample["stable_key"], "graph-note:active")
 
+    def test_metadata_filter_benchmark_creates_temporary_repo_sample_when_missing(self):
+        class Graph:
+            def __init__(self):
+                self.queries: list[str] = []
+
+            def query(self, query, params=None):
+                self.queries.append(query)
+                return types.SimpleNamespace(result_set=[])
+
+        graph = Graph()
+        deleted: list[str] = []
+        captured: dict[str, object] = {}
+
+        def fake_create_graph_note_payload(_graph, **kwargs):
+            captured["repository_root_path"] = kwargs["repository_root_path"]
+            return {"item": {"stable_key": "graph-note:probe"}, "history_event": {"stable_key": "memory-history:probe-add"}}
+
+        def fake_fetch_item(_graph, stable_key):
+            self.assertEqual(stable_key, "graph-note:probe")
+            repo = str(captured["repository_root_path"])
+            return {
+                "stable_key": "graph-note:probe",
+                "kind": "attempt",
+                "title": "Autopsy repo filter benchmark probe",
+                "summary": "Temporary repo-scoped metadata filter benchmark probe.",
+                "links": [
+                    {"relation": "captured_in", "entity_kind": "episode", "entity_stable_key": "episode:probe"},
+                    {"relation": "about", "entity_kind": "repository", "entity_stable_key": repo},
+                ],
+            }
+
+        def fake_build_consult_payload(*_args, **kwargs):
+            repo = kwargs["repository_root_path"]
+            return {
+                "hits": [{"stable_key": "graph-note:probe", "kind": "attempt"}],
+                "routing": {"filters": {"scope": "repo", "repository_stable_key": repo, "kinds": ["attempt"]}},
+            }
+
+        def fake_delete_graph_item_payload(_graph, *, stable_key, record_history=True):
+            deleted.append(stable_key)
+
+        with (
+            mock.patch.object(cli, "repo_scoped_benchmark_sample", return_value=None),
+            mock.patch.object(cli, "create_graph_note_payload", side_effect=fake_create_graph_note_payload),
+            mock.patch.object(cli, "fetch_item", side_effect=fake_fetch_item),
+            mock.patch.object(cli, "build_consult_payload", side_effect=fake_build_consult_payload),
+            mock.patch.object(cli, "stable_keys_linked_to_repository", return_value={"graph-note:probe"}),
+            mock.patch.object(cli, "lookup_node_by_stable_key", return_value={"entity_id": 1}),
+            mock.patch.object(cli, "delete_graph_item_payload", side_effect=fake_delete_graph_item_payload),
+            mock.patch.object(cli, "invalidate_graph_caches"),
+        ):
+            payload = cli.benchmark_metadata_filters(
+                graph,
+                tool=object(),
+                workspace={"root_path": "/tmp/autopsy"},
+                config={},
+            )
+
+        availability = next(check for check in payload["checks"] if check["name"] == "repo_scoped_sample_available")
+        self.assertTrue(availability["passed"])
+        self.assertEqual(availability["source"], "temporary_probe")
+        self.assertIn("autopsy-benchmark-repo-", str(captured["repository_root_path"]))
+        self.assertEqual(deleted, ["graph-note:probe", "episode:probe", "memory-history:probe-add"])
+        self.assertTrue(any("target_stable_key: $stable_key" in query for query in graph.queries))
+        self.assertTrue(any("DETACH DELETE repo" in query for query in graph.queries))
+        self.assertEqual(payload["score"], 10.0)
+
     def test_benchmark_quality_gate_rejects_partial_attributes(self):
         strong = cli.benchmark_attribute("strong", [{"name": "ok", "passed": True}])
         partial = cli.benchmark_attribute(
