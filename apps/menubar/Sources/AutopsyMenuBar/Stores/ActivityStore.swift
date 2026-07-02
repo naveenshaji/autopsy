@@ -2916,11 +2916,17 @@ final class ActivityStore: ObservableObject {
         if let mode = auditString(metadata["mode"]) {
             parts.append("mode \(mode)")
         }
+        if let relationScope = auditString(metadata["relation_scope"]), !relationScope.isEmpty {
+            parts.append("scope \(relationScope)")
+        }
         if let relation = auditString(metadata["relation"]), !relation.isEmpty {
             parts.append("relation \(relation)")
         }
         if let factRating = auditDecimal(metadata["fact_rating"]) {
             parts.append("rating \(factRating)")
+        }
+        if let dryRun = auditBool(metadata["dry_run"]) {
+            parts.append("dry run \(dryRun ? "yes" : "no")")
         }
         if let allowed = auditBool(metadata["allowed"]) {
             parts.append("allowed \(allowed ? "yes" : "no")")
@@ -2951,6 +2957,9 @@ final class ActivityStore: ObservableObject {
         }
         if let policyFingerprint = auditString(metadata["policy_fingerprint"]) {
             parts.append("fingerprint \(shortAuditHash(policyFingerprint))")
+        }
+        if let policyVersion = auditString(metadata["policy_version_ns"]) {
+            parts.append("policy version \(policyVersion)")
         }
         if let status = auditString(metadata["status"]) {
             parts.append("status \(status)")
