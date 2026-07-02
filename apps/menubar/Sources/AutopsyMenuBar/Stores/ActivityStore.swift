@@ -293,6 +293,15 @@ final class ActivityStore: ObservableObject {
                     .sorted { $0.key < $1.key }
                     .map { "\($0.key): \($0.value)" })
             }
+            if let activeOwners = team.activeOwnerGrantsCount {
+                parts.append("active owners: \(activeOwners)")
+            }
+            if team.lastOwnerGrantRisk == true {
+                parts.append("last owner")
+            }
+            if let disabledOwners = team.disabledOwnerGrantsCount, disabledOwners > 0 {
+                parts.append("disabled owners: \(disabledOwners)")
+            }
             if let disabled = team.disabledGrantsCount, disabled > 0 {
                 parts.append("disabled: \(disabled)")
             }

@@ -71,6 +71,9 @@ struct SharedServerTeamPayload: Decodable {
     var disabledUsersCount: Int?
     var grantsCount: Int?
     var disabledGrantsCount: Int?
+    var activeOwnerGrantsCount: Int?
+    var disabledOwnerGrantsCount: Int?
+    var lastOwnerGrantRisk: Bool?
     var tokensCount: Int?
     var activeTokensCount: Int?
     var expiredTokensCount: Int?
@@ -95,6 +98,9 @@ struct SharedServerTeamPayload: Decodable {
         case disabledUsersCount = "disabled_users_count"
         case grantsCount = "grants_count"
         case disabledGrantsCount = "disabled_grants_count"
+        case activeOwnerGrantsCount = "active_owner_grants_count"
+        case disabledOwnerGrantsCount = "disabled_owner_grants_count"
+        case lastOwnerGrantRisk = "last_owner_grant_risk"
         case tokensCount = "tokens_count"
         case activeTokensCount = "active_tokens_count"
         case expiredTokensCount = "expired_tokens_count"

@@ -4703,17 +4703,27 @@ def summarize_shared_server_grants(items: list[dict[str, Any]]) -> dict[str, Any
     role_counts: dict[str, int] = {}
     repos: set[str] = set()
     disabled_count = 0
+    active_owner_count = 0
+    disabled_owner_count = 0
     for item in items:
         role = str(item.get("role") or "unknown")
+        disabled = bool(item.get("disabled"))
         role_counts[role] = role_counts.get(role, 0) + 1
-        if bool(item.get("disabled")):
+        if disabled:
             disabled_count += 1
+        if role == "owner" and disabled:
+            disabled_owner_count += 1
+        if role == "owner" and not disabled:
+            active_owner_count += 1
         repo = str(item.get("repo") or "")
         if repo:
             repos.add(repo)
     return {
         "grants_count": len(items),
         "disabled_grants_count": disabled_count,
+        "active_owner_grants_count": active_owner_count,
+        "disabled_owner_grants_count": disabled_owner_count,
+        "last_owner_grant_risk": active_owner_count == 1,
         "role_counts": role_counts,
         "repos": sorted(repos)[:20],
     }
