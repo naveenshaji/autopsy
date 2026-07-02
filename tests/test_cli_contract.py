@@ -2252,37 +2252,25 @@ class AutopsyCLIContractTests(unittest.TestCase):
                     },
                     "items": [{"id": "audit_1"}],
                 }
-            if path == "/v1/audit-events?graph_slug=autopsy&limit=50&repo=repo-a&action=relation_policy_version_conflict":
+            if path == (
+                "/v1/audit-events/summary?graph_slug=autopsy&limit=50&repo=repo-a"
+                "&action=relation_policy_version_conflict"
+                "&metadata_field=relation_scope&metadata_field=current_reason"
+            ):
                 return {
-                    "items": [
-                        {
-                            "id": "audit_conflict_1",
-                            "created_at": "2026-07-02T08:00:00Z",
-                            "metadata": {
-                                "relation_scope": "shared",
-                                "current_reason": "relation_label_not_allowed",
-                                "target_key": "secret-shared-target",
-                                "expected_policy_fingerprint": "sha256:secret-old",
-                            },
-                        },
-                        {
-                            "id": "audit_conflict_2",
-                            "created_at": "2026-07-02T09:00:00Z",
-                            "metadata": {
-                                "relation_scope": "personal",
-                                "current_reason": "fact_rating_too_low",
-                                "personal_key_present": True,
-                            },
-                        },
-                        {
-                            "id": "audit_conflict_3",
-                            "created_at": "2026-07-02T08:30:00Z",
-                            "metadata": {
-                                "relation_scope": "shared",
-                                "current_reason": "relation_label_not_allowed",
-                            },
-                        },
-                    ]
+                    "event_count": 3,
+                    "metadata_counts": {
+                        "relation_scope": {"personal": 1, "shared": 2},
+                        "current_reason": {"fact_rating_too_low": 1, "relation_label_not_allowed": 2},
+                    },
+                    "latest_created_at": "2026-07-02T09:00:00Z",
+                    "scope": {
+                        "graph_slug": "autopsy",
+                        "repo": "repo-a",
+                        "actions": ["relation_policy_version_conflict"],
+                        "metadata_fields": ["relation_scope", "current_reason"],
+                        "filtered_window": True,
+                    },
                 }
             raise AssertionError(path)
 
@@ -2327,6 +2315,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["team"]["audit_integrity"]["integrity_counts"]["verified"], 4)
         self.assertEqual(payload["team"]["audit_integrity"]["chain"]["external_gap_count"], 1)
         self.assertTrue(payload["team"]["can_read_relation_policy_conflicts"])
+        self.assertEqual(payload["team"]["relation_policy_conflicts_source"], "summary")
         self.assertEqual(payload["team"]["relation_policy_conflict_count"], 3)
         self.assertEqual(payload["team"]["relation_policy_conflict_scope_counts"], {"personal": 1, "shared": 2})
         self.assertEqual(
