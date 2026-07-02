@@ -161,9 +161,11 @@ one-time token in one audited operation. Successful shared mutation responses
 can include a redacted `audit` receipt with the audit event id and integrity
 hash so operators can correlate UI actions with the server audit chain. Add
 `--expires-at <ISO-8601>` to `invite` or `create-token` to issue a token that
-the server rejects after that UTC timestamp. Token labels are trimmed, default
-to `invite` or `default` by action, must be at most 80 characters, and cannot
-contain control characters. Global admins can also use
+the server rejects after that UTC timestamp. Current servers default omitted
+invitation token expirations to 7 days; direct `create-token` credentials remain
+non-expiring unless `--expires-at` is supplied. Token labels are trimmed,
+default to `invite` or `default` by action, must be at most 80 characters, and
+cannot contain control characters. Global admins can also use
 `shared-server users`, `create-user --email <email>`, `tokens --user-id <id>`,
 `disable-user <user-id>`, `enable-user <user-id>`,
 `create-token --user-id <id> --label <label>`, `grants --repo-scope <repo>`,
