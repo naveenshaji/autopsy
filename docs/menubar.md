@@ -78,13 +78,14 @@ Run checks:
 - Homebrew update check/update action.
 - Shared memory Settings controls for server health, graph-owner invites,
   repo grants, invite-token hygiene counts, expiring invite/token issuance,
-  invite-token inventory copy, token cleanup, audit copy, shared memory archive/restore, and
+  invite-token inventory copy, token cleanup, raw audit copy, context-audit summary copy, shared memory archive/restore, and
   shared memory history copy/version restore, shared context copy with optional
   relation evidence threshold, shared
   relation create/list/unlink with evidence rating, and private
   personal-to-shared link create/list/unlink with link evidence rating and linked-context evidence
-  threshold. Audit copies
-  include privacy-preserving context-read events with hashed queries and counts
-  when the server records them.
+  threshold. Raw audit copies include privacy-preserving context-read events
+  with hashed queries and counts when the server records them. Context-audit
+  summaries copy only read counts and relation provenance counters, not raw
+  query text or personal stable keys.
 - Attention items when available.
 - Quit action.

@@ -714,6 +714,12 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    func copySharedServerContextAudit(repoScope: String) {
+        Task {
+            await copySharedContextAudit(repoScope: repoScope)
+        }
+    }
+
     func copyInstructions() {
         Task {
             await copyInstructionsToPasteboard()
@@ -1582,6 +1588,35 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    private func copySharedContextAudit(repoScope: String) async {
+        guard !isManagingSharedAccess else { return }
+        isManagingSharedAccess = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingSharedAccess = false
+        }
+
+        do {
+            let scope = normalizedRepoScope(repoScope)
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run([
+                "shared-server",
+                "audit",
+                "--repo-scope",
+                scope,
+                "--limit",
+                "50",
+            ])
+            let summary = sharedContextAuditReport(from: output, repoScope: scope)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(summary, forType: .string)
+            lastActionMessage = "Context audit copied"
+            clearLastActionMessageAfterDelay(expected: "Context audit copied")
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
+    }
+
     private func runSharedAccessCommand(
         _ arguments: [String],
         successMessage: String,
@@ -1610,6 +1645,156 @@ final class ActivityStore: ObservableObject {
     private func normalizedRepoScope(_ value: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? sharedServerDefaultRepoScope : trimmed
+    }
+
+    private func sharedContextAuditReport(from output: String, repoScope: String) -> String {
+        guard let payload = jsonObject(from: output),
+              let rawItems = payload["items"] as? [Any]
+        else {
+            return output.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let items = rawItems.compactMap { $0 as? [String: Any] }
+        let contextReads = items.filter { item in
+            guard let action = auditString(item["action"]) else { return false }
+            return action == "read_shared_context" || action == "read_personal_context"
+        }
+
+        var lines = [
+            "Autopsy Shared Context Audit",
+            "Repo: \(repoScope)",
+            "Audit window: \(items.count) latest events",
+            "Context reads: \(contextReads.count)",
+        ]
+
+        guard !contextReads.isEmpty else {
+            lines.append("")
+            lines.append("No shared context read events were found in the latest audit window.")
+            return lines.joined(separator: "\n")
+        }
+
+        lines.append("")
+        for item in contextReads.prefix(12) {
+            lines.append(formatSharedContextAuditItem(item))
+        }
+        if contextReads.count > 12 {
+            lines.append("- \(contextReads.count - 12) more context reads omitted")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func formatSharedContextAuditItem(_ item: [String: Any]) -> String {
+        let action = auditString(item["action"]) ?? "read_context"
+        let createdAt = auditString(item["created_at"]) ?? "unknown time"
+        let repo = auditString(item["repo"]) ?? "unknown repo"
+        let metadata = item["metadata"] as? [String: Any] ?? [:]
+        let label = action == "read_personal_context" ? "linked context" : "shared context"
+
+        var parts = [
+            "items \(auditInt(metadata["item_count"]) ?? 0)",
+            "relations \(auditInt(metadata["relation_count"]) ?? 0)",
+        ]
+
+        if action == "read_shared_context" {
+            parts.insert("related \(auditInt(metadata["related_item_count"]) ?? 0)", at: 1)
+            let adjacent = auditInt(metadata["adjacent_relation_count"]) ?? 0
+            let adjacentCandidates = auditInt(metadata["adjacent_relation_candidate_count"]) ?? adjacent
+            let search = auditInt(metadata["relation_search_count"]) ?? 0
+            let searchCandidates = auditInt(metadata["relation_search_candidate_count"]) ?? search
+            let deduped = auditInt(metadata["relation_deduped_candidate_count"]) ?? adjacentCandidates + searchCandidates
+            let overlap = auditInt(metadata["relation_source_overlap_count"]) ?? 0
+            parts.append("adjacent \(adjacent)/\(adjacentCandidates)")
+            parts.append("search \(search)/\(searchCandidates)")
+            parts.append("deduped \(deduped)")
+            parts.append("overlap \(overlap)")
+            if auditBool(metadata["query_present"]) == true {
+                parts.append("query len \(auditInt(metadata["query_length"]) ?? 0)")
+            }
+        } else {
+            parts.append("personal keys \(auditInt(metadata["personal_key_count"]) ?? 0)")
+        }
+
+        if let minFactRating = auditDecimal(metadata["min_fact_rating"]) {
+            parts.append("min rating \(minFactRating)")
+        }
+        parts.append("guard \(auditInt(metadata["read_guard_blocked_count"]) ?? 0)")
+
+        return "- \(createdAt) \(label) \(repo): \(parts.joined(separator: ", "))"
+    }
+
+    private func auditString(_ value: Any?) -> String? {
+        if value is NSNull {
+            return nil
+        }
+        if let string = value as? String {
+            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        if let number = value as? NSNumber {
+            return number.stringValue
+        }
+        return nil
+    }
+
+    private func auditInt(_ value: Any?) -> Int? {
+        if value is NSNull {
+            return nil
+        }
+        if let integer = value as? Int {
+            return integer
+        }
+        if let number = value as? NSNumber {
+            return number.intValue
+        }
+        if let string = value as? String {
+            return Int(string.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return nil
+    }
+
+    private func auditBool(_ value: Any?) -> Bool? {
+        if value is NSNull {
+            return nil
+        }
+        if let bool = value as? Bool {
+            return bool
+        }
+        if let number = value as? NSNumber {
+            return number.boolValue
+        }
+        if let string = value as? String {
+            switch string.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "true", "1", "yes":
+                return true
+            case "false", "0", "no":
+                return false
+            default:
+                return nil
+            }
+        }
+        return nil
+    }
+
+    private func auditDecimal(_ value: Any?) -> String? {
+        if value is NSNull {
+            return nil
+        }
+        let doubleValue: Double?
+        if let double = value as? Double {
+            doubleValue = double
+        } else if let integer = value as? Int {
+            doubleValue = Double(integer)
+        } else if let number = value as? NSNumber {
+            doubleValue = number.doubleValue
+        } else if let string = value as? String {
+            doubleValue = Double(string.trimmingCharacters(in: .whitespacesAndNewlines))
+        } else {
+            doubleValue = nil
+        }
+        guard let doubleValue, doubleValue.isFinite else {
+            return nil
+        }
+        return String(format: "%.2f", doubleValue)
     }
 
     private func jsonObject(from output: String) -> [String: Any]? {

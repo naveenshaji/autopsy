@@ -525,10 +525,17 @@ private struct SharedSettingsTab: View {
 
                 TextField("Audit Repo Scope", text: $auditRepoScope)
                     .textFieldStyle(.roundedBorder)
-                Button("Copy Audit") {
-                    store.copySharedServerAudit(repoScope: auditRepoScope)
+                HStack {
+                    Button("Copy Audit") {
+                        store.copySharedServerAudit(repoScope: auditRepoScope)
+                    }
+                    .disabled(sharedActionDisabled)
+
+                    Button("Copy Context Audit") {
+                        store.copySharedServerContextAudit(repoScope: auditRepoScope)
+                    }
+                    .disabled(sharedActionDisabled)
                 }
-                .disabled(sharedActionDisabled)
             }
 
             if let message = store.lastActionMessage, !message.isEmpty {
