@@ -403,6 +403,7 @@ def build_parser(
             "storage-status",
             "admin-tokens",
             "bulk-revoke-tokens",
+            "bulk-revoke-scoped-tokens",
             "users",
             "create-user",
             "disable-user",
@@ -471,7 +472,7 @@ def build_parser(
     shared_server_parser.add_argument("--shared-key", help="Shared stable-key filter for shared-server personal-links, or shared key for link.")
     shared_server_parser.add_argument("--source-key", help="Source stable-key filter for shared-server shared-relations, or source key for relate.")
     shared_server_parser.add_argument("--target-shared-key", help="Target stable-key filter for shared-server shared-relations, or target key for relate.")
-    shared_server_parser.add_argument("--reason", default="", help="Reason for shared-server archive, restore, or bulk-revoke-tokens lifecycle actions.")
+    shared_server_parser.add_argument("--reason", default="", help="Reason for shared-server archive, restore, or token bulk-revoke lifecycle actions.")
     shared_server_parser.add_argument("--version-id", help="Shared memory version id for shared-server restore-version.")
     shared_server_parser.add_argument("--version-ns", type=int, help="Shared memory version_ns for shared-server restore-version.")
     shared_server_parser.add_argument("--allowed-relation-label", action="append", help="With shared-server update-policy, allowed relation labels. Repeat or comma-separate values.")
@@ -492,11 +493,11 @@ def build_parser(
     shared_server_parser.add_argument("--global-audit", action="store_true", help="With shared-server audit or audit-integrity, read the global audit stream instead of one shared graph/repo window.")
     shared_server_parser.add_argument("--expected-version-ns", type=int, help="With shared-server publish or restore-version, reject the write unless the current shared memory version_ns matches this value.")
     shared_server_parser.add_argument("--include-archived", action="store_true", help="With shared-server list, context, or personal-context, include archived shared memories.")
-    shared_server_parser.add_argument("--include-revoked", action="store_true", help="With shared-server admin-tokens or bulk-revoke-tokens, include revoked token rows.")
-    shared_server_parser.add_argument("--token-status", choices=("all", "active", "revoked", "expired"), default="all", help="With shared-server admin-tokens or bulk-revoke-tokens, filter by token lifecycle status.")
-    shared_server_parser.add_argument("--token-hygiene", choices=("all", "no_expiration", "never_used", "stale", "disabled_user"), default="all", help="With shared-server admin-tokens or bulk-revoke-tokens, filter by token hygiene risk.")
+    shared_server_parser.add_argument("--include-revoked", action="store_true", help="With shared-server token inventory or bulk-revoke actions, include revoked token rows.")
+    shared_server_parser.add_argument("--token-status", choices=("all", "active", "revoked", "expired"), default="all", help="With shared-server token inventory or bulk-revoke actions, filter by token lifecycle status.")
+    shared_server_parser.add_argument("--token-hygiene", choices=("all", "no_expiration", "never_used", "stale", "disabled_user"), default="all", help="With shared-server token inventory or bulk-revoke actions, filter by token hygiene risk.")
     shared_server_parser.add_argument("--token-scope", choices=("all", "global", "scoped"), default="all", help="With shared-server admin-tokens or bulk-revoke-tokens, filter by token issue scope.")
-    shared_server_parser.add_argument("--confirm-token-revoke", action="store_true", help="With shared-server bulk-revoke-tokens, execute the filtered revoke instead of the default dry run.")
+    shared_server_parser.add_argument("--confirm-token-revoke", action="store_true", help="With shared-server token bulk-revoke actions, execute the filtered revoke instead of the default dry run.")
     shared_server_parser.add_argument("--no-relations", action="store_true", help="With shared-server context or personal-context, omit adjacent shared graph relations.")
     shared_server_parser.add_argument("--min-fact-rating", type=float, help="With shared-server context or personal-context, omit adjacent shared relations below this 0.0-1.0 evidence rating.")
     shared_server_parser.add_argument(

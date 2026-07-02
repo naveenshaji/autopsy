@@ -244,6 +244,21 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "--reason",
             "rotation",
         ])
+        bulk_revoke_scoped_tokens_args = parser.parse_args([
+            "shared-server",
+            "bulk-revoke-scoped-tokens",
+            "--repo-scope",
+            "repo-a",
+            "--limit",
+            "25",
+            "--token-status",
+            "active",
+            "--token-hygiene",
+            "never_used",
+            "--confirm-token-revoke",
+            "--reason",
+            "rotation",
+        ])
         handoff_args = parser.parse_args([
             "shared-server",
             "handoff-owner",
@@ -492,6 +507,13 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(bulk_revoke_tokens_args.token_scope, "global")
         self.assertTrue(bulk_revoke_tokens_args.confirm_token_revoke)
         self.assertEqual(bulk_revoke_tokens_args.reason, "rotation")
+        self.assertEqual(bulk_revoke_scoped_tokens_args.shared_server_action, "bulk-revoke-scoped-tokens")
+        self.assertEqual(bulk_revoke_scoped_tokens_args.repo_scope, "repo-a")
+        self.assertEqual(bulk_revoke_scoped_tokens_args.limit, 25)
+        self.assertEqual(bulk_revoke_scoped_tokens_args.token_status, "active")
+        self.assertEqual(bulk_revoke_scoped_tokens_args.token_hygiene, "never_used")
+        self.assertTrue(bulk_revoke_scoped_tokens_args.confirm_token_revoke)
+        self.assertEqual(bulk_revoke_scoped_tokens_args.reason, "rotation")
         self.assertEqual(handoff_args.shared_server_action, "handoff-owner")
         self.assertEqual(handoff_args.from_user_id, "usr_owner")
         self.assertEqual(handoff_args.to_user_id, "usr_peer")
@@ -651,6 +673,18 @@ class AutopsyCLIContractTests(unittest.TestCase):
 
     def test_shared_server_scoped_tokens_path_is_graph_scoped(self):
         self.assertEqual(cli.shared_server_scoped_tokens_path("autopsy", "repo/a"), "/v1/shared-graphs/autopsy/tokens?repo=repo%2Fa")
+        self.assertEqual(
+            cli.shared_server_scoped_tokens_path(
+                "autopsy",
+                "repo/a",
+                limit=25,
+                include_revoked=True,
+                status_filter="active",
+                hygiene_filter="never_used",
+            ),
+            "/v1/shared-graphs/autopsy/tokens?repo=repo%2Fa&limit=25&include_revoked=true&status=active&hygiene=never_used",
+        )
+        self.assertEqual(cli.shared_server_scoped_token_bulk_revoke_path("autopsy"), "/v1/shared-graphs/autopsy/tokens/revoke")
 
     def test_shared_server_admin_tokens_path_is_admin_scoped(self):
         self.assertEqual(cli.shared_server_admin_tokens_path(limit=25), "/v1/admin/tokens?limit=25")
@@ -1188,7 +1222,19 @@ class AutopsyCLIContractTests(unittest.TestCase):
 
     def test_shared_server_scoped_tokens_fetches_repo_tokens(self):
         parser = cli.build_parser()
-        args = parser.parse_args(["shared-server", "scoped-tokens", "--repo-scope", "repo-a"])
+        args = parser.parse_args([
+            "shared-server",
+            "scoped-tokens",
+            "--repo-scope",
+            "repo-a",
+            "--limit",
+            "25",
+            "--include-revoked",
+            "--token-status",
+            "active",
+            "--token-hygiene",
+            "never_used",
+        ])
         config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
         calls: list[tuple[str, str, dict[str, str] | None]] = []
 
@@ -1209,12 +1255,29 @@ class AutopsyCLIContractTests(unittest.TestCase):
             calls,
             [
                 (
-                    "/v1/shared-graphs/autopsy/tokens?repo=repo-a",
+                    "/v1/shared-graphs/autopsy/tokens?repo=repo-a&limit=25&include_revoked=true&status=active&hygiene=never_used",
                     "GET",
                     None,
                 )
             ],
         )
+
+    def test_shared_server_scoped_tokens_rejects_token_scope_filter_before_request(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["shared-server", "scoped-tokens", "--repo-scope", "repo-a", "--token-scope", "scoped"])
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value={"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}),
+            mock.patch.object(cli, "shared_server_request") as request,
+            contextlib.redirect_stderr(stream),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            args.func(args)
+
+        self.assertEqual(raised.exception.code, 2)
+        request.assert_not_called()
+        self.assertIn("scoped-tokens does not use --token-scope", stream.getvalue())
 
     def test_shared_server_handoff_owner_posts_transfer_payload(self):
         parser = cli.build_parser()
@@ -2237,6 +2300,123 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, 2)
         request.assert_not_called()
         self.assertIn("bulk-revoke-tokens requires at least one", stream.getvalue())
+
+    def test_shared_server_bulk_revoke_scoped_tokens_action_posts_filtered_dry_run_payload(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "shared-server",
+            "bulk-revoke-scoped-tokens",
+            "--repo-scope",
+            "repo-a",
+            "--limit",
+            "25",
+            "--token-status",
+            "active",
+            "--token-hygiene",
+            "never_used",
+            "--reason",
+            "rotation",
+        ])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+
+        def fake_request(_config, path, **kwargs):
+            self.assertEqual(path, "/v1/shared-graphs/autopsy/tokens/revoke")
+            self.assertEqual(kwargs["method"], "POST")
+            self.assertEqual(kwargs["timeout"], 20)
+            self.assertEqual(
+                kwargs["payload"],
+                {
+                    "repo": "repo-a",
+                    "include_revoked": False,
+                    "limit": 25,
+                    "status": "active",
+                    "hygiene": "never_used",
+                    "dry_run": True,
+                    "confirm": False,
+                    "reason": "rotation",
+                },
+            )
+            return {
+                "dry_run": True,
+                "matched_count": 1,
+                "candidate_count": 1,
+                "would_revoke_count": 1,
+                "revoked_count": 0,
+                "items": [{"id": "tok_1", "label": "invite"}],
+            }
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        payload = json.loads(stream.getvalue())
+        self.assertTrue(payload["dry_run"])
+        self.assertEqual(payload["items"][0]["id"], "tok_1")
+
+    def test_shared_server_bulk_revoke_scoped_tokens_action_posts_confirmed_payload(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "shared-server",
+            "bulk-revoke-scoped-tokens",
+            "--repo-scope",
+            "repo-a",
+            "--include-revoked",
+            "--limit",
+            "5000",
+            "--token-status",
+            "revoked",
+            "--confirm-token-revoke",
+        ])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+
+        def fake_request(_config, path, **kwargs):
+            self.assertEqual(path, "/v1/shared-graphs/autopsy/tokens/revoke")
+            self.assertEqual(kwargs["method"], "POST")
+            self.assertEqual(
+                kwargs["payload"],
+                {
+                    "repo": "repo-a",
+                    "include_revoked": True,
+                    "limit": 1000,
+                    "status": "revoked",
+                    "hygiene": "all",
+                    "dry_run": False,
+                    "confirm": True,
+                    "reason": "",
+                },
+            )
+            return {"dry_run": False, "revoked_count": 0, "items": []}
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        self.assertFalse(json.loads(stream.getvalue())["dry_run"])
+
+    def test_shared_server_bulk_revoke_scoped_tokens_requires_filter_before_request(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["shared-server", "bulk-revoke-scoped-tokens", "--repo-scope", "repo-a"])
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value={"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}),
+            mock.patch.object(cli, "shared_server_request") as request,
+            contextlib.redirect_stderr(stream),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            args.func(args)
+
+        self.assertEqual(raised.exception.code, 2)
+        request.assert_not_called()
+        self.assertIn("bulk-revoke-scoped-tokens requires at least one", stream.getvalue())
 
     def test_shared_server_verify_receipt_checks_expected_fields(self):
         parser = cli.build_parser()

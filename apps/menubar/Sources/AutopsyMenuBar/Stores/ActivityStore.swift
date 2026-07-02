@@ -48,6 +48,8 @@ final class ActivityStore: ObservableObject {
     private static let sharedSecurityAuditActions = [
         "auth_failure",
         "authorization_denied",
+        "bulk_revoke_admin_tokens",
+        "bulk_revoke_scoped_tokens",
         "disable_user",
         "enable_user",
         "grant_access",
@@ -59,6 +61,8 @@ final class ActivityStore: ObservableObject {
         "update_repo_policy",
     ]
     private static let sharedAccessChangeAuditActions = [
+        "bulk_revoke_admin_tokens",
+        "bulk_revoke_scoped_tokens",
         "grant_access",
         "handoff_owner",
         "invite_user",
@@ -1088,9 +1092,9 @@ final class ActivityStore: ObservableObject {
         }
     }
 
-    func copySharedServerScopedTokens(repoScope: String) {
+    func copySharedServerScopedTokens(repoScope: String, statusFilter: String = "all", hygieneFilter: String = "all") {
         Task {
-            await copySharedScopedTokens(repoScope: repoScope)
+            await copySharedScopedTokens(repoScope: repoScope, statusFilter: statusFilter, hygieneFilter: hygieneFilter)
         }
     }
 
@@ -1109,6 +1113,18 @@ final class ActivityStore: ObservableObject {
     func revokeSharedServerMatchingTokens(statusFilter: String, hygieneFilter: String, scopeFilter: String) {
         Task {
             await bulkRevokeSharedAdminTokens(statusFilter: statusFilter, hygieneFilter: hygieneFilter, scopeFilter: scopeFilter, confirmed: true)
+        }
+    }
+
+    func copySharedServerScopedTokenRevokePreview(repoScope: String, statusFilter: String, hygieneFilter: String) {
+        Task {
+            await bulkRevokeSharedScopedTokens(repoScope: repoScope, statusFilter: statusFilter, hygieneFilter: hygieneFilter, confirmed: false)
+        }
+    }
+
+    func revokeSharedServerMatchingScopedTokens(repoScope: String, statusFilter: String, hygieneFilter: String) {
+        Task {
+            await bulkRevokeSharedScopedTokens(repoScope: repoScope, statusFilter: statusFilter, hygieneFilter: hygieneFilter, confirmed: true)
         }
     }
 
@@ -2398,7 +2414,7 @@ final class ActivityStore: ObservableObject {
         )
     }
 
-    private func copySharedScopedTokens(repoScope: String) async {
+    private func copySharedScopedTokens(repoScope: String, statusFilter: String, hygieneFilter: String) async {
         guard !isManagingSharedAccess else { return }
         isManagingSharedAccess = true
         sharedServerError = nil
@@ -2408,14 +2424,26 @@ final class ActivityStore: ObservableObject {
         }
 
         do {
-            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run([
+            let normalizedStatus = normalizedTokenStatusFilter(statusFilter)
+            let normalizedHygiene = normalizedTokenHygieneFilter(hygieneFilter)
+            var arguments = [
                 "shared-server",
                 "scoped-tokens",
                 "--repo-scope",
                 normalizedRepoScope(repoScope),
-            ])
+                "--limit",
+                "200",
+                "--token-status",
+                normalizedStatus,
+                "--token-hygiene",
+                normalizedHygiene,
+            ]
+            if normalizedStatus == "all" || normalizedStatus == "revoked" {
+                arguments.append("--include-revoked")
+            }
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run(arguments)
             NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(output.trimmingCharacters(in: .whitespacesAndNewlines), forType: .string)
+            NSPasteboard.general.setString(sharedScopedTokenInventoryReport(from: output, repoScope: normalizedRepoScope(repoScope)), forType: .string)
             lastActionMessage = "Invite tokens copied"
             clearLastActionMessageAfterDelay(expected: "Invite tokens copied")
         } catch {
@@ -2503,6 +2531,54 @@ final class ActivityStore: ObservableObject {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(sharedAdminTokenBulkRevokeReport(from: output), forType: .string)
             let message = confirmed ? "Matching tokens revoked" : "Token revoke preview copied"
+            lastActionMessage = message
+            clearLastActionMessageAfterDelay(expected: message)
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
+    }
+
+    private func bulkRevokeSharedScopedTokens(repoScope: String, statusFilter: String, hygieneFilter: String, confirmed: Bool) async {
+        guard !isManagingSharedAccess else { return }
+        isManagingSharedAccess = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingSharedAccess = false
+        }
+
+        let normalizedStatus = normalizedTokenStatusFilter(statusFilter)
+        let normalizedHygiene = normalizedTokenHygieneFilter(hygieneFilter)
+        if normalizedStatus == "all" && normalizedHygiene == "all" {
+            sharedServerError = "Choose at least one scoped token filter before bulk revoke."
+            return
+        }
+
+        do {
+            var arguments = [
+                "shared-server",
+                "bulk-revoke-scoped-tokens",
+                "--repo-scope",
+                normalizedRepoScope(repoScope),
+                "--limit",
+                "200",
+                "--token-status",
+                normalizedStatus,
+                "--token-hygiene",
+                normalizedHygiene,
+                "--reason",
+                confirmed ? "menubar scoped token bulk revoke" : "menubar scoped token revoke preview",
+            ]
+            if normalizedStatus == "all" || normalizedStatus == "revoked" {
+                arguments.append("--include-revoked")
+            }
+            if confirmed {
+                arguments.append("--confirm-token-revoke")
+            }
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 25).run(arguments)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(sharedScopedTokenBulkRevokeReport(from: output), forType: .string)
+            let message = confirmed ? "Scoped tokens revoked" : "Scoped revoke preview copied"
             lastActionMessage = message
             clearLastActionMessageAfterDelay(expected: message)
         } catch {
@@ -2991,6 +3067,49 @@ final class ActivityStore: ObservableObject {
         return lines.joined(separator: "\n")
     }
 
+    private func sharedScopedTokenInventoryReport(from output: String, repoScope: String) -> String {
+        guard let payload = jsonObject(from: output),
+              let rawItems = payload["items"] as? [Any]
+        else {
+            return output.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let items = rawItems.compactMap { $0 as? [String: Any] }
+        let filters = payload["filters"] as? [String: Any] ?? [:]
+        let revokedCount = items.filter { auditBool($0["revoked"]) == true }.count
+        let expiredCount = items.filter { auditBool($0["expired"]) == true }.count
+        let activeCount = items.filter {
+            auditBool($0["revoked"]) != true && auditBool($0["expired"]) != true
+        }.count
+        let noExpirationCount = items.filter {
+            auditBool($0["revoked"]) != true && auditString($0["expires_at"]) == nil
+        }.count
+        let neverUsedCount = items.filter {
+            auditBool($0["revoked"]) != true && auditString($0["last_used_at"]) == nil
+        }.count
+        var lines = [
+            "Shared Scoped Token Inventory",
+            "Repo: \(repoScope)",
+            "Tokens: \(items.count) (active \(activeCount), revoked \(revokedCount), expired \(expiredCount))",
+            "Hygiene: no expiration \(noExpirationCount), never used \(neverUsedCount)",
+        ]
+        if let filterLine = sharedAdminTokenFilterLine(filters) {
+            lines.append(filterLine)
+        }
+        lines.append("")
+        if items.isEmpty {
+            lines.append("No scoped token rows were returned.")
+            return lines.joined(separator: "\n")
+        }
+        for item in items.prefix(100) {
+            lines.append(sharedAdminTokenReportLine(item))
+        }
+        if items.count > 100 {
+            lines.append("- \(items.count - 100) more scoped token rows omitted")
+        }
+        return lines.joined(separator: "\n")
+    }
+
     private func sharedAdminTokenBulkRevokeReport(from output: String) -> String {
         guard let payload = jsonObject(from: output),
               let rawItems = payload["items"] as? [Any]
@@ -3027,16 +3146,56 @@ final class ActivityStore: ObservableObject {
         return lines.joined(separator: "\n")
     }
 
+    private func sharedScopedTokenBulkRevokeReport(from output: String) -> String {
+        guard let payload = jsonObject(from: output),
+              let rawItems = payload["items"] as? [Any]
+        else {
+            return output.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let items = rawItems.compactMap { $0 as? [String: Any] }
+        let filters = payload["filters"] as? [String: Any] ?? [:]
+        let dryRun = auditBool(payload["dry_run"]) == true
+        var lines = [
+            dryRun ? "Shared Scoped Token Revoke Preview" : "Shared Scoped Token Bulk Revoke",
+            "Matched: \(auditString(payload["matched_count"]) ?? "0"), candidates \(auditString(payload["candidate_count"]) ?? "0"), would revoke \(auditString(payload["would_revoke_count"]) ?? "0")",
+            "Revoked: \(auditString(payload["revoked_count"]) ?? "0"), already revoked \(auditString(payload["already_revoked_count"]) ?? "0"), skipped actor \(auditString(payload["skipped_actor_token_count"]) ?? "0")",
+        ]
+        if let filterLine = sharedAdminTokenFilterLine(filters) {
+            lines.append(filterLine)
+        }
+        lines.append("")
+        if items.isEmpty {
+            lines.append(dryRun ? "No scoped token rows would be revoked." : "No scoped token rows were revoked.")
+            return lines.joined(separator: "\n")
+        }
+        for item in items.prefix(100) {
+            var line = sharedAdminTokenReportLine(item)
+            if auditBool(item["already_revoked"]) == true {
+                line.append(", already revoked")
+            }
+            lines.append(line)
+        }
+        if items.count > 100 {
+            lines.append("- \(items.count - 100) more scoped token rows omitted")
+        }
+        return lines.joined(separator: "\n")
+    }
+
     private func sharedAdminTokenFilterLine(_ filters: [String: Any]) -> String? {
         if filters.isEmpty {
             return nil
         }
         let status = auditString(filters["status"]) ?? "all"
         let hygiene = auditString(filters["hygiene"]) ?? "all"
-        let scope = auditString(filters["scope"]) ?? "all"
+        let scope = auditString(filters["scope"])
         let includeRevoked = auditBool(filters["include_revoked"]) == true ? "yes" : "no"
         let limit = auditString(filters["limit"]) ?? ""
-        var filterLine = "Filters: status \(status), hygiene \(hygiene), scope \(scope), revoked \(includeRevoked)"
+        var filterLine = "Filters: status \(status), hygiene \(hygiene)"
+        if let scope {
+            filterLine.append(", scope \(scope)")
+        }
+        filterLine.append(", revoked \(includeRevoked)")
         if !limit.isEmpty {
             filterLine.append(", limit \(limit)")
         }
@@ -3667,6 +3826,14 @@ final class ActivityStore: ObservableObject {
             let metadata = item["metadata"] as? [String: Any] ?? [:]
             return total + (auditInt(metadata["already_revoked_scoped_token_count"]) ?? 0)
         }
+        let bulkRevokedTokens = accessChanges.reduce(0) { total, item in
+            let metadata = item["metadata"] as? [String: Any] ?? [:]
+            return total + (auditInt(metadata["revoked_count"]) ?? 0)
+        }
+        let bulkAlreadyRevokedTokens = accessChanges.reduce(0) { total, item in
+            let metadata = item["metadata"] as? [String: Any] ?? [:]
+            return total + (auditInt(metadata["already_revoked_count"]) ?? 0)
+        }
 
         var lines = [
             "Autopsy Shared Access Change Audit",
@@ -3676,6 +3843,8 @@ final class ActivityStore: ObservableObject {
             "Scoped actor tokens: \(scopedActorChanges)",
             "Revoked scoped tokens: \(revokedScopedTokens)",
             "Already revoked scoped tokens: \(alreadyRevokedScopedTokens)",
+            "Bulk revoked tokens: \(bulkRevokedTokens)",
+            "Bulk already revoked tokens: \(bulkAlreadyRevokedTokens)",
         ]
 
         let countSummary = Self.sharedAccessChangeAuditActions
@@ -3749,6 +3918,36 @@ final class ActivityStore: ObservableObject {
         if let alreadyRevokedScopedTokens = auditInt(metadata["already_revoked_scoped_token_count"]) {
             parts.append("already revoked scoped tokens \(alreadyRevokedScopedTokens)")
         }
+        if let matchedCount = auditInt(metadata["matched_count"]) {
+            parts.append("matched \(matchedCount)")
+        }
+        if let candidateCount = auditInt(metadata["candidate_count"]) {
+            parts.append("candidates \(candidateCount)")
+        }
+        if let wouldRevokeCount = auditInt(metadata["would_revoke_count"]) {
+            parts.append("would revoke \(wouldRevokeCount)")
+        }
+        if let revokedCount = auditInt(metadata["revoked_count"]) {
+            parts.append("revoked \(revokedCount)")
+        }
+        if let alreadyRevokedCount = auditInt(metadata["already_revoked_count"]) {
+            parts.append("already revoked \(alreadyRevokedCount)")
+        }
+        if let skippedActorTokenCount = auditInt(metadata["skipped_actor_token_count"]) {
+            parts.append("skipped actor token \(skippedActorTokenCount)")
+        }
+        if let statusFilter = auditString(metadata["status_filter"]), !statusFilter.isEmpty {
+            parts.append("status \(statusFilter)")
+        }
+        if let hygieneFilter = auditString(metadata["hygiene_filter"]), !hygieneFilter.isEmpty {
+            parts.append("hygiene \(hygieneFilter)")
+        }
+        if let scopeFilter = auditString(metadata["scope_filter"]), !scopeFilter.isEmpty {
+            parts.append("scope \(scopeFilter)")
+        }
+        if let dryRun = auditBool(metadata["dry_run"]) {
+            parts.append(dryRun ? "dry run" : "confirmed")
+        }
         if let labelCount = auditInt(metadata["allowed_relation_label_count"]) {
             parts.append("labels \(labelCount)")
         }
@@ -3813,6 +4012,10 @@ final class ActivityStore: ObservableObject {
             return "handoff owner"
         case "invite_user":
             return "invite user"
+        case "bulk_revoke_admin_tokens":
+            return "bulk revoke admin tokens"
+        case "bulk_revoke_scoped_tokens":
+            return "bulk revoke scoped tokens"
         case "revoke_grant":
             return "revoke grant"
         case "revoke_scoped_token":

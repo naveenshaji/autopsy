@@ -4666,8 +4666,29 @@ def shared_server_invitation_path(graph_slug: str) -> str:
     return shared_server_path(graph_slug, "/invitations")
 
 
-def shared_server_scoped_tokens_path(graph_slug: str, repo: str) -> str:
-    return shared_server_path(graph_slug, f"/tokens?{urllib.parse.urlencode({'repo': repo})}")
+def shared_server_scoped_tokens_path(
+    graph_slug: str,
+    repo: str,
+    *,
+    limit: int | None = None,
+    include_revoked: bool | None = None,
+    status_filter: str = "all",
+    hygiene_filter: str = "all",
+) -> str:
+    query: list[tuple[str, str]] = [("repo", repo)]
+    if limit is not None:
+        query.append(("limit", str(max(1, min(1000, int(limit))))))
+    if include_revoked is not None:
+        query.append(("include_revoked", "true" if include_revoked else "false"))
+    if status_filter != "all":
+        query.append(("status", status_filter))
+    if hygiene_filter != "all":
+        query.append(("hygiene", hygiene_filter))
+    return shared_server_path(graph_slug, f"/tokens?{urllib.parse.urlencode(query)}")
+
+
+def shared_server_scoped_token_bulk_revoke_path(graph_slug: str) -> str:
+    return shared_server_path(graph_slug, "/tokens/revoke")
 
 
 def shared_server_token_revoke_path(graph_slug: str, token_id: str) -> str:
@@ -5861,6 +5882,33 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         )
         print(json.dumps(payload, indent=2))
         return
+    if action == "bulk-revoke-scoped-tokens":
+        status_filter = str(getattr(args, "token_status", "all") or "all")
+        hygiene_filter = str(getattr(args, "token_hygiene", "all") or "all")
+        scope_filter = str(getattr(args, "token_scope", "all") or "all")
+        if scope_filter != "all":
+            fail("shared-server bulk-revoke-scoped-tokens does not use --token-scope; use --repo-scope for repo-scoped tokens", 2)
+        if status_filter == "all" and hygiene_filter == "all":
+            fail("shared-server bulk-revoke-scoped-tokens requires at least one --token-status or --token-hygiene filter", 2)
+        confirmed = bool(getattr(args, "confirm_token_revoke", False))
+        payload = shared_server_request_or_fail(
+            config,
+            shared_server_scoped_token_bulk_revoke_path(graph_slug),
+            method="POST",
+            payload={
+                "repo": repo,
+                "include_revoked": bool(getattr(args, "include_revoked", False) or status_filter == "revoked"),
+                "limit": max(1, min(1000, int(getattr(args, "limit", 50) or 50))),
+                "status": status_filter,
+                "hygiene": hygiene_filter,
+                "dry_run": not confirmed,
+                "confirm": confirmed,
+                "reason": str(getattr(args, "reason", "") or ""),
+            },
+            timeout=20,
+        )
+        print(json.dumps(payload, indent=2))
+        return
     if action == "users":
         payload = shared_server_request_or_fail(config, "/v1/users", timeout=10)
         print(json.dumps(payload, indent=2))
@@ -5903,7 +5951,23 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         print(json.dumps(payload, indent=2))
         return
     if action == "scoped-tokens":
-        payload = shared_server_request_or_fail(config, shared_server_scoped_tokens_path(graph_slug, repo), timeout=10)
+        status_filter = str(getattr(args, "token_status", "all") or "all")
+        hygiene_filter = str(getattr(args, "token_hygiene", "all") or "all")
+        scope_filter = str(getattr(args, "token_scope", "all") or "all")
+        if scope_filter != "all":
+            fail("shared-server scoped-tokens does not use --token-scope; use --repo-scope for repo-scoped tokens", 2)
+        payload = shared_server_request_or_fail(
+            config,
+            shared_server_scoped_tokens_path(
+                graph_slug,
+                repo,
+                limit=int(getattr(args, "limit", 50) or 50),
+                include_revoked=bool(getattr(args, "include_revoked", False) or status_filter == "revoked"),
+                status_filter=status_filter,
+                hygiene_filter=hygiene_filter,
+            ),
+            timeout=10,
+        )
         print(json.dumps(payload, indent=2))
         return
     if action == "create-token":

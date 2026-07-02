@@ -170,6 +170,7 @@ private struct SharedSettingsTab: View {
     @State private var tokenInventoryHygiene = "all"
     @State private var tokenInventoryScope = "all"
     @State private var confirmTokenInventoryRevoke = false
+    @State private var confirmScopedTokenRevoke = false
     @State private var auditRepoScope = ""
     @State private var auditReceiptID = ""
     @State private var auditReceiptHash = ""
@@ -705,7 +706,11 @@ private struct SharedSettingsTab: View {
                     .disabled(sharedActionDisabled || !tokenInventoryHasBulkFilter)
 
                     Button("Copy Invite Tokens") {
-                        store.copySharedServerScopedTokens(repoScope: revokeTokenRepoScope)
+                        store.copySharedServerScopedTokens(
+                            repoScope: revokeTokenRepoScope,
+                            statusFilter: tokenInventoryStatus,
+                            hygieneFilter: tokenInventoryHygiene
+                        )
                     }
                     .disabled(sharedActionDisabled)
 
@@ -725,6 +730,29 @@ private struct SharedSettingsTab: View {
                     confirmTokenInventoryRevoke = false
                 }
                 .disabled(sharedActionDisabled || !tokenInventoryHasBulkFilter || !confirmTokenInventoryRevoke)
+
+                HStack {
+                    Button("Copy Scoped Preview") {
+                        store.copySharedServerScopedTokenRevokePreview(
+                            repoScope: revokeTokenRepoScope,
+                            statusFilter: tokenInventoryStatus,
+                            hygieneFilter: tokenInventoryHygiene
+                        )
+                    }
+                    .disabled(sharedActionDisabled || !scopedTokenHasBulkFilter)
+
+                    Button("Revoke Scoped Tokens") {
+                        store.revokeSharedServerMatchingScopedTokens(
+                            repoScope: revokeTokenRepoScope,
+                            statusFilter: tokenInventoryStatus,
+                            hygieneFilter: tokenInventoryHygiene
+                        )
+                        confirmScopedTokenRevoke = false
+                    }
+                    .disabled(sharedActionDisabled || !scopedTokenHasBulkFilter || !confirmScopedTokenRevoke)
+                }
+                Toggle("Confirm Scoped Revoke", isOn: $confirmScopedTokenRevoke)
+                    .disabled(sharedActionDisabled || !scopedTokenHasBulkFilter)
 
                 Divider()
 
@@ -852,6 +880,10 @@ private struct SharedSettingsTab: View {
 
     private var tokenInventoryHasBulkFilter: Bool {
         tokenInventoryStatus != "all" || tokenInventoryHygiene != "all" || tokenInventoryScope != "all"
+    }
+
+    private var scopedTokenHasBulkFilter: Bool {
+        tokenInventoryStatus != "all" || tokenInventoryHygiene != "all"
     }
 
     private func tokenInventoryLabel(_ value: String) -> String {
