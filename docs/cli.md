@@ -152,9 +152,11 @@ compact audit integrity report for menu bar
 clients without echoing token material or raw audit events. Graph owners
 can use `shared-server invite --email <email> --role reader|writer|owner
 --repo-scope <repo>` to create or reuse a user, grant repo access, and issue a
-one-time token in one audited operation. Add `--expires-at <ISO-8601>` to
-`invite` or `create-token` to issue a token that the server rejects after that
-UTC timestamp. Global admins can also use
+one-time token in one audited operation. Successful shared mutation responses
+can include a redacted `audit` receipt with the audit event id and integrity
+hash so operators can correlate UI actions with the server audit chain. Add
+`--expires-at <ISO-8601>` to `invite` or `create-token` to issue a token that
+the server rejects after that UTC timestamp. Global admins can also use
 `shared-server users`, `create-user --email <email>`, `tokens --user-id <id>`,
 `disable-user <user-id>`, `enable-user <user-id>`,
 `create-token --user-id <id> --label <label>`, `grants --repo-scope <repo>`,

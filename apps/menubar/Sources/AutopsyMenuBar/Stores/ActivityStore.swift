@@ -274,6 +274,7 @@ final class ActivityStore: ObservableObject {
                 ("owner_handoff", "owner handoff"),
                 ("grant_downgrade_token_revocation", "downgrade cleanup"),
                 ("tamper_evident_audit_chain", "audit chain"),
+                ("mutation_audit_receipts", "audit receipts"),
                 ("personal_shared_relations", "personal links"),
                 ("unsafe_shared_write_guard", "write guard"),
             ].compactMap { key, label in
@@ -1293,13 +1294,14 @@ final class ActivityStore: ObservableObject {
             let tokenID = tokenRecord?["id"] as? String
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(token, forType: .string)
+            let message: String
             if let tokenID, !tokenID.isEmpty {
-                lastActionMessage = "Invite token copied; ID \(tokenID)"
-                clearLastActionMessageAfterDelay(expected: "Invite token copied; ID \(tokenID)")
+                message = messageWithAuditReceipt("Invite token copied; ID \(tokenID)", payload: invitePayload)
             } else {
-                lastActionMessage = "Invite token copied"
-                clearLastActionMessageAfterDelay(expected: "Invite token copied")
+                message = messageWithAuditReceipt("Invite token copied", payload: invitePayload)
             }
+            lastActionMessage = message
+            clearLastActionMessageAfterDelay(expected: message)
             await loadSharedServerTeamStatus()
         } catch {
             sharedServerError = error.localizedDescription
@@ -1454,13 +1456,15 @@ final class ActivityStore: ObservableObject {
                 arguments.append(contentsOf: ["--expires-at", trimmedExpiresAt])
             }
             let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run(arguments)
-            guard let token = jsonObject(from: output)?["token"] as? String, !token.isEmpty else {
+            let payload = jsonObject(from: output)
+            guard let token = payload?["token"] as? String, !token.isEmpty else {
                 throw CLIError.failed("shared server did not return a token")
             }
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(token, forType: .string)
-            lastActionMessage = "Shared token copied"
-            clearLastActionMessageAfterDelay(expected: "Shared token copied")
+            let message = messageWithAuditReceipt("Shared token copied", payload: payload)
+            lastActionMessage = message
+            clearLastActionMessageAfterDelay(expected: message)
             await loadSharedServerTeamStatus()
         } catch {
             sharedServerError = error.localizedDescription
@@ -2109,7 +2113,8 @@ final class ActivityStore: ObservableObject {
 
         do {
             let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run(arguments)
-            lastActionMessage = successMessageFromOutput?(output) ?? successMessage
+            let message = successMessageFromOutput?(output) ?? successMessage
+            lastActionMessage = messageWithAuditReceipt(message, output: output)
             if refreshTeam {
                 await loadSharedServerTeamStatus()
             }
@@ -2956,6 +2961,35 @@ final class ActivityStore: ObservableObject {
             return "none"
         }
         return String(value.prefix(12))
+    }
+
+    private func messageWithAuditReceipt(_ message: String, output: String) -> String {
+        messageWithAuditReceipt(message, payload: jsonObject(from: output))
+    }
+
+    private func messageWithAuditReceipt(_ message: String, payload: [String: Any]?) -> String {
+        guard let receipt = auditReceiptSummary(from: payload) else {
+            return message
+        }
+        return "\(message); \(receipt)"
+    }
+
+    private func auditReceiptSummary(from payload: [String: Any]?) -> String? {
+        guard let audit = payload?["audit"] as? [String: Any] else {
+            return nil
+        }
+        var parts: [String] = []
+        if let id = auditString(audit["id"]) {
+            parts.append("audit \(id)")
+        }
+        let hash = shortAuditHash(auditString(audit["integrity_hash"]))
+        if hash != "none" {
+            parts.append("hash \(hash)")
+        }
+        guard !parts.isEmpty else {
+            return nil
+        }
+        return parts.joined(separator: ", ")
     }
 
     private func auditString(_ value: Any?) -> String? {
