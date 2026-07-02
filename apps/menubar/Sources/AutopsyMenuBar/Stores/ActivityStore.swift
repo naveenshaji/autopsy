@@ -702,6 +702,12 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    func copySharedServerScopedTokens(repoScope: String) {
+        Task {
+            await copySharedScopedTokens(repoScope: repoScope)
+        }
+    }
+
     func copySharedServerAudit(repoScope: String) {
         Task {
             await copySharedAudit(repoScope: repoScope)
@@ -1497,6 +1503,31 @@ final class ActivityStore: ObservableObject {
             ],
             successMessage: "Shared token revoked"
         )
+    }
+
+    private func copySharedScopedTokens(repoScope: String) async {
+        guard !isManagingSharedAccess else { return }
+        isManagingSharedAccess = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingSharedAccess = false
+        }
+
+        do {
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run([
+                "shared-server",
+                "scoped-tokens",
+                "--repo-scope",
+                normalizedRepoScope(repoScope),
+            ])
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(output.trimmingCharacters(in: .whitespacesAndNewlines), forType: .string)
+            lastActionMessage = "Invite tokens copied"
+            clearLastActionMessageAfterDelay(expected: "Invite tokens copied")
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
     }
 
     private func copySharedAudit(repoScope: String) async {

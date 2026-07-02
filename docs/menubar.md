@@ -78,7 +78,7 @@ Run checks:
 - Homebrew update check/update action.
 - Shared memory Settings controls for server health, graph-owner invites,
   repo grants, invite-token hygiene counts, expiring invite/token issuance,
-  token cleanup, audit copy, shared memory archive/restore, and
+  invite-token inventory copy, token cleanup, audit copy, shared memory archive/restore, and
   shared memory history copy/version restore, shared context copy, shared
   relation and private personal-to-shared link create/list/unlink.
 - Attention items when available.

@@ -493,10 +493,17 @@ private struct SharedSettingsTab: View {
                     .textFieldStyle(.roundedBorder)
                 TextField("Token Repo Scope", text: $revokeTokenRepoScope)
                     .textFieldStyle(.roundedBorder)
-                Button("Revoke Token") {
-                    store.revokeSharedServerToken(tokenID: revokeTokenID, repoScope: revokeTokenRepoScope)
+                HStack {
+                    Button("Copy Invite Tokens") {
+                        store.copySharedServerScopedTokens(repoScope: revokeTokenRepoScope)
+                    }
+                    .disabled(sharedActionDisabled)
+
+                    Button("Revoke Token") {
+                        store.revokeSharedServerToken(tokenID: revokeTokenID, repoScope: revokeTokenRepoScope)
+                    }
+                    .disabled(sharedActionDisabled || revokeTokenID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
-                .disabled(sharedActionDisabled || revokeTokenID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
                 Divider()
 
