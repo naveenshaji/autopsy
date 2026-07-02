@@ -75,6 +75,7 @@ final class ActivityStore: ObservableObject {
         "read_repo_policy",
         "read_repo_policies",
         "check_relation_policy",
+        "relation_policy_version_conflict",
         "create_shared_relation",
         "revoke_shared_relation",
         "create_personal_relation",
@@ -3021,6 +3022,12 @@ final class ActivityStore: ObservableObject {
         if let reason = auditString(metadata["reason"]) {
             parts.append("reason \(reason)")
         }
+        if let currentAllowed = auditBool(metadata["current_allowed"]) {
+            parts.append("current allowed \(currentAllowed ? "yes" : "no")")
+        }
+        if let currentReason = auditString(metadata["current_reason"]) {
+            parts.append("current reason \(currentReason)")
+        }
         if let effectiveRole = auditString(metadata["effective_role"]) {
             parts.append("role \(effectiveRole)")
         }
@@ -3042,11 +3049,18 @@ final class ActivityStore: ObservableObject {
         if let allowPersonal = auditBool(metadata["allow_personal_relations"]) {
             parts.append("personal \(allowPersonal ? "allowed" : "disabled")")
         }
-        if let policyFingerprint = auditString(metadata["policy_fingerprint"]) {
+        let isRelationPolicyConflict = action == "relation_policy_version_conflict"
+        if let policyFingerprint = auditString(metadata["policy_fingerprint"]), !isRelationPolicyConflict {
             parts.append("fingerprint \(shortAuditHash(policyFingerprint))")
         }
-        if let policyVersion = auditString(metadata["policy_version_ns"]) {
+        if let policyVersion = auditString(metadata["policy_version_ns"]), !isRelationPolicyConflict {
             parts.append("policy version \(policyVersion)")
+        }
+        if let currentPolicyFingerprint = auditString(metadata["current_policy_fingerprint"]) {
+            parts.append("current fingerprint \(shortAuditHash(currentPolicyFingerprint))")
+        }
+        if let currentPolicyVersion = auditString(metadata["current_policy_version_ns"]) {
+            parts.append("current policy version \(currentPolicyVersion)")
         }
         if let expectedPolicyFingerprint = auditString(metadata["expected_policy_fingerprint"]) {
             parts.append("expected fingerprint \(shortAuditHash(expectedPolicyFingerprint))")

@@ -97,12 +97,13 @@ Run checks:
   with hashed queries and counts when the server records them. Activity-audit
   summaries request sensitive shared-server activity events such as access checks,
   token/grant/user inventories, policy reads/inventories, relation policy checks,
-  shared/personal relation creates and revokes, memory lists/history, shared
-  relation lists, and audit reads, then copy counts, limits, statuses,
-  roles/reasons, relation ids, shared and target keys when exposed by the
-  privacy-preserving audit metadata, relation scopes, relation labels, relation
-  ratings, dry-run markers, short current/expected policy fingerprints, current
-  and expected policy versions, personal-key presence, token-scope markers, and
+  stale relation-policy version conflicts, shared/personal relation creates and
+  revokes, memory lists/history, shared relation lists, and audit reads, then
+  copy counts, limits, statuses, roles/reasons, current reasons/allowed flags,
+  relation ids, shared and target keys when exposed by the privacy-preserving
+  audit metadata, relation scopes, relation labels, relation ratings, dry-run
+  markers, short current/expected policy fingerprints, current and expected
+  policy versions, personal-key presence, token-scope markers, and
   filter-presence flags. Context-audit
   summaries request only shared-context and
   personal-linked-context read events and copy only read counts, relation
