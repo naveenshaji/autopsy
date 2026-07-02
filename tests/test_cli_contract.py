@@ -167,6 +167,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "--repo-scope",
             "repo-a",
         ])
+        disable_args = parser.parse_args(["shared-server", "disable-user", "usr_1"])
+        enable_args = parser.parse_args(["shared-server", "enable-user", "--user-id", "usr_1"])
         revoke_args = parser.parse_args(["shared-server", "revoke-token", "tok_1"])
         scoped_tokens_args = parser.parse_args(["shared-server", "scoped-tokens", "--repo-scope", "repo-a"])
         access_check_args = parser.parse_args(["shared-server", "access-check", "--repo-scope", "repo-a", "--mode", "write"])
@@ -286,6 +288,10 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(grant_args.user_id, "usr_1")
         self.assertEqual(grant_args.role, "writer")
         self.assertEqual(grant_args.repo_scope, "repo-a")
+        self.assertEqual(disable_args.shared_server_action, "disable-user")
+        self.assertEqual(disable_args.stable_key, "usr_1")
+        self.assertEqual(enable_args.shared_server_action, "enable-user")
+        self.assertEqual(enable_args.user_id, "usr_1")
         self.assertEqual(revoke_args.shared_server_action, "revoke-token")
         self.assertEqual(revoke_args.stable_key, "tok_1")
         self.assertEqual(scoped_tokens_args.shared_server_action, "scoped-tokens")
@@ -674,6 +680,33 @@ class AutopsyCLIContractTests(unittest.TestCase):
                     "POST",
                     {"label": "laptop", "expires_at": "2999-01-01T00:00:00Z"},
                 )
+            ],
+        )
+
+    def test_shared_server_user_lifecycle_posts_disable_enable_paths(self):
+        parser = cli.build_parser()
+        disable_args = parser.parse_args(["shared-server", "disable-user", "usr_1"])
+        enable_args = parser.parse_args(["shared-server", "enable-user", "--user-id", "usr_1"])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        calls: list[tuple[str, str, dict[str, str] | None]] = []
+
+        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
+            calls.append((path, method, payload))
+            return {"id": "usr_1", "disabled": path.endswith("/disable")}
+
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            disable_args.func(disable_args)
+            enable_args.func(enable_args)
+
+        self.assertEqual(
+            calls,
+            [
+                ("/v1/users/usr_1/disable", "POST", None),
+                ("/v1/users/usr_1/enable", "POST", None),
             ],
         )
 

@@ -5320,6 +5320,19 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         )
         print(json.dumps(payload, indent=2))
         return
+    if action in {"disable-user", "enable-user"}:
+        user_id = str(getattr(args, "user_id", "") or getattr(args, "stable_key", "") or "").strip()
+        if not user_id:
+            fail(f"shared-server {action} requires a user id", 2)
+        lifecycle = "disable" if action == "disable-user" else "enable"
+        payload = shared_server_request_or_fail(
+            config,
+            f"/v1/users/{urllib.parse.quote(user_id, safe='')}/{lifecycle}",
+            method="POST",
+            timeout=10,
+        )
+        print(json.dumps(payload, indent=2))
+        return
     if action == "tokens":
         user_id = str(getattr(args, "user_id", "") or "").strip()
         if not user_id:
