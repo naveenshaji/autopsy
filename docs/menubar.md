@@ -83,7 +83,7 @@ Run checks:
   raw audit copy, activity-audit
   summary copy, context-audit summary copy,
   audit-integrity summary copy, global security-audit summary copy for
-  global-admin tokens, audit receipt verification report copy, versioned repo policy copy/update,
+  global-admin tokens, audit receipt verification report copy, versioned repo policy copy/update/reset,
   shared memory archive/restore, and
   shared memory history copy/version restore, shared context copy with optional
   relation evidence threshold, shared

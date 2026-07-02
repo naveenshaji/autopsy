@@ -243,6 +243,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "--policy-notes",
             "strong evidence only",
         ])
+        reset_policy_args = parser.parse_args(["shared-server", "reset-policy", "--repo-scope", "repo-a"])
         audit_args = parser.parse_args([
             "shared-server",
             "audit",
@@ -399,6 +400,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(update_policy_args.min_fact_rating, 0.8)
         self.assertTrue(update_policy_args.disable_personal_relations)
         self.assertEqual(update_policy_args.policy_notes, "strong evidence only")
+        self.assertEqual(reset_policy_args.shared_server_action, "reset-policy")
+        self.assertEqual(reset_policy_args.repo_scope, "repo-a")
         self.assertEqual(audit_args.shared_server_action, "audit")
         self.assertEqual(audit_args.repo_scope, "repo-a")
         self.assertEqual(audit_args.limit, 25)
@@ -504,6 +507,12 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(
             cli.shared_server_access_check_path("autopsy", "repo-a", mode="write"),
             "/v1/shared-graphs/autopsy/access-check?repo=repo-a&mode=write",
+        )
+
+    def test_shared_server_policy_reset_path_is_graph_scoped(self):
+        self.assertEqual(
+            cli.shared_server_policy_reset_path("autopsy", "repo-a", expected_version_ns=42),
+            "/v1/shared-graphs/autopsy/policy?repo=repo-a&expected_version_ns=42",
         )
 
     def test_shared_server_invitation_path_is_graph_scoped(self):
@@ -1673,6 +1682,41 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "expected_version_ns": 42,
                     },
                 ),
+            ],
+        )
+
+    def test_shared_server_reset_policy_uses_existing_policy_version(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["shared-server", "reset-policy", "--repo-scope", "repo-a"])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+        def fake_request(_config, path, *, method="GET", payload=None, **_kwargs):
+            calls.append((path, method, payload))
+            if method == "GET":
+                return {
+                    "graph_slug": "autopsy",
+                    "repo": "repo-a",
+                    "allowed_relation_labels": ["supports"],
+                    "version_ns": 42,
+                }
+            return {"deleted": True, "repo": "repo-a", "policy": {"repo": "*"}}
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        payload = json.loads(stream.getvalue())
+        self.assertTrue(payload["deleted"])
+        self.assertEqual(
+            calls,
+            [
+                ("/v1/shared-graphs/autopsy/policy?repo=repo-a", "GET", None),
+                ("/v1/shared-graphs/autopsy/policy?repo=repo-a&expected_version_ns=42", "DELETE", None),
             ],
         )
 

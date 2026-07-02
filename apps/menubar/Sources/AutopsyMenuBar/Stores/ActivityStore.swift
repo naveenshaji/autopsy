@@ -722,6 +722,12 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    func resetSharedServerRepoPolicy(repoScope: String) {
+        Task {
+            await resetSharedRepoPolicy(repoScope: repoScope)
+        }
+    }
+
     func copySharedServerUsers() {
         Task {
             await copySharedUsers()
@@ -1201,6 +1207,19 @@ final class ActivityStore: ObservableObject {
         arguments.append(allowPersonalRelations ? "--allow-personal-relations" : "--disable-personal-relations")
         arguments += ["--policy-notes", notes.trimmingCharacters(in: .whitespacesAndNewlines)]
         await runSharedAccessCommand(arguments, successMessage: "Policy updated", refreshTeam: false)
+    }
+
+    private func resetSharedRepoPolicy(repoScope: String) async {
+        await runSharedAccessCommand(
+            [
+                "shared-server",
+                "reset-policy",
+                "--repo-scope",
+                normalizedRepoScope(repoScope),
+            ],
+            successMessage: "Policy reset",
+            refreshTeam: false
+        )
     }
 
     private func copySharedUsers() async {

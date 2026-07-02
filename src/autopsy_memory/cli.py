@@ -4514,6 +4514,13 @@ def shared_server_policy_path(graph_slug: str, repo: str) -> str:
     return shared_server_path(graph_slug, f"/policy?{urllib.parse.urlencode({'repo': repo})}")
 
 
+def shared_server_policy_reset_path(graph_slug: str, repo: str, *, expected_version_ns: int | None = None) -> str:
+    query: dict[str, Any] = {"repo": repo}
+    if expected_version_ns is not None:
+        query["expected_version_ns"] = int(expected_version_ns)
+    return shared_server_path(graph_slug, f"/policy?{urllib.parse.urlencode(query)}")
+
+
 def shared_server_audit_query_params(
     graph_slug: str,
     repo: str | None,
@@ -5522,6 +5529,16 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
             shared_server_path(graph_slug, "/policy"),
             method="PUT",
             payload=policy_payload,
+            timeout=10,
+        )
+        print(json.dumps(payload, indent=2))
+        return
+    if action == "reset-policy":
+        existing = shared_server_request_or_fail(config, shared_server_policy_path(graph_slug, repo), timeout=10)
+        payload = shared_server_request_or_fail(
+            config,
+            shared_server_policy_reset_path(graph_slug, repo, expected_version_ns=int(existing.get("version_ns") or 0)),
+            method="DELETE",
             timeout=10,
         )
         print(json.dumps(payload, indent=2))

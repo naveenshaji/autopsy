@@ -267,6 +267,11 @@ private struct SharedSettingsTab: View {
                         )
                     }
                     .disabled(sharedActionDisabled)
+
+                    Button("Reset Policy") {
+                        store.resetSharedServerRepoPolicy(repoScope: policyRepoScope)
+                    }
+                    .disabled(sharedActionDisabled)
                 }
             }
 

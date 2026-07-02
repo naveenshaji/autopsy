@@ -412,6 +412,7 @@ def build_parser(
             "access-check",
             "policy",
             "update-policy",
+            "reset-policy",
             "audit",
             "audit-integrity",
             "verify-receipt",
