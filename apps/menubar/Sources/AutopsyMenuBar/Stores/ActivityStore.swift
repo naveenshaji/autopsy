@@ -283,6 +283,7 @@ final class ActivityStore: ObservableObject {
                 ("tamper_evident_audit_chain", "audit chain"),
                 ("repo_policies", "repo policies"),
                 ("repo_policy_inventory", "policy inventory"),
+                ("repo_policy_fingerprints", "policy fingerprints"),
                 ("mutation_audit_receipts", "audit receipts"),
                 ("audit_receipt_verification", "audit verification"),
                 ("personal_shared_relations", "personal links"),
@@ -2494,6 +2495,9 @@ final class ActivityStore: ObservableObject {
         if let version {
             lines.append("Version: \(version)")
         }
+        if let fingerprint = auditString(payload["policy_fingerprint"]) {
+            lines.append("Fingerprint: \(shortAuditHash(fingerprint))")
+        }
         if let updatedAt = auditString(payload["updated_at"]) {
             lines.append("Updated: \(updatedAt)")
         }
@@ -2542,6 +2546,9 @@ final class ActivityStore: ObservableObject {
             ]
             if let version = auditString(item["version_ns"]) {
                 parts.append("version \(version)")
+            }
+            if let fingerprint = auditString(item["policy_fingerprint"]) {
+                parts.append("fingerprint \(shortAuditHash(fingerprint))")
             }
             if let updatedAt = auditString(item["updated_at"]), !updatedAt.isEmpty {
                 parts.append("updated \(updatedAt)")
@@ -2617,6 +2624,9 @@ final class ActivityStore: ObservableObject {
                 lines.append("Personal links: \(allowPersonal ? "allowed" : "disabled")")
                 if let version {
                     lines.append("Policy version: \(version)")
+                }
+                if let fingerprint = auditString(repoPolicy["policy_fingerprint"]) {
+                    lines.append("Policy fingerprint: \(shortAuditHash(fingerprint))")
                 }
                 if let notes = auditString(repoPolicy["notes"]) {
                     lines.append("Policy notes: \(notes)")
@@ -2825,6 +2835,9 @@ final class ActivityStore: ObservableObject {
         if let allowPersonal = auditBool(metadata["allow_personal_relations"]) {
             parts.append("personal \(allowPersonal ? "allowed" : "disabled")")
         }
+        if let policyFingerprint = auditString(metadata["policy_fingerprint"]) {
+            parts.append("fingerprint \(shortAuditHash(policyFingerprint))")
+        }
         if let status = auditString(metadata["status"]) {
             parts.append("status \(status)")
         }
@@ -2975,6 +2988,9 @@ final class ActivityStore: ObservableObject {
         if let allowPersonal = auditBool(metadata["allow_personal_relations"]) {
             parts.append("personal links \(allowPersonal ? "allowed" : "disabled")")
         }
+        if let policyFingerprint = auditString(metadata["policy_fingerprint"]) {
+            parts.append("fingerprint \(shortAuditHash(policyFingerprint))")
+        }
         if let deleted = auditBool(metadata["deleted"]) {
             parts.append("deleted \(deleted ? "yes" : "no")")
         }
@@ -2987,6 +3003,9 @@ final class ActivityStore: ObservableObject {
         if let previousVersion = auditString(metadata["previous_version_ns"]) {
             parts.append("previous version \(previousVersion)")
         }
+        if let previousFingerprint = auditString(metadata["previous_policy_fingerprint"]) {
+            parts.append("previous fingerprint \(shortAuditHash(previousFingerprint))")
+        }
         if let effectivePolicyRepo = auditString(metadata["effective_policy_repo"]) {
             parts.append("effective policy \(effectivePolicyRepo)")
         }
@@ -2995,6 +3014,9 @@ final class ActivityStore: ObservableObject {
         }
         if let effectiveVersion = auditString(metadata["effective_version_ns"]) {
             parts.append("effective version \(effectiveVersion)")
+        }
+        if let effectiveFingerprint = auditString(metadata["effective_policy_fingerprint"]) {
+            parts.append("effective fingerprint \(shortAuditHash(effectiveFingerprint))")
         }
         if let notesPresent = auditBool(metadata["notes_present"]) {
             parts.append("notes \(notesPresent ? "yes" : "no")")

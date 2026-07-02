@@ -95,7 +95,8 @@ Run checks:
   summaries request sensitive shared-server read events such as access checks,
   token/grant/user inventories, policy reads/inventories, memory lists/history,
   shared relation lists, and audit reads, then copy counts, limits, statuses,
-  roles/reasons, policy metadata, and filter-presence flags. Context-audit
+  roles/reasons, short policy fingerprints, policy metadata, and filter-presence
+  flags. Context-audit
   summaries request only shared-context and
   personal-linked-context read events and copy only read counts, relation
   provenance counters, and audit integrity status, not raw query text or
@@ -108,7 +109,9 @@ Run checks:
   redacted receipt fields and hash prefixes.
   Repo policy controls copy the current exact or inherited policy and let owners
   update allowed relation labels, minimum evidence rating, and shared/personal
-  relation write toggles from the same Shared settings tab.
+  relation write toggles from the same Shared settings tab. Policy copy,
+  inventory, access-check, and access-change reports include short policy
+  fingerprint prefixes when the configured server supports them.
   Security-audit summaries request global `auth_failure`,
   `authorization_denied`, `disable_user`, and `enable_user` events, copy auth
   reason counts, denial reason and mode counts, throttle counts, keyed client

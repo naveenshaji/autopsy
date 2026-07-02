@@ -217,7 +217,11 @@ rules. Use `--clear-relation-labels` to intentionally allow any relation label.
 policy after reading its `version_ns`, letting the repo inherit wildcard policy
 or the server default without stale reset races. `shared-server policies` lists
 explicit policy overrides for the graph; add `--repo-scope <repo>` when you
-want a one-repo inventory instead of the graph-wide view.
+want a one-repo inventory instead of the graph-wide view. Servers with
+repo-policy fingerprint support include deterministic `policy_fingerprint`
+values on policy reads, inventories, access checks, and policy-change audit
+metadata so clients can compare effective rules without diffing full policy
+payloads.
 `--repo` resolves to a team-stable Git scope such as
 `git:github.com/owner/repo` from `origin` when available, and falls back to the
 local absolute path for non-Git repos. `--repo-scope` passes an exact
