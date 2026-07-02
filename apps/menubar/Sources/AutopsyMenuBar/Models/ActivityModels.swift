@@ -97,9 +97,15 @@ struct SharedServerTeamPayload: Decodable {
     var lastOwnerGrantRisk: Bool?
     var tokensCount: Int?
     var activeTokensCount: Int?
+    var activeTokensWithLastUsedCount: Int?
+    var activeTokensNeverUsedCount: Int?
     var expiredTokensCount: Int?
     var revokedTokensCount: Int?
     var disabledTokensCount: Int?
+    var tokensWithLastUsedCount: Int?
+    var latestTokenLastUsedAt: String?
+    var latestActiveTokenLastUsedAt: String?
+    var oldestActiveTokenLastUsedAt: String?
     var policiesCount: Int?
     var constrainedPoliciesCount: Int?
     var disabledSharedPolicyCount: Int?
@@ -148,9 +154,15 @@ struct SharedServerTeamPayload: Decodable {
         case lastOwnerGrantRisk = "last_owner_grant_risk"
         case tokensCount = "tokens_count"
         case activeTokensCount = "active_tokens_count"
+        case activeTokensWithLastUsedCount = "active_tokens_with_last_used_count"
+        case activeTokensNeverUsedCount = "active_tokens_never_used_count"
         case expiredTokensCount = "expired_tokens_count"
         case revokedTokensCount = "revoked_tokens_count"
         case disabledTokensCount = "disabled_tokens_count"
+        case tokensWithLastUsedCount = "tokens_with_last_used_count"
+        case latestTokenLastUsedAt = "latest_token_last_used_at"
+        case latestActiveTokenLastUsedAt = "latest_active_token_last_used_at"
+        case oldestActiveTokenLastUsedAt = "oldest_active_token_last_used_at"
         case policiesCount = "policies_count"
         case constrainedPoliciesCount = "constrained_policies_count"
         case disabledSharedPolicyCount = "disabled_shared_policy_count"

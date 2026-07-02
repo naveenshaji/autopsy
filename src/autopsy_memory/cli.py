@@ -4826,14 +4826,25 @@ def summarize_shared_server_users(items: list[dict[str, Any]]) -> dict[str, Any]
 def summarize_shared_server_tokens(items: list[dict[str, Any]]) -> dict[str, Any]:
     role_counts: dict[str, int] = {}
     active_count = 0
+    active_with_last_used_count = 0
+    active_never_used_count = 0
     expired_count = 0
     revoked_count = 0
     disabled_count = 0
+    tokens_with_last_used_count = 0
+    latest_last_used_at = ""
+    latest_active_last_used_at = ""
+    oldest_active_last_used_at = ""
     for item in items:
         role = str(item.get("issued_role") or "unknown")
         role_counts[role] = role_counts.get(role, 0) + 1
         revoked = bool(item.get("revoked"))
         expired = bool(item.get("expired"))
+        last_used_at = str(item.get("last_used_at") or "").strip()
+        if last_used_at:
+            tokens_with_last_used_count += 1
+            if not latest_last_used_at or last_used_at > latest_last_used_at:
+                latest_last_used_at = last_used_at
         if bool(item.get("disabled")):
             disabled_count += 1
         if revoked:
@@ -4842,12 +4853,26 @@ def summarize_shared_server_tokens(items: list[dict[str, Any]]) -> dict[str, Any
             expired_count += 1
         if not revoked and not expired:
             active_count += 1
+            if last_used_at:
+                active_with_last_used_count += 1
+                if not latest_active_last_used_at or last_used_at > latest_active_last_used_at:
+                    latest_active_last_used_at = last_used_at
+                if not oldest_active_last_used_at or last_used_at < oldest_active_last_used_at:
+                    oldest_active_last_used_at = last_used_at
+            else:
+                active_never_used_count += 1
     return {
         "tokens_count": len(items),
         "active_tokens_count": active_count,
+        "active_tokens_with_last_used_count": active_with_last_used_count,
+        "active_tokens_never_used_count": active_never_used_count,
         "expired_tokens_count": expired_count,
         "revoked_tokens_count": revoked_count,
         "disabled_tokens_count": disabled_count,
+        "tokens_with_last_used_count": tokens_with_last_used_count,
+        "latest_token_last_used_at": latest_last_used_at,
+        "latest_active_token_last_used_at": latest_active_last_used_at,
+        "oldest_active_token_last_used_at": oldest_active_last_used_at,
         "token_role_counts": role_counts,
     }
 

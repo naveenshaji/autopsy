@@ -368,6 +368,12 @@ final class ActivityStore: ObservableObject {
             if let active = team.activeTokensCount {
                 parts.append("active: \(active)")
             }
+            if let neverUsed = team.activeTokensNeverUsedCount, neverUsed > 0 {
+                parts.append("never used: \(neverUsed)")
+            }
+            if let latest = team.latestActiveTokenLastUsedAt, !latest.isEmpty {
+                parts.append("last use: \(compactSharedServerDate(latest))")
+            }
             if let expired = team.expiredTokensCount, expired > 0 {
                 parts.append("expired: \(expired)")
             }
@@ -4151,6 +4157,12 @@ private func instructionDescription(_ agent: String) -> String {
     default:
         return "\(agentDisplayName(agent)) global instructions"
     }
+}
+
+private func compactSharedServerDate(_ value: String) -> String {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard trimmed.count > 10 else { return trimmed }
+    return String(trimmed.prefix(10))
 }
 
 private extension String {

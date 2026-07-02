@@ -171,7 +171,8 @@ blocks new tokens, repo grants, and invitation-created access while disabled,
 and both lifecycle operations plus rejected access attempts are server-audited.
 `shared-server scoped-tokens --repo-scope <repo>` lists
 non-secret invite-token metadata that graph owners are allowed to revoke.
-`team-status` includes active, expired, and revoked scoped-token counts,
+`team-status` includes active, active never-used, last-used, expired, and
+revoked scoped-token counts,
 explicit repo-policy inventory counts, constrained-policy counts, and
 effective repo-policy source, version, and fingerprint fields without exposing
 policy notes or relation label values, plus server-side audit integrity status
