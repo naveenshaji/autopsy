@@ -4705,9 +4705,8 @@ def shared_server_repo_scope_from_args(args: argparse.Namespace) -> str:
         return exact_scope
     repo = repository_path_from_args(args)
     if repo:
-        return str(Path(repo).expanduser().resolve(strict=False))
-    inferred = infer_git_repository_root(str(Path.cwd()))
-    return inferred or "*"
+        return infer_shared_server_repo_scope(repo)
+    return infer_shared_server_repo_scope(str(Path.cwd()))
 
 
 def shared_server_graph_slug_from_args(args: argparse.Namespace, config: dict[str, Any]) -> str:
@@ -10097,6 +10096,59 @@ def infer_git_repository_root(path: str | None) -> str | None:
     if result.returncode == 0 and root:
         return root
     return str(candidate.resolve())
+
+
+def normalize_git_remote_scope(remote_url: str | None) -> str:
+    text = str(remote_url or "").strip()
+    if not text:
+        return ""
+    text = text.rstrip("/")
+    parsed = urllib.parse.urlparse(text)
+    host = ""
+    path = ""
+    if parsed.scheme and parsed.netloc:
+        host = str(parsed.hostname or "").strip().lower()
+        path = parsed.path.strip("/")
+    else:
+        match = re.match(r"^(?:[^@/\s]+@)?(?P<host>[^:/\s]+):(?P<path>.+)$", text)
+        if match:
+            host = match.group("host").strip().lower()
+            path = match.group("path").strip("/")
+    if not host or not path:
+        return ""
+    if path.endswith(".git"):
+        path = path[:-4]
+    path = re.sub(r"/+", "/", path).strip("/")
+    if not path:
+        return ""
+    return f"git:{host}/{path.lower()}"
+
+
+def git_remote_url_for_repo(path: str | None, *, remote: str = "origin") -> str:
+    candidate = Path(path or Path.cwd()).expanduser()
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(candidate), "remote", "get-url", remote],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except Exception:
+        return ""
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
+
+
+def infer_shared_server_repo_scope(path: str | None) -> str:
+    root = infer_git_repository_root(path)
+    remote_scope = normalize_git_remote_scope(git_remote_url_for_repo(root or path))
+    if remote_scope:
+        return remote_scope
+    if root:
+        return root
+    return "*"
 
 
 def build_consult_filters(

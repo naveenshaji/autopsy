@@ -147,8 +147,10 @@ tokens for repos they own without global token access. `shared-server audit
 `shared-server access-check --repo-scope <repo> --mode read|write|admin`
 explains the configured caller's effective access for one graph/repo action,
 including the matching caller-owned grant and capabilities.
-`--repo` resolves a local repo path; `--repo-scope` passes an exact shared-server
-scope such as a repo URL, stable repo id, or `*`. `shared-server publish
+`--repo` resolves to a team-stable Git scope such as
+`git:github.com/owner/repo` from `origin` when available, and falls back to the
+local absolute path for non-Git repos. `--repo-scope` passes an exact
+shared-server scope such as a repo URL, stable repo id, or `*`. `shared-server publish
 <stable-key> --repo <repo>` copies a local memory item into the configured shared
 graph; add `--expected-version-ns <value>` from a prior `list` or
 `memory-history` read to reject stale shared writes instead of overwriting a

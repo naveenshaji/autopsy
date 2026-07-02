@@ -316,6 +316,48 @@ class AutopsyCLIContractTests(unittest.TestCase):
     def test_shared_server_invitation_path_is_graph_scoped(self):
         self.assertEqual(cli.shared_server_invitation_path("autopsy"), "/v1/shared-graphs/autopsy/invitations")
 
+    def test_shared_server_repo_scope_prefers_normalized_git_remote(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["shared-server", "access-check", "--repo", "/tmp/autopsy-worktree"])
+        calls: list[list[str]] = []
+
+        def fake_run(command, **_kwargs):
+            calls.append(command)
+            if "rev-parse" in command:
+                return types.SimpleNamespace(returncode=0, stdout="/tmp/autopsy-worktree\n")
+            if "remote" in command:
+                return types.SimpleNamespace(returncode=0, stdout="git@github.com:OpenAI/Autopsy.git\n")
+            return types.SimpleNamespace(returncode=1, stdout="")
+
+        with mock.patch.object(cli.subprocess, "run", side_effect=fake_run):
+            scope = cli.shared_server_repo_scope_from_args(args)
+
+        self.assertEqual(scope, "git:github.com/openai/autopsy")
+        self.assertTrue(any("rev-parse" in command for command in calls))
+        self.assertTrue(any("remote" in command for command in calls))
+
+    def test_shared_server_repo_scope_keeps_exact_override_and_falls_back_to_path(self):
+        parser = cli.build_parser()
+        exact_args = parser.parse_args(["shared-server", "access-check", "--repo-scope", "repo-a"])
+        fallback_args = parser.parse_args(["shared-server", "access-check", "--repo", "/tmp/not-shared"])
+
+        def fake_run(command, **_kwargs):
+            if "rev-parse" in command:
+                return types.SimpleNamespace(returncode=0, stdout="/tmp/not-shared\n")
+            return types.SimpleNamespace(returncode=2, stdout="")
+
+        with mock.patch.object(cli.subprocess, "run", side_effect=fake_run):
+            fallback_scope = cli.shared_server_repo_scope_from_args(fallback_args)
+
+        self.assertEqual(cli.shared_server_repo_scope_from_args(exact_args), "repo-a")
+        self.assertEqual(fallback_scope, "/tmp/not-shared")
+
+    def test_normalize_git_remote_scope_handles_common_url_forms(self):
+        self.assertEqual(cli.normalize_git_remote_scope("https://github.com/OpenAI/Autopsy.git"), "git:github.com/openai/autopsy")
+        self.assertEqual(cli.normalize_git_remote_scope("git@github.com:OpenAI/Autopsy.git"), "git:github.com/openai/autopsy")
+        self.assertEqual(cli.normalize_git_remote_scope("ssh://git@github.com/OpenAI/Autopsy.git"), "git:github.com/openai/autopsy")
+        self.assertEqual(cli.normalize_git_remote_scope("/tmp/local-repo"), "")
+
     def test_shared_server_token_revoke_path_is_graph_scoped(self):
         self.assertEqual(cli.shared_server_token_revoke_path("autopsy", "tok/1"), "/v1/shared-graphs/autopsy/tokens/tok%2F1/revoke")
 
