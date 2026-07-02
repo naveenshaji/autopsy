@@ -933,9 +933,12 @@ final class ActivityStore: ObservableObject {
         }
 
         do {
+            let repoScope = sharedServerDefaultRepoScope
             let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 25).run([
                 "shared-server",
                 "team-status",
+                "--repo-scope",
+                repoScope,
             ])
             sharedServerStatus = try JSONDecoder().decode(SharedServerPayload.self, from: Data(output.utf8))
         } catch {
