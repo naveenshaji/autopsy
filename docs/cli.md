@@ -214,7 +214,9 @@ updates fail with a server-side version conflict instead of overwriting newer
 rules. Use `--clear-relation-labels` to intentionally allow any relation label.
 `shared-server reset-policy --repo-scope <repo>` removes the explicit repo
 policy after reading its `version_ns`, letting the repo inherit wildcard policy
-or the server default without stale reset races.
+or the server default without stale reset races. `shared-server policies` lists
+explicit policy overrides for the graph; add `--repo-scope <repo>` when you
+want a one-repo inventory instead of the graph-wide view.
 `--repo` resolves to a team-stable Git scope such as
 `git:github.com/owner/repo` from `origin` when available, and falls back to the
 local absolute path for non-Git repos. `--repo-scope` passes an exact

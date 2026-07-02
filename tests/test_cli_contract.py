@@ -230,6 +230,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         ])
         access_check_args = parser.parse_args(["shared-server", "access-check", "--repo-scope", "repo-a", "--mode", "write"])
         policy_args = parser.parse_args(["shared-server", "policy", "--repo-scope", "repo-a"])
+        policies_args = parser.parse_args(["shared-server", "policies", "--repo-scope", "repo-a", "--limit", "25"])
         update_policy_args = parser.parse_args([
             "shared-server",
             "update-policy",
@@ -395,6 +396,9 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(access_check_args.mode, "write")
         self.assertEqual(policy_args.shared_server_action, "policy")
         self.assertEqual(policy_args.repo_scope, "repo-a")
+        self.assertEqual(policies_args.shared_server_action, "policies")
+        self.assertEqual(policies_args.repo_scope, "repo-a")
+        self.assertEqual(policies_args.limit, 25)
         self.assertEqual(update_policy_args.shared_server_action, "update-policy")
         self.assertEqual(update_policy_args.allowed_relation_label, ["supports,depends_on"])
         self.assertEqual(update_policy_args.min_fact_rating, 0.8)
@@ -513,6 +517,16 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(
             cli.shared_server_policy_reset_path("autopsy", "repo-a", expected_version_ns=42),
             "/v1/shared-graphs/autopsy/policy?repo=repo-a&expected_version_ns=42",
+        )
+
+    def test_shared_server_policies_path_is_graph_scoped(self):
+        self.assertEqual(
+            cli.shared_server_policies_path("autopsy", limit=25),
+            "/v1/shared-graphs/autopsy/policies?limit=25",
+        )
+        self.assertEqual(
+            cli.shared_server_policies_path("autopsy", "repo-a", limit=25),
+            "/v1/shared-graphs/autopsy/policies?repo=repo-a&limit=25",
         )
 
     def test_shared_server_invitation_path_is_graph_scoped(self):
@@ -1621,6 +1635,51 @@ class AutopsyCLIContractTests(unittest.TestCase):
         payload = json.loads(stream.getvalue())
         self.assertEqual(payload["repo"], "repo-a")
         self.assertEqual(calls, ["/v1/shared-graphs/autopsy/policy?repo=repo-a"])
+
+    def test_shared_server_policies_reads_unfiltered_inventory_by_default(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["shared-server", "policies", "--limit", "25"])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        calls: list[str] = []
+
+        def fake_request(_config, path, **_kwargs):
+            calls.append(path)
+            return {"graph_slug": "autopsy", "repo_filter_present": False, "items": []}
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        payload = json.loads(stream.getvalue())
+        self.assertFalse(payload["repo_filter_present"])
+        self.assertEqual(calls, ["/v1/shared-graphs/autopsy/policies?limit=25"])
+
+    def test_shared_server_policies_can_filter_repo_inventory(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["shared-server", "policies", "--repo-scope", "repo-a"])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        calls: list[str] = []
+
+        def fake_request(_config, path, **_kwargs):
+            calls.append(path)
+            return {"graph_slug": "autopsy", "repo": "repo-a", "repo_filter_present": True, "items": [{"repo": "repo-a"}]}
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        payload = json.loads(stream.getvalue())
+        self.assertTrue(payload["repo_filter_present"])
+        self.assertEqual(payload["items"][0]["repo"], "repo-a")
+        self.assertEqual(calls, ["/v1/shared-graphs/autopsy/policies?repo=repo-a&limit=50"])
 
     def test_shared_server_update_policy_merges_existing_policy(self):
         parser = cli.build_parser()

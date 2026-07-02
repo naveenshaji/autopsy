@@ -411,6 +411,7 @@ def build_parser(
             "grant",
             "access-check",
             "policy",
+            "policies",
             "update-policy",
             "reset-policy",
             "audit",

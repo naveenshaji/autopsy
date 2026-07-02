@@ -4514,6 +4514,14 @@ def shared_server_policy_path(graph_slug: str, repo: str) -> str:
     return shared_server_path(graph_slug, f"/policy?{urllib.parse.urlencode({'repo': repo})}")
 
 
+def shared_server_policies_path(graph_slug: str, repo: str | None = None, *, limit: int = 100) -> str:
+    query: list[tuple[str, Any]] = []
+    if repo:
+        query.append(("repo", repo))
+    query.append(("limit", max(1, min(500, int(limit)))))
+    return shared_server_path(graph_slug, f"/policies?{urllib.parse.urlencode(query)}")
+
+
 def shared_server_policy_reset_path(graph_slug: str, repo: str, *, expected_version_ns: int | None = None) -> str:
     query: dict[str, Any] = {"repo": repo}
     if expected_version_ns is not None:
@@ -5482,6 +5490,15 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         return
     if action == "policy":
         payload = shared_server_request_or_fail(config, shared_server_policy_path(graph_slug, repo), timeout=10)
+        print(json.dumps(payload, indent=2))
+        return
+    if action == "policies":
+        repo_filter = repo if str(getattr(args, "repo_scope", "") or getattr(args, "repo", "") or "").strip() else None
+        payload = shared_server_request_or_fail(
+            config,
+            shared_server_policies_path(graph_slug, repo_filter, limit=int(getattr(args, "limit", 100) or 100)),
+            timeout=10,
+        )
         print(json.dumps(payload, indent=2))
         return
     if action == "update-policy":

@@ -706,6 +706,12 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    func copySharedServerRepoPolicyInventory(repoScope: String) {
+        Task {
+            await copySharedRepoPolicyInventory(repoScope: repoScope)
+        }
+    }
+
     func updateSharedServerRepoPolicy(
         repoScope: String,
         relationLabels: String,
@@ -1177,6 +1183,34 @@ final class ActivityStore: ObservableObject {
             NSPasteboard.general.setString(sharedRepoPolicyReport(from: output, repoScope: scope), forType: .string)
             lastActionMessage = "Policy copied"
             clearLastActionMessageAfterDelay(expected: "Policy copied")
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
+    }
+
+    private func copySharedRepoPolicyInventory(repoScope: String) async {
+        guard !isManagingSharedAccess else { return }
+        isManagingSharedAccess = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingSharedAccess = false
+        }
+
+        do {
+            let filter = repoScope.trimmingCharacters(in: .whitespacesAndNewlines)
+            var arguments = [
+                "shared-server",
+                "policies",
+            ]
+            if !filter.isEmpty {
+                arguments += ["--repo-scope", filter]
+            }
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 15).run(arguments)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(sharedRepoPolicyInventoryReport(from: output, repoScope: filter), forType: .string)
+            lastActionMessage = "Policy inventory copied"
+            clearLastActionMessageAfterDelay(expected: "Policy inventory copied")
         } catch {
             sharedServerError = error.localizedDescription
         }
@@ -2439,6 +2473,59 @@ final class ActivityStore: ObservableObject {
         if let notes = auditString(payload["notes"]) {
             lines.append("")
             lines.append("Notes: \(notes)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func sharedRepoPolicyInventoryReport(from output: String, repoScope: String) -> String {
+        guard let payload = jsonObject(from: output) else {
+            return output.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let items = (payload["items"] as? [Any] ?? [])
+            .compactMap { $0 as? [String: Any] }
+        let graph = auditString(payload["graph_slug"]) ?? "unknown"
+        let filterPresent = auditBool(payload["repo_filter_present"]) == true
+        let filter = auditString(payload["repo"]) ?? repoScope
+        let itemCount = auditInt(payload["item_count"]) ?? items.count
+        var lines = [
+            "Shared Repo Policy Inventory",
+            "Graph: \(graph)",
+            "Filter: \(filterPresent ? (filter.isEmpty ? "repo" : filter) : "all explicit policies")",
+            "Policies: \(itemCount)",
+        ]
+        if items.isEmpty {
+            lines.append("")
+            lines.append("No explicit repo policy overrides found.")
+            return lines.joined(separator: "\n")
+        }
+        lines.append("")
+        for item in items.prefix(20) {
+            let repo = auditString(item["repo"]) ?? "unknown repo"
+            let labels = (item["allowed_relation_labels"] as? [Any] ?? [])
+                .compactMap { auditString($0) }
+            let minFactRating = auditDecimal(item["min_fact_rating"]) ?? "0.00"
+            let allowShared = auditBool(item["allow_shared_relations"]) != false
+            let allowPersonal = auditBool(item["allow_personal_relations"]) != false
+            var parts = [
+                "labels \(labels.isEmpty ? "any" : labels.joined(separator: ","))",
+                "min rating \(minFactRating)",
+                "shared \(allowShared ? "allowed" : "disabled")",
+                "personal \(allowPersonal ? "allowed" : "disabled")",
+            ]
+            if let version = auditString(item["version_ns"]) {
+                parts.append("version \(version)")
+            }
+            if let updatedAt = auditString(item["updated_at"]), !updatedAt.isEmpty {
+                parts.append("updated \(updatedAt)")
+            }
+            if let notes = auditString(item["notes"]), !notes.isEmpty {
+                parts.append("notes \(notes)")
+            }
+            lines.append("- \(repo): \(parts.joined(separator: "; "))")
+        }
+        if items.count > 20 {
+            lines.append("- \(items.count - 20) more policies omitted")
         }
         return lines.joined(separator: "\n")
     }

@@ -256,6 +256,11 @@ private struct SharedSettingsTab: View {
                     }
                     .disabled(sharedActionDisabled)
 
+                    Button("Copy Inventory") {
+                        store.copySharedServerRepoPolicyInventory(repoScope: policyRepoScope)
+                    }
+                    .disabled(sharedActionDisabled)
+
                     Button("Save Policy") {
                         store.updateSharedServerRepoPolicy(
                             repoScope: policyRepoScope,
