@@ -134,6 +134,7 @@ private struct SharedSettingsTab: View {
     @State private var sharedContextRepoScope = ""
     @State private var sharedContextIncludeArchived = false
     @State private var sharedContextIncludeRelations = true
+    @State private var sharedContextMinFactRating = ""
     @State private var sharedRelationSourceKey = ""
     @State private var sharedRelationTargetKey = ""
     @State private var sharedRelationRepoScope = ""
@@ -149,6 +150,7 @@ private struct SharedSettingsTab: View {
     @State private var personalRelationID = ""
     @State private var personalContextIncludeArchived = false
     @State private var personalContextIncludeRelations = true
+    @State private var personalContextMinFactRating = ""
     @State private var tokenUserID = ""
     @State private var tokenLabel = "menubar"
     @State private var tokenExpiresAt = ""
@@ -316,6 +318,8 @@ private struct SharedSettingsTab: View {
                     .textFieldStyle(.roundedBorder)
                 TextField("Repo Scope", text: $sharedContextRepoScope)
                     .textFieldStyle(.roundedBorder)
+                TextField("Min Fact Rating", text: $sharedContextMinFactRating)
+                    .textFieldStyle(.roundedBorder)
                 Toggle("Include Relations", isOn: $sharedContextIncludeRelations)
                 Toggle("Include Archived", isOn: $sharedContextIncludeArchived)
                 Button("Copy Context") {
@@ -323,7 +327,8 @@ private struct SharedSettingsTab: View {
                         repoScope: sharedContextRepoScope,
                         query: sharedContextQuery,
                         includeArchived: sharedContextIncludeArchived,
-                        includeRelations: sharedContextIncludeRelations
+                        includeRelations: sharedContextIncludeRelations,
+                        minFactRating: sharedContextMinFactRating
                     )
                 }
                 .disabled(sharedActionDisabled)
@@ -431,13 +436,16 @@ private struct SharedSettingsTab: View {
                     Toggle("Context Relations", isOn: $personalContextIncludeRelations)
                     Toggle("Archived Targets", isOn: $personalContextIncludeArchived)
                 }
+                TextField("Min Fact Rating", text: $personalContextMinFactRating)
+                    .textFieldStyle(.roundedBorder)
 
                 Button("Copy Linked Context") {
                     store.copySharedServerPersonalContext(
                         repoScope: personalLinkRepoScope,
                         personalKey: personalLinkKey,
                         includeArchived: personalContextIncludeArchived,
-                        includeRelations: personalContextIncludeRelations
+                        includeRelations: personalContextIncludeRelations,
+                        minFactRating: personalContextMinFactRating
                     )
                 }
                 .disabled(sharedActionDisabled)

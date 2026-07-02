@@ -4549,6 +4549,7 @@ def shared_server_context_path(
     limit: int,
     include_archived: bool = False,
     include_relations: bool = True,
+    min_fact_rating: float | str | None = None,
 ) -> str:
     query: dict[str, Any] = {
         "repo": repo,
@@ -4559,6 +4560,9 @@ def shared_server_context_path(
         query["include_archived"] = "true"
     if not include_relations:
         query["include_relations"] = "false"
+    normalized_min_fact_rating = normalize_fact_rating(min_fact_rating)
+    if normalized_min_fact_rating is not None:
+        query["min_fact_rating"] = normalized_min_fact_rating
     return shared_server_path(graph_slug, f"/context?{urllib.parse.urlencode(query)}")
 
 
@@ -4570,6 +4574,7 @@ def shared_server_personal_context_path(
     limit: int,
     include_archived: bool = False,
     include_relations: bool = True,
+    min_fact_rating: float | str | None = None,
 ) -> str:
     query: dict[str, Any] = {
         "repo": repo,
@@ -4584,6 +4589,9 @@ def shared_server_personal_context_path(
         query["include_archived"] = "true"
     if not include_relations:
         query["include_relations"] = "false"
+    normalized_min_fact_rating = normalize_fact_rating(min_fact_rating)
+    if normalized_min_fact_rating is not None:
+        query["min_fact_rating"] = normalized_min_fact_rating
     return shared_server_path(graph_slug, f"/personal-context?{urllib.parse.urlencode(query)}")
 
 
@@ -4832,6 +4840,11 @@ def build_shared_context_command_payload(args: argparse.Namespace, query: str) -
                 limit=int(getattr(args, "shared_limit", 8) or 8),
                 include_archived=bool(getattr(args, "shared_include_archived", False)),
                 include_relations=not bool(getattr(args, "shared_no_relations", False)),
+                min_fact_rating=(
+                    getattr(args, "shared_min_fact_rating", None)
+                    if getattr(args, "shared_min_fact_rating", None) is not None
+                    else getattr(args, "min_fact_rating", None)
+                ),
             ),
             timeout=15,
         )
@@ -4939,6 +4952,15 @@ def build_linked_shared_context_command_payload(args: argparse.Namespace, payloa
                 limit=int(getattr(args, "linked_shared_limit", 8) or 8),
                 include_archived=bool(getattr(args, "linked_shared_include_archived", False)),
                 include_relations=not bool(getattr(args, "linked_shared_no_relations", False)),
+                min_fact_rating=(
+                    getattr(args, "linked_shared_min_fact_rating", None)
+                    if getattr(args, "linked_shared_min_fact_rating", None) is not None
+                    else (
+                        getattr(args, "shared_min_fact_rating", None)
+                        if getattr(args, "shared_min_fact_rating", None) is not None
+                        else getattr(args, "min_fact_rating", None)
+                    )
+                ),
             ),
             timeout=15,
         )
@@ -5395,6 +5417,7 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
                 limit=int(getattr(args, "limit", 8) or 8),
                 include_archived=bool(getattr(args, "include_archived", False)),
                 include_relations=not bool(getattr(args, "no_relations", False)),
+                min_fact_rating=getattr(args, "min_fact_rating", None),
             ),
             timeout=15,
         )
@@ -5414,6 +5437,7 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
                 limit=int(getattr(args, "limit", 8) or 8),
                 include_archived=bool(getattr(args, "include_archived", False)),
                 include_relations=not bool(getattr(args, "no_relations", False)),
+                min_fact_rating=getattr(args, "min_fact_rating", None),
             ),
             timeout=15,
         )

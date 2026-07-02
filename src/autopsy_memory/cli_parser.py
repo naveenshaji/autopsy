@@ -204,12 +204,14 @@ def build_parser(
     context_parser.add_argument("--shared-limit", type=int, default=8, help="Maximum shared memories to retrieve with --include-shared.")
     context_parser.add_argument("--shared-include-archived", action="store_true", help="With --include-shared, include archived shared memories.")
     context_parser.add_argument("--shared-no-relations", action="store_true", help="With --include-shared, omit adjacent shared graph relations.")
+    context_parser.add_argument("--shared-min-fact-rating", type=float, help="With --include-shared, omit adjacent shared relations below this 0.0-1.0 rating. Defaults to --min-fact-rating when omitted.")
     context_parser.add_argument("--include-linked-shared", action="store_true", help="Also follow private personal-to-shared links from local context stable keys.")
     context_parser.add_argument("--linked-shared-personal-key", action="append", help="Specific personal stable key to resolve through private shared links. Repeat or comma-separate.")
     context_parser.add_argument("--linked-shared-repo-scope", help="Exact shared-server repo scope for --include-linked-shared. Defaults to --shared-repo-scope, --repo, or the current repository.")
     context_parser.add_argument("--linked-shared-limit", type=int, default=8, help="Maximum linked shared memories to retrieve.")
     context_parser.add_argument("--linked-shared-include-archived", action="store_true", help="With --include-linked-shared, include archived shared targets.")
     context_parser.add_argument("--linked-shared-no-relations", action="store_true", help="With --include-linked-shared, omit adjacent shared graph relations.")
+    context_parser.add_argument("--linked-shared-min-fact-rating", type=float, help="With --include-linked-shared, omit adjacent shared relations below this 0.0-1.0 rating. Defaults to --shared-min-fact-rating or --min-fact-rating.")
     context_parser.add_argument(
         "--format",
         choices=("json", "text"),
@@ -456,6 +458,7 @@ def build_parser(
     shared_server_parser.add_argument("--expected-version-ns", type=int, help="With shared-server publish or restore-version, reject the write unless the current shared memory version_ns matches this value.")
     shared_server_parser.add_argument("--include-archived", action="store_true", help="With shared-server list, context, or personal-context, include archived shared memories.")
     shared_server_parser.add_argument("--no-relations", action="store_true", help="With shared-server context or personal-context, omit adjacent shared graph relations.")
+    shared_server_parser.add_argument("--min-fact-rating", type=float, help="With shared-server context or personal-context, omit adjacent shared relations below this 0.0-1.0 evidence rating.")
     shared_server_parser.add_argument(
         "--from-owner-config",
         nargs="?",

@@ -642,9 +642,9 @@ final class ActivityStore: ObservableObject {
         }
     }
 
-    func copySharedServerContext(repoScope: String, query: String, includeArchived: Bool, includeRelations: Bool) {
+    func copySharedServerContext(repoScope: String, query: String, includeArchived: Bool, includeRelations: Bool, minFactRating: String) {
         Task {
-            await copySharedContext(repoScope: repoScope, query: query, includeArchived: includeArchived, includeRelations: includeRelations)
+            await copySharedContext(repoScope: repoScope, query: query, includeArchived: includeArchived, includeRelations: includeRelations, minFactRating: minFactRating)
         }
     }
 
@@ -678,9 +678,9 @@ final class ActivityStore: ObservableObject {
         }
     }
 
-    func copySharedServerPersonalContext(repoScope: String, personalKey: String, includeArchived: Bool, includeRelations: Bool) {
+    func copySharedServerPersonalContext(repoScope: String, personalKey: String, includeArchived: Bool, includeRelations: Bool, minFactRating: String) {
         Task {
-            await copySharedPersonalContext(repoScope: repoScope, personalKey: personalKey, includeArchived: includeArchived, includeRelations: includeRelations)
+            await copySharedPersonalContext(repoScope: repoScope, personalKey: personalKey, includeArchived: includeArchived, includeRelations: includeRelations, minFactRating: minFactRating)
         }
     }
 
@@ -1235,7 +1235,7 @@ final class ActivityStore: ObservableObject {
         }
     }
 
-    private func copySharedContext(repoScope: String, query: String, includeArchived: Bool, includeRelations: Bool) async {
+    private func copySharedContext(repoScope: String, query: String, includeArchived: Bool, includeRelations: Bool, minFactRating: String) async {
         guard !isManagingSharedAccess else { return }
         isManagingSharedAccess = true
         sharedServerError = nil
@@ -1260,6 +1260,10 @@ final class ActivityStore: ObservableObject {
             }
             if !includeRelations {
                 arguments.append("--no-relations")
+            }
+            let trimmedMinFactRating = minFactRating.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedMinFactRating.isEmpty {
+                arguments += ["--min-fact-rating", trimmedMinFactRating]
             }
             let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run(arguments)
             NSPasteboard.general.clearContents()
@@ -1435,7 +1439,7 @@ final class ActivityStore: ObservableObject {
         }
     }
 
-    private func copySharedPersonalContext(repoScope: String, personalKey: String, includeArchived: Bool, includeRelations: Bool) async {
+    private func copySharedPersonalContext(repoScope: String, personalKey: String, includeArchived: Bool, includeRelations: Bool, minFactRating: String) async {
         guard !isManagingSharedAccess else { return }
         isManagingSharedAccess = true
         sharedServerError = nil
@@ -1462,6 +1466,10 @@ final class ActivityStore: ObservableObject {
             }
             if !includeRelations {
                 arguments.append("--no-relations")
+            }
+            let trimmedMinFactRating = minFactRating.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedMinFactRating.isEmpty {
+                arguments += ["--min-fact-rating", trimmedMinFactRating]
             }
             let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run(arguments)
             NSPasteboard.general.clearContents()

@@ -174,6 +174,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "needle context",
             "--include-archived",
             "--no-relations",
+            "--min-fact-rating",
+            "0.8",
             "--limit",
             "5",
         ])
@@ -221,6 +223,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "repo-a",
             "--personal-key",
             "graph-note:local",
+            "--min-fact-rating",
+            "0.8",
             "--limit",
             "10",
         ])
@@ -269,6 +273,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(context_args.query, "needle context")
         self.assertTrue(context_args.include_archived)
         self.assertTrue(context_args.no_relations)
+        self.assertEqual(context_args.min_fact_rating, 0.8)
         self.assertEqual(context_args.limit, 5)
         self.assertEqual(archive_args.shared_server_action, "archive")
         self.assertEqual(archive_args.stable_key, "shared:1")
@@ -295,6 +300,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(personal_links_args.shared_key, "shared:1")
         self.assertEqual(personal_context_args.shared_server_action, "personal-context")
         self.assertEqual(personal_context_args.personal_key, "graph-note:local")
+        self.assertEqual(personal_context_args.min_fact_rating, 0.8)
         self.assertEqual(personal_context_args.limit, 10)
         self.assertEqual(unlink_args.shared_server_action, "unlink")
         self.assertEqual(unlink_args.stable_key, "plink_1")
@@ -389,8 +395,9 @@ class AutopsyCLIContractTests(unittest.TestCase):
                 limit=25,
                 include_archived=True,
                 include_relations=False,
+                min_fact_rating=0.8,
             ),
-            "/v1/shared-graphs/autopsy/context?repo=repo-a&query=needle+context&limit=25&include_archived=true&include_relations=false",
+            "/v1/shared-graphs/autopsy/context?repo=repo-a&query=needle+context&limit=25&include_archived=true&include_relations=false&min_fact_rating=0.8",
         )
         self.assertEqual(cli.shared_server_memory_lifecycle_path("autopsy", "archive"), "/v1/shared-graphs/autopsy/memories/archive")
         self.assertEqual(cli.shared_server_memory_lifecycle_path("autopsy", "restore"), "/v1/shared-graphs/autopsy/memories/restore")
@@ -414,8 +421,9 @@ class AutopsyCLIContractTests(unittest.TestCase):
                 personal_keys=["graph-note:one", "graph-note:two"],
                 include_archived=True,
                 include_relations=False,
+                min_fact_rating=0.8,
             ),
-            "/v1/shared-graphs/autopsy/personal-context?repo=repo-a&limit=25&personal_keys=graph-note%3Aone%2Cgraph-note%3Atwo&include_archived=true&include_relations=false",
+            "/v1/shared-graphs/autopsy/personal-context?repo=repo-a&limit=25&personal_keys=graph-note%3Aone%2Cgraph-note%3Atwo&include_archived=true&include_relations=false&min_fact_rating=0.8",
         )
         self.assertEqual(
             cli.shared_server_personal_relation_revoke_path("autopsy"),
@@ -841,6 +849,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "graph-note:local,graph-note:other",
             "--include-archived",
             "--no-relations",
+            "--min-fact-rating",
+            "0.8",
             "--limit",
             "10",
         ])
@@ -864,7 +874,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
             calls,
             [
                 (
-                    "/v1/shared-graphs/autopsy/personal-context?repo=repo-a&limit=10&personal_keys=graph-note%3Alocal%2Cgraph-note%3Aother&include_archived=true&include_relations=false",
+                    "/v1/shared-graphs/autopsy/personal-context?repo=repo-a&limit=10&personal_keys=graph-note%3Alocal%2Cgraph-note%3Aother&include_archived=true&include_relations=false&min_fact_rating=0.8",
                     "GET",
                     None,
                 )
@@ -923,6 +933,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "needle context",
             "--include-archived",
             "--no-relations",
+            "--min-fact-rating",
+            "0.8",
             "--limit",
             "10",
         ])
@@ -951,7 +963,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
             calls,
             [
                 (
-                    "/v1/shared-graphs/autopsy/context?repo=repo-a&query=needle+context&limit=10&include_archived=true&include_relations=false",
+                    "/v1/shared-graphs/autopsy/context?repo=repo-a&query=needle+context&limit=10&include_archived=true&include_relations=false&min_fact_rating=0.8",
                     "GET",
                     None,
                 )
@@ -7249,7 +7261,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
 
     def test_context_command_can_include_source_attributed_shared_context(self):
         parser = cli.build_parser()
-        args = parser.parse_args(["context", "--query", "needle", "--include-shared", "--shared-repo-scope", "repo-a", "--shared-limit", "3"])
+        args = parser.parse_args(["context", "--query", "needle", "--include-shared", "--shared-repo-scope", "repo-a", "--shared-limit", "3", "--shared-min-fact-rating", "0.8"])
         tool = types.SimpleNamespace(STATUS_WINDOW_DAYS_DEFAULT=21, workspace_payload=cli.workspace_payload)
         workspace = {"id": "/tmp/ws", "workspace_key": "/tmp/ws", "slug": "ws", "title": "ws", "root_path": "/tmp/ws"}
         graph = types.SimpleNamespace(name="unit")
@@ -7319,7 +7331,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertIn("neighbor memory from the shared graph", payload["context_block"])
         self.assertIn("Shared Context Relations", payload["context_block"])
         self.assertIn("shared:1 -supports-> shared:2", payload["context_block"])
-        self.assertEqual(calls[0][0], "/v1/shared-graphs/autopsy/context?repo=repo-a&query=needle&limit=3")
+        self.assertEqual(calls[0][0], "/v1/shared-graphs/autopsy/context?repo=repo-a&query=needle&limit=3&min_fact_rating=0.8")
 
     def test_context_command_can_follow_private_shared_links(self):
         parser = cli.build_parser()
@@ -7332,6 +7344,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "repo-a",
             "--linked-shared-limit",
             "3",
+            "--linked-shared-min-fact-rating",
+            "0.8",
         ])
         tool = types.SimpleNamespace(STATUS_WINDOW_DAYS_DEFAULT=21, workspace_payload=cli.workspace_payload)
         workspace = {"id": "/tmp/ws", "workspace_key": "/tmp/ws", "slug": "ws", "title": "ws", "root_path": "/tmp/ws"}
@@ -7397,7 +7411,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertIn("link: graph-note:local -references-> shared:1", payload["context_block"])
         self.assertIn("Linked Shared Context Relations", payload["context_block"])
         self.assertIn("linked shared relation: shared:1 -supports-> shared:2", payload["context_block"])
-        self.assertEqual(calls[0][0], "/v1/shared-graphs/autopsy/personal-context?repo=repo-a&limit=3&personal_key=graph-note%3Alocal")
+        self.assertEqual(calls[0][0], "/v1/shared-graphs/autopsy/personal-context?repo=repo-a&limit=3&personal_key=graph-note%3Alocal&min_fact_rating=0.8")
 
     def test_context_command_shared_context_errors_are_nonfatal(self):
         parser = cli.build_parser()

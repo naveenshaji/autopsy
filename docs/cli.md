@@ -68,8 +68,8 @@ autopsy repair-embedded-snapshot --dry-run
 autopsy status --current-only
 autopsy context --current-only --query "current task"
 autopsy context --current-only --format text --query "current task"
-autopsy context --current-only --include-shared --shared-repo-scope /path/to/repo --format text --query "current task"
-autopsy context --current-only --include-linked-shared --linked-shared-repo-scope /path/to/repo --format text --query "current task"
+autopsy context --current-only --include-shared --shared-repo-scope /path/to/repo --shared-min-fact-rating 0.8 --format text --query "current task"
+autopsy context --current-only --include-linked-shared --linked-shared-repo-scope /path/to/repo --linked-shared-min-fact-rating 0.8 --format text --query "current task"
 autopsy audit --current-only
 autopsy activity
 autopsy shared-server health
@@ -85,7 +85,7 @@ autopsy shared-server archive shared:key --repo-scope /path/to/repo --reason dup
 autopsy shared-server list --repo-scope /path/to/repo --include-archived
 autopsy shared-server memory-history shared:key --repo-scope /path/to/repo
 autopsy shared-server restore-version shared:key --repo-scope /path/to/repo --version-id ver_123
-autopsy shared-server context --repo-scope /path/to/repo --query "current task"
+autopsy shared-server context --repo-scope /path/to/repo --query "current task" --min-fact-rating 0.8
 autopsy shared-server restore shared:key --repo-scope /path/to/repo --reason needed
 autopsy shared-server relate shared:source shared:target --repo-scope /path/to/repo --relation depends_on --fact-rating 0.9
 autopsy shared-server shared-relations --repo-scope /path/to/repo --source-key shared:source
@@ -110,8 +110,8 @@ building one agent-ready context pack. The shared block is opt-in, source
 attributed as `shared_server`, and non-fatal: if the shared server is missing or
 denies access, local context still renders with a shared-context error entry.
 Use `--shared-repo-scope`, `--shared-query`, `--shared-limit`,
-`--shared-include-archived`, and `--shared-no-relations` to control the shared
-side of the retrieval.
+`--shared-include-archived`, `--shared-no-relations`, and
+`--shared-min-fact-rating 0.0..1.0` to control the shared side of the retrieval.
 
 `context --include-linked-shared` follows the caller's private
 personal-to-shared links from local context stable keys to shared memories and
@@ -121,7 +121,9 @@ returns shared memories that are both repo-readable and linked by the caller's
 own private relation records. Use `--linked-shared-personal-key` to provide
 explicit keys, `--linked-shared-repo-scope` to target a repo scope, and
 `--linked-shared-limit`, `--linked-shared-include-archived`, and
-`--linked-shared-no-relations` to control the linked shared lookup.
+`--linked-shared-no-relations` to control the linked shared lookup. Use
+`--linked-shared-min-fact-rating 0.0..1.0` to filter low-rated adjacent shared
+relations in linked context.
 
 `shared-server` configures and inspects the Autopsy shared memory server used for
 team graphs. `shared-server configure --from-owner-config` imports the private
@@ -173,6 +175,8 @@ memory changed since review.
 `shared-server context --repo-scope <repo> --query <text>` fetches
 source-attributed shared memories plus adjacent shared graph relations as a
 ready-to-insert context block without importing them into the personal graph.
+Add `--min-fact-rating 0.0..1.0` to omit low-quality adjacent shared relation
+facts and their related memory expansion.
 `shared-server link <personal-key> <shared-key> --repo <repo> --relation <name>`
 creates a private personal-to-shared relation without uploading the personal
 graph. `shared-server personal-links --repo-scope <repo>` lists only your own
@@ -180,7 +184,8 @@ private personal-to-shared relation records; add `--personal-key` or
 `--shared-key` to filter. `shared-server personal-context --repo-scope <repo>
 --personal-key <stable-key>` fetches the shared memories currently reachable
 through your private personal links, plus adjacent shared graph relations unless
-`--no-relations` is supplied. `shared-server unlink <relation-id> --repo-scope
+`--no-relations` is supplied. It also accepts `--min-fact-rating 0.0..1.0` for
+adjacent shared graph relation filtering. `shared-server unlink <relation-id> --repo-scope
 <repo>` revokes one of your private relation records. `shared-server relate
 <source-shared-key> <target-shared-key> --repo-scope <repo> --relation <name>`
 creates a team-visible relation between two active shared memories; add
