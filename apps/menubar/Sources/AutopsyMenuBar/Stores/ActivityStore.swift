@@ -4167,6 +4167,10 @@ final class ActivityStore: ObservableObject {
             let metadata = item["metadata"] as? [String: Any] ?? [:]
             return auditBool(metadata["token_scoped"]) == true
         }.count
+        let actorScopedDenials = authorizationDenials.filter { item in
+            let metadata = item["metadata"] as? [String: Any] ?? [:]
+            return auditBool(metadata["actor_token_scoped"]) == true
+        }.count
         let tokenScopedAccessChanges = accessChangeEvents.filter { item in
             let metadata = item["metadata"] as? [String: Any] ?? [:]
             return auditBool(metadata["actor_token_scoped"]) == true
@@ -4199,6 +4203,7 @@ final class ActivityStore: ObservableObject {
             "Client fingerprints: \(clientFingerprints.count) unique",
             "Rate limited: \(rateLimitedCount)",
             "Token-scoped denials: \(tokenScopedDenials)",
+            "Actor-scoped denials: \(actorScopedDenials)",
             "Token-scoped access changes: \(tokenScopedAccessChanges)",
             "Integrity: \(auditString(integrityPayload?["status"]) ?? "unknown") (verified \(verified), missing \(missing), mismatch \(mismatch), unknown \(unknown))",
             "Chain: \(chainStatus), linked \(linkedPairs)/\(checkedPairs), gaps \(externalGaps), breaks \(chainBreaks)",
@@ -4349,6 +4354,7 @@ final class ActivityStore: ObservableObject {
                 parts.append("scope match \(scopeMatches ? "yes" : "no")")
             }
         }
+        parts += sharedActorTokenScopeParts(metadata)
         if let target = auditString(item["target"]) {
             parts.append("target \(target)")
         }

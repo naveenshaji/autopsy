@@ -84,7 +84,8 @@ Run checks:
   policy-conflict count/status display, audit-access scope summary display,
   raw audit copy, policy-aware access-change audit copy, activity-audit
   summary copy, context-audit summary copy,
-  audit-integrity summary copy, global security-audit summary copy for
+  audit-integrity summary copy, global security-audit summary copy with
+  authorization-denial actor-token scope details for
   global-admin tokens, audit receipt verification report copy, versioned repo policy copy/update/reset,
   repo policy inventory copy,
   shared memory archive/restore, and
