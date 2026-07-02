@@ -5072,6 +5072,22 @@ def summarize_shared_server_invite_expiration_summary(summary: dict[str, Any]) -
     }
 
 
+def summarize_shared_server_audit_reader_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    metadata_counts = summary.get("metadata_counts") if isinstance(summary.get("metadata_counts"), dict) else {}
+    scoped_counts = _int_count_map(metadata_counts.get("actor_token_scoped"))
+    return {
+        "audit_reader_audit_count": _safe_int(summary.get("event_count")),
+        "audit_reader_scoped_token_count": scoped_counts.get("true", 0),
+        "audit_reader_direct_token_count": scoped_counts.get("false", 0),
+        "audit_reader_unknown_token_scope_count": scoped_counts.get("unknown", 0),
+        "audit_reader_scope_match_counts": _int_count_map(metadata_counts.get("actor_token_scope_matches")),
+        "audit_reader_scope_graph_counts": _int_count_map(metadata_counts.get("actor_token_scope_graph_slug")),
+        "audit_reader_scope_repo_counts": _int_count_map(metadata_counts.get("actor_token_scope_repo")),
+        "audit_reader_scope_role_counts": _int_count_map(metadata_counts.get("actor_token_scope_role")),
+        "latest_audit_reader_audit_at": str(summary.get("latest_created_at") or ""),
+    }
+
+
 def summarize_shared_server_storage_status(status: dict[str, Any]) -> dict[str, Any]:
     counts = status.get("counts") if isinstance(status.get("counts"), dict) else {}
     token_hygiene = status.get("token_hygiene") if isinstance(status.get("token_hygiene"), dict) else {}
@@ -5119,6 +5135,7 @@ def build_shared_server_team_status_payload(*, config_path: str | None = None, r
         "can_read_audit_integrity": False,
         "can_read_relation_policy_conflicts": False,
         "can_read_invite_expiration_summary": False,
+        "can_read_audit_reader_summary": False,
         "can_read_storage_status": False,
     }
     payload["team"] = team
@@ -5265,6 +5282,32 @@ def build_shared_server_team_status_payload(*, config_path: str | None = None, r
         team["can_read_invite_expiration_summary"] = True
         team["invite_expiration_summary_source"] = "summary"
         team.update(summarize_shared_server_invite_expiration_summary(invite_summary_payload))
+    try:
+        audit_reader_summary_payload = shared_server_request(
+            config,
+            shared_server_audit_summary_path(
+                graph_slug,
+                repo or "*",
+                limit=50,
+                actions=["read_audit_events", "read_audit_summary", "read_audit_integrity", "verify_audit_receipt"],
+                metadata_fields=[
+                    "actor_token_scoped",
+                    "actor_token_scope_matches",
+                    "actor_token_scope_graph_slug",
+                    "actor_token_scope_repo",
+                    "actor_token_scope_role",
+                ],
+            ),
+            timeout=10,
+        )
+    except urllib.error.HTTPError as exc:
+        team["audit_reader_summary_error"] = shared_server_http_error_message(exc)
+    except Exception as exc:
+        team["audit_reader_summary_error"] = str(exc)
+    else:
+        team["can_read_audit_reader_summary"] = True
+        team["audit_reader_summary_source"] = "summary"
+        team.update(summarize_shared_server_audit_reader_summary(audit_reader_summary_payload))
     if read_raw_conflict_audits:
         try:
             conflict_payload = shared_server_request(

@@ -182,11 +182,13 @@ last-used, expired, and revoked scoped-token counts,
 explicit repo-policy inventory counts, constrained-policy counts, and
 effective repo-policy source, version, and fingerprint fields without exposing
 policy notes or relation label values, plus server-side audit integrity status
-for the selected repo. It also summarizes recent stale relation-policy write
-conflicts by count, relation scope, current rejection reason, and latest
-timestamp, preferring the server-side audit summary endpoint and falling back to
-bounded raw audit reads only for older servers, without echoing raw audit events
-or stable keys. `revoke-token` first uses the global-admin endpoint and
+for the selected repo. It also summarizes recent audit-log reads by direct vs
+scoped actor token, scope match, repo, role, and latest timestamp without
+exposing token IDs. Stale relation-policy write conflicts are summarized by
+count, relation scope, current rejection reason, and latest timestamp,
+preferring the server-side audit summary endpoint and falling back to bounded raw
+audit reads only for older servers, without echoing raw audit events or stable
+keys. `revoke-token` first uses the global-admin endpoint and
 falls back to graph-scoped revocation, so graph owners can clean up invite-issued
 tokens for repos they own without global token access. `shared-server audit
 --repo-scope <repo>` lists scoped server audit events for graph owners or admins.

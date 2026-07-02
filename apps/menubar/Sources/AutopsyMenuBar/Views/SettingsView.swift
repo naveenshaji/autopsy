@@ -223,6 +223,9 @@ private struct SharedSettingsTab: View {
                 if !store.sharedServerAuditIntegrityText.isEmpty {
                     LabeledContent("Audit Integrity", value: store.sharedServerAuditIntegrityText)
                 }
+                if !store.sharedServerAuditAccessText.isEmpty {
+                    LabeledContent("Audit Access", value: store.sharedServerAuditAccessText)
+                }
                 if !store.sharedServerRelationPolicyConflictsText.isEmpty {
                     LabeledContent("Policy Conflicts", value: store.sharedServerRelationPolicyConflictsText)
                 }

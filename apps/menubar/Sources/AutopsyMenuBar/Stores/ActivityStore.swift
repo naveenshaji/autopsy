@@ -494,6 +494,55 @@ final class ActivityStore: ObservableObject {
         return ""
     }
 
+    var sharedServerAuditAccessText: String {
+        guard let team = currentSharedServer?.team else { return "" }
+        if let count = team.auditReaderAuditCount {
+            var parts: [String] = []
+            if let scoped = team.auditReaderScopedTokenCount, scoped > 0 {
+                parts.append("scoped: \(scoped)")
+            }
+            if let direct = team.auditReaderDirectTokenCount, direct > 0 {
+                parts.append("direct: \(direct)")
+            }
+            if let unknown = team.auditReaderUnknownTokenScopeCount, unknown > 0 {
+                parts.append("unknown: \(unknown)")
+            }
+            if let matchCounts = team.auditReaderScopeMatchCounts, !matchCounts.isEmpty {
+                let matches = matchCounts
+                    .sorted { $0.key < $1.key }
+                    .map { "\($0.key): \($0.value)" }
+                    .joined(separator: ", ")
+                parts.append("scope match \(matches)")
+            }
+            if let roleCounts = team.auditReaderScopeRoleCounts, !roleCounts.isEmpty {
+                let roles = roleCounts
+                    .sorted { $0.key < $1.key }
+                    .map { "\($0.key): \($0.value)" }
+                    .joined(separator: ", ")
+                parts.append("roles \(roles)")
+            }
+            if let repoCounts = team.auditReaderScopeRepoCounts, !repoCounts.isEmpty {
+                let repos = repoCounts
+                    .sorted { $0.key < $1.key }
+                    .prefix(3)
+                    .map { "\($0.key): \($0.value)" }
+                    .joined(separator: ", ")
+                if !repos.isEmpty {
+                    parts.append("repos \(repos)")
+                }
+            }
+            if let latest = team.latestAuditReaderAuditAt, !latest.isEmpty {
+                parts.append("latest \(compactSharedServerDate(latest))")
+            }
+            let text = parts.isEmpty ? "\(count)" : "\(count) (\(parts.joined(separator: ", ")))"
+            return text.clippedForMenuBar(limit: 110)
+        }
+        if let error = team.auditReaderSummaryError, !error.isEmpty {
+            return error.clippedForMenuBar(limit: 28)
+        }
+        return ""
+    }
+
     var sharedServerStorageText: String {
         guard let team = currentSharedServer?.team else { return "" }
         if let backend = team.storageBackend, !backend.isEmpty {

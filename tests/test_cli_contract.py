@@ -2877,6 +2877,37 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "filtered_window": True,
                     },
                 }
+            if path == (
+                "/v1/audit-events/summary?graph_slug=autopsy&limit=50&repo=repo-a"
+                "&action=read_audit_events&action=read_audit_summary&action=read_audit_integrity&action=verify_audit_receipt"
+                "&metadata_field=actor_token_scoped&metadata_field=actor_token_scope_matches"
+                "&metadata_field=actor_token_scope_graph_slug&metadata_field=actor_token_scope_repo"
+                "&metadata_field=actor_token_scope_role"
+            ):
+                return {
+                    "event_count": 6,
+                    "metadata_counts": {
+                        "actor_token_scoped": {"true": 2, "false": 4},
+                        "actor_token_scope_matches": {"true": 2, "false": 4},
+                        "actor_token_scope_graph_slug": {"autopsy": 2, "unknown": 4},
+                        "actor_token_scope_repo": {"repo-a": 2, "unknown": 4},
+                        "actor_token_scope_role": {"owner": 1, "reader": 1, "unknown": 4},
+                    },
+                    "latest_created_at": "2026-07-02T10:30:00Z",
+                    "scope": {
+                        "graph_slug": "autopsy",
+                        "repo": "repo-a",
+                        "actions": ["read_audit_events", "read_audit_summary", "read_audit_integrity", "verify_audit_receipt"],
+                        "metadata_fields": [
+                            "actor_token_scoped",
+                            "actor_token_scope_matches",
+                            "actor_token_scope_graph_slug",
+                            "actor_token_scope_repo",
+                            "actor_token_scope_role",
+                        ],
+                        "filtered_window": True,
+                    },
+                }
             raise AssertionError(path)
 
         with mock.patch.object(cli, "load_shared_server_config", return_value=config), mock.patch.object(cli, "shared_server_request", side_effect=fake_request):
@@ -2968,9 +2999,21 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["team"]["invite_expiration_explicit_count"], 1)
         self.assertEqual(payload["team"]["invite_expiration_unknown_count"], 1)
         self.assertEqual(payload["team"]["latest_invite_expiration_audit_at"], "2026-07-02T10:00:00Z")
+        self.assertTrue(payload["team"]["can_read_audit_reader_summary"])
+        self.assertEqual(payload["team"]["audit_reader_summary_source"], "summary")
+        self.assertEqual(payload["team"]["audit_reader_audit_count"], 6)
+        self.assertEqual(payload["team"]["audit_reader_scoped_token_count"], 2)
+        self.assertEqual(payload["team"]["audit_reader_direct_token_count"], 4)
+        self.assertEqual(payload["team"]["audit_reader_unknown_token_scope_count"], 0)
+        self.assertEqual(payload["team"]["audit_reader_scope_match_counts"], {"false": 4, "true": 2})
+        self.assertEqual(payload["team"]["audit_reader_scope_graph_counts"], {"autopsy": 2, "unknown": 4})
+        self.assertEqual(payload["team"]["audit_reader_scope_repo_counts"], {"repo-a": 2, "unknown": 4})
+        self.assertEqual(payload["team"]["audit_reader_scope_role_counts"], {"owner": 1, "reader": 1, "unknown": 4})
+        self.assertEqual(payload["team"]["latest_audit_reader_audit_at"], "2026-07-02T10:30:00Z")
         self.assertNotIn("audit_1", json.dumps(payload["team"]["audit_integrity"]))
         self.assertNotIn("audit_conflict_1", json.dumps(payload["team"]))
         self.assertNotIn("secret-shared-target", json.dumps(payload["team"]))
+        self.assertNotIn("tok_secret", json.dumps(payload["team"]))
         self.assertNotIn("sha256:secret-old", json.dumps(payload["team"]))
         self.assertNotIn("keep private", json.dumps(payload["team"]))
         self.assertNotIn("secret-token", json.dumps(payload))
