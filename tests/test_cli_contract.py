@@ -104,6 +104,15 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(seen_argv[1:], ["status", "--current-only"])
         self.assertEqual(sys.argv, original_argv)
 
+    def test_source_tree_autopsy_dev_wrapper_exists(self):
+        wrapper = Path(__file__).resolve().parents[1] / "scripts" / "autopsy-dev"
+
+        self.assertTrue(wrapper.exists())
+        self.assertTrue(os.access(wrapper, os.X_OK))
+        text = wrapper.read_text(encoding="utf-8")
+        self.assertIn("autopsy_memory.dev_cli", text)
+        self.assertIn("AutopsyDev", text)
+
     def test_instructions_include_required_commands(self):
         parser = cli.build_parser()
         args = parser.parse_args(["instructions"])

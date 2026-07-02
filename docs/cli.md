@@ -28,6 +28,10 @@ production memory store. If you intentionally need to point `autopsy-dev` at the
 production store, set `AUTOPSY_DEV_ALLOW_PRODUCTION_MEMORY=1`; otherwise it
 refuses production paths.
 
+From a source checkout, `./scripts/autopsy-dev ...` runs the development CLI via
+the repo virtualenv and `src/` tree even when `.venv/bin/autopsy-dev` has not
+been regenerated yet.
+
 ## First-Run Setup
 
 ```bash

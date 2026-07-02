@@ -101,7 +101,9 @@ only command pointed at `~/Library/Application Support/Autopsy` during normal
 work. Development and source-checkout experiments should use `autopsy-dev`,
 which defaults to `~/Library/Application Support/AutopsyDev` and refuses the
 production support tree unless `AUTOPSY_DEV_ALLOW_PRODUCTION_MEMORY=1` is set
-intentionally.
+intentionally. In a source checkout, `./scripts/autopsy-dev ...` is the stable
+wrapper for the same dev CLI even if the local virtualenv entry points have not
+been regenerated.
 
 ## Plain `brew install autopsy-memory`
 
