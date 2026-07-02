@@ -190,7 +190,8 @@ creates a private personal-to-shared relation without uploading the personal
 graph; add `--fact-rating 0.0..1.0` to attach evidence quality to that private
 bridge. `shared-server personal-links --repo-scope <repo>` lists only your own
 private personal-to-shared relation records, including each `fact_rating`; add `--personal-key` or
-`--shared-key` to filter. `shared-server personal-context --repo-scope <repo>
+`--shared-key` to filter. Personal-link list reads are audited with item counts
+and filter-presence flags, not raw personal stable keys. `shared-server personal-context --repo-scope <repo>
 --personal-key <stable-key>` fetches the shared memories currently reachable
 through your private personal links, plus adjacent shared graph relations unless
 `--no-relations` is supplied. It also accepts `--min-fact-rating 0.0..1.0` for
