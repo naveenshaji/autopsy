@@ -148,6 +148,10 @@ selected repo. `revoke-token` first uses the global-admin endpoint and
 falls back to graph-scoped revocation, so graph owners can clean up invite-issued
 tokens for repos they own without global token access. `shared-server audit
 --repo-scope <repo>` lists scoped server audit events for graph owners or admins.
+Successful shared-context and personal-linked-context reads are audited with
+returned counts, flags, read-guard totals, and a SHA-256 query hash where
+applicable; raw query text and personal stable keys are not stored in those read
+audit events.
 `shared-server access-check --repo-scope <repo> --mode read|write|admin`
 explains the configured caller's effective access for one graph/repo action,
 including the matching caller-owned grant and capabilities.
