@@ -54,6 +54,8 @@ final class ActivityStore: ObservableObject {
         "invite_user",
         "revoke_grant",
         "revoke_scoped_token",
+        "reset_repo_policy",
+        "update_repo_policy",
     ]
     private static let sharedAccessChangeAuditActions = [
         "grant_access",
@@ -61,6 +63,8 @@ final class ActivityStore: ObservableObject {
         "invite_user",
         "revoke_grant",
         "revoke_scoped_token",
+        "reset_repo_policy",
+        "update_repo_policy",
     ]
     private static let sharedActivityAuditActions = [
         "read_users",
@@ -2827,6 +2831,42 @@ final class ActivityStore: ObservableObject {
         if let alreadyRevokedScopedTokens = auditInt(metadata["already_revoked_scoped_token_count"]) {
             parts.append("already revoked scoped tokens \(alreadyRevokedScopedTokens)")
         }
+        if let labelCount = auditInt(metadata["allowed_relation_label_count"]) {
+            parts.append("labels \(labelCount)")
+        }
+        if let minFactRating = auditDecimal(metadata["min_fact_rating"]) {
+            parts.append("min rating \(minFactRating)")
+        }
+        if let allowShared = auditBool(metadata["allow_shared_relations"]) {
+            parts.append("shared relations \(allowShared ? "allowed" : "disabled")")
+        }
+        if let allowPersonal = auditBool(metadata["allow_personal_relations"]) {
+            parts.append("personal links \(allowPersonal ? "allowed" : "disabled")")
+        }
+        if let deleted = auditBool(metadata["deleted"]) {
+            parts.append("deleted \(deleted ? "yes" : "no")")
+        }
+        if let expectedVersion = auditString(metadata["expected_version_ns"]) {
+            parts.append("expected version \(expectedVersion)")
+        }
+        if let version = auditString(metadata["version_ns"]) {
+            parts.append("version \(version)")
+        }
+        if let previousVersion = auditString(metadata["previous_version_ns"]) {
+            parts.append("previous version \(previousVersion)")
+        }
+        if let effectivePolicyRepo = auditString(metadata["effective_policy_repo"]) {
+            parts.append("effective policy \(effectivePolicyRepo)")
+        }
+        if let inheritedFrom = auditString(metadata["effective_policy_inherited_from"]) {
+            parts.append("inherited from \(inheritedFrom)")
+        }
+        if let effectiveVersion = auditString(metadata["effective_version_ns"]) {
+            parts.append("effective version \(effectiveVersion)")
+        }
+        if let notesPresent = auditBool(metadata["notes_present"]) {
+            parts.append("notes \(notesPresent ? "yes" : "no")")
+        }
         parts += sharedActorTokenScopeParts(metadata)
         if let integrityStatus = auditString(item["integrity_status"]) {
             parts.append("integrity \(integrityStatus)")
@@ -2850,6 +2890,10 @@ final class ActivityStore: ObservableObject {
             return "revoke grant"
         case "revoke_scoped_token":
             return "revoke scoped token"
+        case "reset_repo_policy":
+            return "reset repo policy"
+        case "update_repo_policy":
+            return "update repo policy"
         default:
             return action.replacingOccurrences(of: "_", with: " ")
         }
