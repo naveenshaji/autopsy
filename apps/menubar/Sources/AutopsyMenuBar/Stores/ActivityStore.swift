@@ -44,6 +44,18 @@ final class ActivityStore: ObservableObject {
 
     private let activitySnapshotURL = ActivityStore.defaultActivitySnapshotURL
     private let workerKeepaliveIntervalSeconds: UInt64 = 60
+    private static let sharedActivityAuditActions = [
+        "read_users",
+        "read_user_tokens",
+        "read_scoped_tokens",
+        "read_grants",
+        "read_access_check",
+        "read_audit_events",
+        "read_audit_integrity",
+        "read_memories",
+        "read_memory_history",
+        "read_shared_relations",
+    ]
     private var activityWatcher: ActivitySnapshotWatcher?
     private var workerKeepaliveTask: Task<Void, Never>?
     private var hasBootstrappedActivitySnapshot = false
@@ -750,6 +762,12 @@ final class ActivityStore: ObservableObject {
     func copySharedServerContextAudit(repoScope: String) {
         Task {
             await copySharedContextAudit(repoScope: repoScope)
+        }
+    }
+
+    func copySharedServerActivityAudit(repoScope: String) {
+        Task {
+            await copySharedActivityAudit(repoScope: repoScope)
         }
     }
 
@@ -1663,6 +1681,38 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    private func copySharedActivityAudit(repoScope: String) async {
+        guard !isManagingSharedAccess else { return }
+        isManagingSharedAccess = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingSharedAccess = false
+        }
+
+        do {
+            let scope = normalizedRepoScope(repoScope)
+            var arguments = [
+                "shared-server",
+                "audit",
+                "--repo-scope",
+                scope,
+            ]
+            for action in Self.sharedActivityAuditActions {
+                arguments += ["--action", action]
+            }
+            arguments += ["--limit", "50"]
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run(arguments)
+            let summary = sharedActivityAuditReport(from: output, repoScope: scope)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(summary, forType: .string)
+            lastActionMessage = "Activity audit copied"
+            clearLastActionMessageAfterDelay(expected: "Activity audit copied")
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
+    }
+
     private func copySharedAuditIntegrity(repoScope: String) async {
         guard !isManagingSharedAccess else { return }
         isManagingSharedAccess = true
@@ -1797,6 +1847,115 @@ final class ActivityStore: ObservableObject {
         }
         parts.append("guard \(auditInt(metadata["read_guard_blocked_count"]) ?? 0)")
 
+        return "- \(createdAt) \(label) \(repo): \(parts.joined(separator: ", "))"
+    }
+
+    private func sharedActivityAuditReport(from output: String, repoScope: String) -> String {
+        guard let payload = jsonObject(from: output),
+              let rawItems = payload["items"] as? [Any]
+        else {
+            return output.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let items = rawItems.compactMap { $0 as? [String: Any] }
+        let activityReads = items.filter { item in
+            guard let action = auditString(item["action"]) else { return false }
+            return Self.sharedActivityAuditActions.contains(action)
+        }
+        let counts = Dictionary(grouping: activityReads) { item in
+            auditString(item["action"]) ?? "unknown"
+        }.mapValues(\.count)
+
+        var lines = [
+            "Autopsy Shared Activity Audit",
+            "Repo: \(repoScope)",
+            "Audit window: \(items.count) latest events",
+            "Activity reads: \(activityReads.count)",
+        ]
+
+        let countSummary = Self.sharedActivityAuditActions
+            .compactMap { action -> String? in
+                guard let count = counts[action], count > 0 else { return nil }
+                return "\(action) \(count)"
+            }
+        if !countSummary.isEmpty {
+            lines.append("Counts: \(countSummary.joined(separator: ", "))")
+        }
+
+        guard !activityReads.isEmpty else {
+            lines.append("")
+            lines.append("No shared activity read events were found in the latest audit window.")
+            return lines.joined(separator: "\n")
+        }
+
+        lines.append("")
+        for item in activityReads.prefix(16) {
+            lines.append(formatSharedActivityAuditItem(item))
+        }
+        if activityReads.count > 16 {
+            lines.append("- \(activityReads.count - 16) more activity reads omitted")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func formatSharedActivityAuditItem(_ item: [String: Any]) -> String {
+        let action = auditString(item["action"]) ?? "read_activity"
+        let createdAt = auditString(item["created_at"]) ?? "unknown time"
+        let repo = auditString(item["repo"]) ?? "unknown repo"
+        let target = auditString(item["target"])
+        let metadata = item["metadata"] as? [String: Any] ?? [:]
+
+        var parts: [String] = []
+        if let target {
+            parts.append("target \(target)")
+        }
+        if let itemCount = auditInt(metadata["item_count"]) {
+            parts.append("items \(itemCount)")
+        }
+        if let eventCount = auditInt(metadata["event_count"]) {
+            parts.append("events \(eventCount)")
+        }
+        if let limit = auditInt(metadata["limit"]) {
+            parts.append("limit \(limit)")
+        }
+        if let mode = auditString(metadata["mode"]) {
+            parts.append("mode \(mode)")
+        }
+        if let allowed = auditBool(metadata["allowed"]) {
+            parts.append("allowed \(allowed ? "yes" : "no")")
+        }
+        if let reason = auditString(metadata["reason"]) {
+            parts.append("reason \(reason)")
+        }
+        if let effectiveRole = auditString(metadata["effective_role"]) {
+            parts.append("role \(effectiveRole)")
+        }
+        if let status = auditString(metadata["status"]) {
+            parts.append("status \(status)")
+        }
+        if let actionFilterCount = auditInt(metadata["action_filter_count"]) {
+            parts.append("filters \(actionFilterCount)")
+        }
+        if let repoFilter = auditBool(metadata["repo_filter_present"]) {
+            parts.append("repo filter \(repoFilter ? "yes" : "no")")
+        }
+        if let sourceFilter = auditBool(metadata["source_key_filter_present"]) {
+            parts.append("source filter \(sourceFilter ? "yes" : "no")")
+        }
+        if let targetFilter = auditBool(metadata["target_key_filter_present"]) {
+            parts.append("target filter \(targetFilter ? "yes" : "no")")
+        }
+        if let includeArchived = auditBool(metadata["include_archived"]) {
+            parts.append("archived \(includeArchived ? "yes" : "no")")
+        }
+        if let integrityStatus = auditString(item["integrity_status"]) {
+            parts.append("integrity \(integrityStatus)")
+        }
+        if parts.isEmpty {
+            parts.append("recorded")
+        }
+
+        let label = action.replacingOccurrences(of: "_", with: " ")
         return "- \(createdAt) \(label) \(repo): \(parts.joined(separator: ", "))"
     }
 

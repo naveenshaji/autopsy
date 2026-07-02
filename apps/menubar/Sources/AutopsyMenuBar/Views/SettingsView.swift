@@ -534,6 +534,13 @@ private struct SharedSettingsTab: View {
                     }
                     .disabled(sharedActionDisabled)
 
+                    Button("Copy Activity") {
+                        store.copySharedServerActivityAudit(repoScope: auditRepoScope)
+                    }
+                    .disabled(sharedActionDisabled)
+                }
+
+                HStack {
                     Button("Copy Context Audit") {
                         store.copySharedServerContextAudit(repoScope: auditRepoScope)
                     }
