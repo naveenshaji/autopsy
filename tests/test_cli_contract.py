@@ -1306,7 +1306,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
             if path == "/v1/me":
                 return {"id": "usr_1", "email": "owner@example.com", "name": "Owner", "is_admin": True}
             if path == "/v1/users":
-                return {"items": [{"id": "usr_1"}, {"id": "usr_2"}]}
+                return {"items": [{"id": "usr_1", "disabled": False}, {"id": "usr_2", "disabled": True}]}
             if path == "/v1/shared-graphs/autopsy/grants?repo=repo-a":
                 return {
                     "items": [
@@ -1344,6 +1344,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
 
         self.assertTrue(payload["remote_ok"])
         self.assertEqual(payload["team"]["users_count"], 2)
+        self.assertEqual(payload["team"]["active_users_count"], 1)
+        self.assertEqual(payload["team"]["disabled_users_count"], 1)
         self.assertEqual(payload["team"]["grants_count"], 2)
         self.assertEqual(payload["team"]["role_counts"], {"owner": 1, "reader": 1})
         self.assertEqual(payload["team"]["tokens_count"], 3)

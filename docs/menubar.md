@@ -104,6 +104,7 @@ Run checks:
   token fingerprints when present, and require a global-admin shared-server
   token because they intentionally omit graph and repo filters.
   Team status is requested for the current workspace repo scope by default and
-  also surfaces the server-side audit integrity status inline.
+  also surfaces disabled-user counts and the server-side audit integrity status
+  inline.
 - Attention items when available.
 - Quit action.

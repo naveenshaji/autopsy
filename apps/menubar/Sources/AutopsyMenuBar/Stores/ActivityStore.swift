@@ -255,6 +255,14 @@ final class ActivityStore: ObservableObject {
     var sharedServerUsersText: String {
         guard let team = currentSharedServer?.team else { return "" }
         if let count = team.usersCount {
+            let disabled = team.disabledUsersCount ?? 0
+            if disabled > 0 {
+                var parts = ["disabled: \(disabled)"]
+                if let active = team.activeUsersCount {
+                    parts.insert("active: \(active)", at: 0)
+                }
+                return "\(count) (\(parts.joined(separator: ", ")))"
+            }
             return "\(count)"
         }
         if let error = team.usersError, !error.isEmpty {

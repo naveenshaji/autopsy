@@ -67,6 +67,8 @@ struct SharedServerTeamPayload: Decodable {
     var canListTokens: Bool?
     var canReadAuditIntegrity: Bool?
     var usersCount: Int?
+    var activeUsersCount: Int?
+    var disabledUsersCount: Int?
     var grantsCount: Int?
     var tokensCount: Int?
     var activeTokensCount: Int?
@@ -87,6 +89,8 @@ struct SharedServerTeamPayload: Decodable {
         case canListTokens = "can_list_tokens"
         case canReadAuditIntegrity = "can_read_audit_integrity"
         case usersCount = "users_count"
+        case activeUsersCount = "active_users_count"
+        case disabledUsersCount = "disabled_users_count"
         case grantsCount = "grants_count"
         case tokensCount = "tokens_count"
         case activeTokensCount = "active_tokens_count"

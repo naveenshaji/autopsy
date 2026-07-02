@@ -4696,6 +4696,15 @@ def summarize_shared_server_grants(items: list[dict[str, Any]]) -> dict[str, Any
     }
 
 
+def summarize_shared_server_users(items: list[dict[str, Any]]) -> dict[str, Any]:
+    disabled_count = sum(1 for item in items if bool(item.get("disabled")))
+    return {
+        "users_count": len(items),
+        "active_users_count": len(items) - disabled_count,
+        "disabled_users_count": disabled_count,
+    }
+
+
 def summarize_shared_server_tokens(items: list[dict[str, Any]]) -> dict[str, Any]:
     role_counts: dict[str, int] = {}
     active_count = 0
@@ -4746,7 +4755,7 @@ def build_shared_server_team_status_payload(*, config_path: str | None = None, r
         else:
             users = users_payload.get("items") if isinstance(users_payload.get("items"), list) else []
             team["can_list_users"] = True
-            team["users_count"] = len(users)
+            team.update(summarize_shared_server_users(users))
     try:
         grants_payload = shared_server_request(config, shared_server_grants_path(graph_slug, repo), timeout=10)
     except urllib.error.HTTPError as exc:
