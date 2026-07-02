@@ -80,7 +80,8 @@ Run checks:
   repo grants, invite-token hygiene counts, expiring invite/token issuance,
   invite-token inventory copy, token cleanup, raw audit copy, activity-audit
   summary copy, context-audit summary copy,
-  audit-integrity summary copy, shared memory archive/restore, and
+  audit-integrity summary copy, global auth-failure security-audit summary
+  copy for global-admin tokens, shared memory archive/restore, and
   shared memory history copy/version restore, shared context copy with optional
   relation evidence threshold, shared
   relation create/list/unlink with evidence rating, and private
@@ -97,6 +98,10 @@ Run checks:
   use the server-side integrity report to count recent verified, missing,
   mismatch, and unknown audit events, chain status, uncheckable pairs, filtered
   external gaps, and real unfiltered chain breaks in the copied audit window.
+  Security-audit summaries request global `auth_failure` events only, copy
+  reason counts and server-side token fingerprints when present, and require a
+  global-admin shared-server token because they intentionally omit graph and
+  repo filters.
   Team status is requested for the current workspace repo scope by default and
   also surfaces the server-side audit integrity status inline.
 - Attention items when available.

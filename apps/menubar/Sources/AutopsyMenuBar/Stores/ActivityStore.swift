@@ -44,6 +44,9 @@ final class ActivityStore: ObservableObject {
 
     private let activitySnapshotURL = ActivityStore.defaultActivitySnapshotURL
     private let workerKeepaliveIntervalSeconds: UInt64 = 60
+    private static let sharedSecurityAuditActions = [
+        "auth_failure",
+    ]
     private static let sharedActivityAuditActions = [
         "read_users",
         "read_user_tokens",
@@ -768,6 +771,12 @@ final class ActivityStore: ObservableObject {
     func copySharedServerActivityAudit(repoScope: String) {
         Task {
             await copySharedActivityAudit(repoScope: repoScope)
+        }
+    }
+
+    func copySharedServerSecurityAudit() {
+        Task {
+            await copySharedSecurityAudit()
         }
     }
 
@@ -1713,6 +1722,46 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    private func copySharedSecurityAudit() async {
+        guard !isManagingSharedAccess else { return }
+        isManagingSharedAccess = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingSharedAccess = false
+        }
+
+        do {
+            var auditArguments = [
+                "shared-server",
+                "audit",
+                "--global-audit",
+            ]
+            var integrityArguments = [
+                "shared-server",
+                "audit-integrity",
+                "--global-audit",
+            ]
+            for action in Self.sharedSecurityAuditActions {
+                auditArguments += ["--action", action]
+                integrityArguments += ["--action", action]
+            }
+            auditArguments += ["--limit", "50"]
+            integrityArguments += ["--limit", "50"]
+
+            let cli = AutopsyCLI(executable: cliPath, timeoutSeconds: 20)
+            let auditOutput = try await cli.run(auditArguments)
+            let integrityOutput = try await cli.run(integrityArguments)
+            let summary = sharedSecurityAuditReport(from: auditOutput, integrityOutput: integrityOutput)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(summary, forType: .string)
+            lastActionMessage = "Security audit copied"
+            clearLastActionMessageAfterDelay(expected: "Security audit copied")
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
+    }
+
     private func copySharedAuditIntegrity(repoScope: String) async {
         guard !isManagingSharedAccess else { return }
         isManagingSharedAccess = true
@@ -1957,6 +2006,108 @@ final class ActivityStore: ObservableObject {
 
         let label = action.replacingOccurrences(of: "_", with: " ")
         return "- \(createdAt) \(label) \(repo): \(parts.joined(separator: ", "))"
+    }
+
+    private func sharedSecurityAuditReport(from auditOutput: String, integrityOutput: String) -> String {
+        guard let payload = jsonObject(from: auditOutput),
+              let rawItems = payload["items"] as? [Any]
+        else {
+            return auditOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let items = rawItems.compactMap { $0 as? [String: Any] }
+        let securityEvents = items.filter { item in
+            guard let action = auditString(item["action"]) else { return false }
+            return Self.sharedSecurityAuditActions.contains(action)
+        }
+        let reasonCounts = Dictionary(grouping: securityEvents) { item in
+            let metadata = item["metadata"] as? [String: Any] ?? [:]
+            return auditString(metadata["reason"]) ?? "unknown"
+        }.mapValues(\.count)
+
+        var fingerprintEventCount = 0
+        var fingerprints: Set<String> = []
+        for item in securityEvents {
+            let metadata = item["metadata"] as? [String: Any] ?? [:]
+            if let fingerprint = auditString(metadata["token_fingerprint"]) {
+                fingerprintEventCount += 1
+                fingerprints.insert(fingerprint)
+            }
+        }
+
+        let integrityPayload = jsonObject(from: integrityOutput)
+        let integrityCounts = integrityPayload?["integrity_counts"] as? [String: Any] ?? [:]
+        let chain = integrityPayload?["chain"] as? [String: Any] ?? [:]
+        let verified = auditInt(integrityCounts["verified"]) ?? 0
+        let missing = auditInt(integrityCounts["missing"]) ?? 0
+        let mismatch = auditInt(integrityCounts["mismatch"]) ?? 0
+        let unknown = auditInt(integrityCounts["unknown"]) ?? 0
+        let chainStatus = auditString(chain["status"]) ?? "unknown"
+        let linkedPairs = auditInt(chain["linked_pairs"]) ?? 0
+        let checkedPairs = auditInt(chain["checked_pairs"]) ?? 0
+        let externalGaps = auditInt(chain["external_gap_count"]) ?? 0
+        let chainBreaks = auditInt(chain["chain_break_count"]) ?? 0
+
+        var lines = [
+            "Autopsy Shared Security Audit",
+            "Scope: global",
+            "Filters: \(Self.sharedSecurityAuditActions.joined(separator: ", "))",
+            "Audit window: \(items.count) latest events",
+            "Auth failures: \(securityEvents.count)",
+            "Token fingerprints: \(fingerprints.count) unique across \(fingerprintEventCount) events",
+            "Integrity: \(auditString(integrityPayload?["status"]) ?? "unknown") (verified \(verified), missing \(missing), mismatch \(mismatch), unknown \(unknown))",
+            "Chain: \(chainStatus), linked \(linkedPairs)/\(checkedPairs), gaps \(externalGaps), breaks \(chainBreaks)",
+        ]
+
+        let reasonSummary = reasonCounts
+            .sorted { left, right in
+                if left.value == right.value {
+                    return left.key < right.key
+                }
+                return left.value > right.value
+            }
+            .map { "\($0.key) \($0.value)" }
+        if !reasonSummary.isEmpty {
+            lines.append("Reasons: \(reasonSummary.joined(separator: ", "))")
+        }
+
+        guard !securityEvents.isEmpty else {
+            lines.append("")
+            lines.append("No global auth-failure events were found in the latest audit window.")
+            return lines.joined(separator: "\n")
+        }
+
+        lines.append("")
+        for item in securityEvents.prefix(16) {
+            lines.append(formatSharedSecurityAuditItem(item))
+        }
+        if securityEvents.count > 16 {
+            lines.append("- \(securityEvents.count - 16) more security events omitted")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func formatSharedSecurityAuditItem(_ item: [String: Any]) -> String {
+        let createdAt = auditString(item["created_at"]) ?? "unknown time"
+        let metadata = item["metadata"] as? [String: Any] ?? [:]
+
+        var parts = [
+            "reason \(auditString(metadata["reason"]) ?? "unknown")",
+        ]
+        if let actor = auditString(item["actor_id"]) {
+            parts.append("actor \(actor)")
+        }
+        if let target = auditString(item["target"]) {
+            parts.append("target \(target)")
+        }
+        if let fingerprint = auditString(metadata["token_fingerprint"]) {
+            parts.append("fingerprint \(fingerprint)")
+        }
+        if let integrityStatus = auditString(item["integrity_status"]) {
+            parts.append("integrity \(integrityStatus)")
+        }
+
+        return "- \(createdAt) auth failure: \(parts.joined(separator: ", "))"
     }
 
     private func sharedAuditIntegrityReport(from output: String, repoScope: String) -> String {

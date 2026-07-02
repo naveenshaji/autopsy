@@ -551,6 +551,13 @@ private struct SharedSettingsTab: View {
                     }
                     .disabled(sharedActionDisabled)
                 }
+
+                HStack {
+                    Button("Copy Security") {
+                        store.copySharedServerSecurityAudit()
+                    }
+                    .disabled(sharedActionDisabled)
+                }
             }
 
             if let message = store.lastActionMessage, !message.isEmpty {
