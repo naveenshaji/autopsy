@@ -137,8 +137,9 @@ owner token file created by `autopsy-server` bootstrap into
 permissions. `shared-server health` checks the remote `/health` and `/v1/me`
 endpoints and always redacts the bearer token from output. The `activity` feed
 includes redacted `shared_server` state so the macOS menu bar can show and check
-shared-memory connectivity. `shared-server team-status` summarizes users and
-repo grants for menu bar clients without echoing token material. Graph owners
+shared-memory connectivity. `shared-server team-status` summarizes users, repo
+grants, scoped-token counts, and a compact audit integrity report for menu bar
+clients without echoing token material or raw audit events. Graph owners
 can use `shared-server invite --email <email> --role reader|writer|owner
 --repo-scope <repo>` to create or reuse a user, grant repo access, and issue a
 one-time token in one audited operation. Add `--expires-at <ISO-8601>` to
@@ -150,8 +151,8 @@ UTC timestamp. Global admins can also use
 `revoke-token <token-id>`, and `revoke-grant --user-id <id> --repo-scope <repo>`
 to manage shared access. `shared-server scoped-tokens --repo-scope <repo>` lists
 non-secret invite-token metadata that graph owners are allowed to revoke.
-`team-status` includes active, expired, and revoked scoped-token counts for the
-selected repo. `revoke-token` first uses the global-admin endpoint and
+`team-status` includes active, expired, and revoked scoped-token counts plus
+server-side audit integrity status for the selected repo. `revoke-token` first uses the global-admin endpoint and
 falls back to graph-scoped revocation, so graph owners can clean up invite-issued
 tokens for repos they own without global token access. `shared-server audit
 --repo-scope <repo>` lists scoped server audit events for graph owners or admins.

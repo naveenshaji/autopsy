@@ -185,6 +185,9 @@ private struct SharedSettingsTab: View {
                 if !store.sharedServerTokensText.isEmpty {
                     LabeledContent("Invite Tokens", value: store.sharedServerTokensText)
                 }
+                if !store.sharedServerAuditIntegrityText.isEmpty {
+                    LabeledContent("Audit Integrity", value: store.sharedServerAuditIntegrityText)
+                }
                 HStack {
                     Button("Use Owner Config") {
                         store.configureSharedServerFromOwnerConfig()

@@ -1276,6 +1276,21 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         {"id": "tok_3", "issued_role": "reader", "revoked": True, "expired": False},
                     ]
                 }
+            if path == "/v1/audit-events/integrity?graph_slug=autopsy&limit=50&repo=repo-a":
+                return {
+                    "status": "verified",
+                    "event_count": 4,
+                    "integrity_counts": {"verified": 4, "missing": 0, "mismatch": 0, "unknown": 0},
+                    "chain": {
+                        "status": "filtered_window",
+                        "checked_pairs": 3,
+                        "linked_pairs": 3,
+                        "uncheckable_pairs": 0,
+                        "chain_break_count": 0,
+                        "external_gap_count": 1,
+                    },
+                    "items": [{"id": "audit_1"}],
+                }
             raise AssertionError(path)
 
         with mock.patch.object(cli, "load_shared_server_config", return_value=config), mock.patch.object(cli, "shared_server_request", side_effect=fake_request):
@@ -1290,6 +1305,12 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["team"]["expired_tokens_count"], 1)
         self.assertEqual(payload["team"]["revoked_tokens_count"], 1)
         self.assertEqual(payload["team"]["token_role_counts"], {"writer": 1, "reader": 2})
+        self.assertTrue(payload["team"]["can_read_audit_integrity"])
+        self.assertEqual(payload["team"]["audit_integrity"]["status"], "verified")
+        self.assertEqual(payload["team"]["audit_integrity"]["event_count"], 4)
+        self.assertEqual(payload["team"]["audit_integrity"]["integrity_counts"]["verified"], 4)
+        self.assertEqual(payload["team"]["audit_integrity"]["chain"]["external_gap_count"], 1)
+        self.assertNotIn("audit_1", json.dumps(payload["team"]["audit_integrity"]))
         self.assertNotIn("secret-token", json.dumps(payload))
 
     def test_restore_offline_requires_dry_run(self):

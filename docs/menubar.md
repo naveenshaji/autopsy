@@ -92,5 +92,6 @@ Run checks:
   use the server-side integrity report to count recent verified, missing,
   mismatch, and unknown audit events, chain status, uncheckable pairs, filtered
   external gaps, and real unfiltered chain breaks in the copied audit window.
+  Team status also surfaces the server-side audit integrity status inline.
 - Attention items when available.
 - Quit action.

@@ -4730,6 +4730,7 @@ def build_shared_server_team_status_payload(*, config_path: str | None = None, r
         "can_list_users": False,
         "can_list_grants": False,
         "can_list_tokens": False,
+        "can_read_audit_integrity": False,
     }
     payload["team"] = team
     if not payload.get("configured") or not config:
@@ -4767,6 +4768,33 @@ def build_shared_server_team_status_payload(*, config_path: str | None = None, r
         tokens = tokens_payload.get("items") if isinstance(tokens_payload.get("items"), list) else []
         team["can_list_tokens"] = True
         team.update(summarize_shared_server_tokens(tokens))
+    try:
+        integrity_payload = shared_server_request(
+            config,
+            shared_server_audit_integrity_path(graph_slug, repo or "*", limit=50),
+            timeout=10,
+        )
+    except urllib.error.HTTPError as exc:
+        team["audit_integrity_error"] = shared_server_http_error_message(exc)
+    except Exception as exc:
+        team["audit_integrity_error"] = str(exc)
+    else:
+        chain = integrity_payload.get("chain") if isinstance(integrity_payload.get("chain"), dict) else {}
+        counts = integrity_payload.get("integrity_counts") if isinstance(integrity_payload.get("integrity_counts"), dict) else {}
+        team["can_read_audit_integrity"] = True
+        team["audit_integrity"] = {
+            "status": str(integrity_payload.get("status") or ""),
+            "event_count": int(integrity_payload.get("event_count") or 0),
+            "integrity_counts": counts,
+            "chain": {
+                "status": str(chain.get("status") or ""),
+                "checked_pairs": int(chain.get("checked_pairs") or 0),
+                "linked_pairs": int(chain.get("linked_pairs") or 0),
+                "uncheckable_pairs": int(chain.get("uncheckable_pairs") or 0),
+                "chain_break_count": int(chain.get("chain_break_count") or 0),
+                "external_gap_count": int(chain.get("external_gap_count") or 0),
+            },
+        }
     return payload
 
 

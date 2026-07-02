@@ -65,6 +65,7 @@ struct SharedServerTeamPayload: Decodable {
     var canListUsers: Bool?
     var canListGrants: Bool?
     var canListTokens: Bool?
+    var canReadAuditIntegrity: Bool?
     var usersCount: Int?
     var grantsCount: Int?
     var tokensCount: Int?
@@ -73,15 +74,18 @@ struct SharedServerTeamPayload: Decodable {
     var revokedTokensCount: Int?
     var roleCounts: [String: Int]?
     var tokenRoleCounts: [String: Int]?
+    var auditIntegrity: SharedServerAuditIntegrityPayload?
     var usersError: String?
     var grantsError: String?
     var tokensError: String?
+    var auditIntegrityError: String?
 
     enum CodingKeys: String, CodingKey {
         case repo
         case canListUsers = "can_list_users"
         case canListGrants = "can_list_grants"
         case canListTokens = "can_list_tokens"
+        case canReadAuditIntegrity = "can_read_audit_integrity"
         case usersCount = "users_count"
         case grantsCount = "grants_count"
         case tokensCount = "tokens_count"
@@ -90,9 +94,43 @@ struct SharedServerTeamPayload: Decodable {
         case revokedTokensCount = "revoked_tokens_count"
         case roleCounts = "role_counts"
         case tokenRoleCounts = "token_role_counts"
+        case auditIntegrity = "audit_integrity"
         case usersError = "users_error"
         case grantsError = "grants_error"
         case tokensError = "tokens_error"
+        case auditIntegrityError = "audit_integrity_error"
+    }
+}
+
+struct SharedServerAuditIntegrityPayload: Decodable {
+    var status: String?
+    var eventCount: Int?
+    var integrityCounts: [String: Int]?
+    var chain: SharedServerAuditChainPayload?
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case eventCount = "event_count"
+        case integrityCounts = "integrity_counts"
+        case chain
+    }
+}
+
+struct SharedServerAuditChainPayload: Decodable {
+    var status: String?
+    var checkedPairs: Int?
+    var linkedPairs: Int?
+    var uncheckablePairs: Int?
+    var chainBreakCount: Int?
+    var externalGapCount: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case checkedPairs = "checked_pairs"
+        case linkedPairs = "linked_pairs"
+        case uncheckablePairs = "uncheckable_pairs"
+        case chainBreakCount = "chain_break_count"
+        case externalGapCount = "external_gap_count"
     }
 }
 

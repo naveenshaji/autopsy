@@ -290,6 +290,39 @@ final class ActivityStore: ObservableObject {
         return ""
     }
 
+    var sharedServerAuditIntegrityText: String {
+        guard let team = currentSharedServer?.team else { return "" }
+        if let integrity = team.auditIntegrity {
+            let status = integrity.status ?? ""
+            var parts = [status.isEmpty ? "unknown" : status]
+            if let counts = integrity.integrityCounts {
+                let missing = counts["missing"] ?? 0
+                let mismatch = counts["mismatch"] ?? 0
+                if missing > 0 {
+                    parts.append("missing: \(missing)")
+                }
+                if mismatch > 0 {
+                    parts.append("mismatch: \(mismatch)")
+                }
+            }
+            if let chain = integrity.chain {
+                if let breaks = chain.chainBreakCount, breaks > 0 {
+                    parts.append("breaks: \(breaks)")
+                } else if let status = chain.status, !status.isEmpty {
+                    parts.append("chain: \(status)")
+                }
+                if let externalGaps = chain.externalGapCount, externalGaps > 0 {
+                    parts.append("gaps: \(externalGaps)")
+                }
+            }
+            return parts.joined(separator: ", ")
+        }
+        if let error = team.auditIntegrityError, !error.isEmpty {
+            return error.clippedForMenuBar(limit: 28)
+        }
+        return ""
+    }
+
     var shouldShowOnboardingPrompt: Bool {
         (hasEmptyMemoryState || instructionStatus != nil) && !hasPriorMemory && !hasInstalledInstructions
     }
