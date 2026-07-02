@@ -434,6 +434,16 @@ private struct SharedSettingsTab: View {
                             || sharedRelationTargetKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     )
 
+                    Button("Check Policy") {
+                        store.checkSharedServerRelationPolicy(
+                            repoScope: sharedRelationRepoScope,
+                            relation: sharedRelation,
+                            factRating: sharedRelationFactRating,
+                            relationScope: "shared"
+                        )
+                    }
+                    .disabled(sharedActionDisabled || sharedRelation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
                     Button("Copy Relations") {
                         store.copySharedServerRelations(
                             repoScope: sharedRelationRepoScope,
@@ -490,6 +500,16 @@ private struct SharedSettingsTab: View {
                             || personalLinkKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                             || personalSharedKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     )
+
+                    Button("Check Policy") {
+                        store.checkSharedServerRelationPolicy(
+                            repoScope: personalLinkRepoScope,
+                            relation: personalRelation,
+                            factRating: personalFactRating,
+                            relationScope: "personal"
+                        )
+                    }
+                    .disabled(sharedActionDisabled || personalRelation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
                     Button("Copy Links") {
                         store.copySharedServerPersonalLinks(

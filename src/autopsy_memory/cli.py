@@ -4733,6 +4733,10 @@ def shared_server_relation_revoke_path(graph_slug: str) -> str:
     return shared_server_path(graph_slug, "/relations/revoke")
 
 
+def shared_server_relation_policy_check_path(graph_slug: str) -> str:
+    return shared_server_path(graph_slug, "/relations/check")
+
+
 def shared_server_personal_relations_path(
     graph_slug: str,
     repo: str,
@@ -5694,6 +5698,27 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
                 prev_hash=str(getattr(args, "prev_hash", "") or "").strip(),
                 created_at=str(getattr(args, "created_at", "") or "").strip(),
             ),
+            timeout=10,
+        )
+        print(json.dumps(payload, indent=2))
+        return
+    if action == "check-relation":
+        relation = str(getattr(args, "relation", "") or "").strip()
+        if not relation:
+            fail("shared-server check-relation requires --relation", 2)
+        relation_scope = str(getattr(args, "relation_scope", "shared") or "shared")
+        fact_rating = normalize_fact_rating(getattr(args, "fact_rating", None))
+        check_payload = {
+            "repo": repo,
+            "relation": relation,
+            "relation_scope": relation_scope if relation_scope in {"shared", "personal"} else "shared",
+            "fact_rating": 0.5 if fact_rating is None else fact_rating,
+        }
+        payload = shared_server_request_or_fail(
+            config,
+            shared_server_relation_policy_check_path(graph_slug),
+            method="POST",
+            payload=check_payload,
             timeout=10,
         )
         print(json.dumps(payload, indent=2))

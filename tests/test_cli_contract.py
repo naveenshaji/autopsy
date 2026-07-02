@@ -321,6 +321,18 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "--reason",
             "bad publish",
         ])
+        check_relation_args = parser.parse_args([
+            "shared-server",
+            "check-relation",
+            "--repo-scope",
+            "repo-a",
+            "--relation",
+            "supports",
+            "--relation-scope",
+            "personal",
+            "--fact-rating",
+            "0.9",
+        ])
         relate_args = parser.parse_args(["shared-server", "relate", "shared:1", "shared:2", "--repo-scope", "repo-a", "--relation", "depends_on", "--fact-rating", "0.85"])
         shared_relations_args = parser.parse_args([
             "shared-server",
@@ -448,6 +460,10 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(restore_version_args.version_id, "ver_1")
         self.assertEqual(restore_version_args.expected_version_ns, 456)
         self.assertEqual(restore_version_args.reason, "bad publish")
+        self.assertEqual(check_relation_args.shared_server_action, "check-relation")
+        self.assertEqual(check_relation_args.relation, "supports")
+        self.assertEqual(check_relation_args.relation_scope, "personal")
+        self.assertEqual(check_relation_args.fact_rating, 0.9)
         self.assertEqual(relate_args.shared_server_action, "relate")
         self.assertEqual(relate_args.stable_key, "shared:1")
         self.assertEqual(relate_args.target_key, "shared:2")
@@ -650,6 +666,10 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(
             cli.shared_server_relation_revoke_path("autopsy"),
             "/v1/shared-graphs/autopsy/relations/revoke",
+        )
+        self.assertEqual(
+            cli.shared_server_relation_policy_check_path("autopsy"),
+            "/v1/shared-graphs/autopsy/relations/check",
         )
 
     def test_shared_server_revoke_token_falls_back_to_graph_scope_on_403(self):
@@ -1351,6 +1371,60 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "fact": "one depends on two",
                         "fact_rating": 0.85,
                         "repo": "repo-a",
+                    },
+                )
+            ],
+        )
+
+    def test_shared_server_check_relation_posts_policy_preflight_payload(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "shared-server",
+            "check-relation",
+            "--repo-scope",
+            "repo-a",
+            "--relation",
+            "supports",
+            "--relation-scope",
+            "personal",
+            "--fact-rating",
+            "0.9",
+        ])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
+            calls.append((path, method, payload))
+            return {
+                "allowed": True,
+                "reason": "allowed",
+                "relation_scope": "personal",
+                "policy_fingerprint": "sha256:abc",
+                "dry_run": True,
+            }
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        payload = json.loads(stream.getvalue())
+        self.assertTrue(payload["dry_run"])
+        self.assertEqual(payload["policy_fingerprint"], "sha256:abc")
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "/v1/shared-graphs/autopsy/relations/check",
+                    "POST",
+                    {
+                        "repo": "repo-a",
+                        "relation": "supports",
+                        "relation_scope": "personal",
+                        "fact_rating": 0.9,
                     },
                 )
             ],

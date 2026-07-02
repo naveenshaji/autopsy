@@ -224,6 +224,12 @@ repo-policy fingerprint support include deterministic `policy_fingerprint`
 values on policy reads, inventories, access checks, and policy-change audit
 metadata so clients can compare effective rules without diffing full policy
 payloads.
+`shared-server check-relation --repo-scope <repo> --relation <label>
+--relation-scope shared|personal --fact-rating <0.0..1.0>` dry-runs the
+server's repo-policy relation checks without writing an edge. It returns
+`allowed`, `reason`, effective policy source, label-count, minimum rating,
+relation toggles, and `policy_fingerprint` so clients can explain a planned
+shared or personal relation before mutating the graph.
 `--repo` resolves to a team-stable Git scope such as
 `git:github.com/owner/repo` from `origin` when available, and falls back to the
 local absolute path for non-Git repos. `--repo-scope` passes an exact

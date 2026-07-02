@@ -427,6 +427,7 @@ def build_parser(
             "archive",
             "restore",
             "restore-version",
+            "check-relation",
             "relate",
             "context",
             "shared-relations",
@@ -456,9 +457,10 @@ def build_parser(
     shared_server_parser.add_argument("--mode", choices=("read", "write", "admin"), default="read", help="Access mode for shared-server access-check.")
     shared_server_parser.add_argument("--repo-scope", help="Exact shared-server repo scope. Overrides --repo path resolution for shared-server operations.")
     shared_server_parser.add_argument("--token", help="Bearer token for shared memory server access. Stored in a 0600 local config file.")
-    shared_server_parser.add_argument("--relation", help="Relation name for shared-server link.")
+    shared_server_parser.add_argument("--relation", help="Relation name for shared-server relate, link, or check-relation.")
+    shared_server_parser.add_argument("--relation-scope", choices=("shared", "personal"), default="shared", help="Relation policy scope for shared-server check-relation.")
     shared_server_parser.add_argument("--fact", default="", help="Optional relation fact text for shared-server link or relate.")
-    shared_server_parser.add_argument("--fact-rating", type=float, help="Optional 0.0-1.0 quality rating for shared-server relate or link.")
+    shared_server_parser.add_argument("--fact-rating", type=float, help="Optional 0.0-1.0 quality rating for shared-server relate, link, or check-relation.")
     shared_server_parser.add_argument("--personal-key", help="Personal stable-key filter for shared-server personal-links or personal-context, or personal key for link.")
     shared_server_parser.add_argument("--shared-key", help="Shared stable-key filter for shared-server personal-links, or shared key for link.")
     shared_server_parser.add_argument("--source-key", help="Source stable-key filter for shared-server shared-relations, or source key for relate.")

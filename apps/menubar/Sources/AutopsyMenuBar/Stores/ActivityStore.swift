@@ -74,6 +74,7 @@ final class ActivityStore: ObservableObject {
         "read_access_check",
         "read_repo_policy",
         "read_repo_policies",
+        "check_relation_policy",
         "read_audit_events",
         "read_audit_integrity",
         "verify_audit_receipt",
@@ -284,6 +285,7 @@ final class ActivityStore: ObservableObject {
                 ("repo_policies", "repo policies"),
                 ("repo_policy_inventory", "policy inventory"),
                 ("repo_policy_fingerprints", "policy fingerprints"),
+                ("relation_policy_preflight", "relation checks"),
                 ("mutation_audit_receipts", "audit receipts"),
                 ("audit_receipt_verification", "audit verification"),
                 ("personal_shared_relations", "personal links"),
@@ -883,6 +885,12 @@ final class ActivityStore: ObservableObject {
     func relateSharedServerMemories(sourceKey: String, targetKey: String, repoScope: String, relation: String, fact: String, factRating: String) {
         Task {
             await relateSharedMemories(sourceKey: sourceKey, targetKey: targetKey, repoScope: repoScope, relation: relation, fact: fact, factRating: factRating)
+        }
+    }
+
+    func checkSharedServerRelationPolicy(repoScope: String, relation: String, factRating: String, relationScope: String) {
+        Task {
+            await checkSharedRelationPolicy(repoScope: repoScope, relation: relation, factRating: factRating, relationScope: relationScope)
         }
     }
 
@@ -1860,6 +1868,47 @@ final class ActivityStore: ObservableObject {
         )
     }
 
+    private func checkSharedRelationPolicy(repoScope: String, relation: String, factRating: String, relationScope: String) async {
+        guard !isManagingSharedAccess else { return }
+        let trimmedRelation = relation.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedRelation.isEmpty else {
+            sharedServerError = "Relation required"
+            return
+        }
+        isManagingSharedAccess = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingSharedAccess = false
+        }
+
+        do {
+            let normalizedRepo = normalizedRepoScope(repoScope)
+            let normalizedScope = relationScope == "personal" ? "personal" : "shared"
+            var arguments = [
+                "shared-server",
+                "check-relation",
+                "--repo-scope",
+                normalizedRepo,
+                "--relation",
+                trimmedRelation,
+                "--relation-scope",
+                normalizedScope,
+            ]
+            let trimmedFactRating = factRating.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedFactRating.isEmpty {
+                arguments += ["--fact-rating", trimmedFactRating]
+            }
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run(arguments)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(sharedRelationPolicyCheckReport(from: output, repoScope: normalizedRepo), forType: .string)
+            lastActionMessage = "Relation policy copied"
+            clearLastActionMessageAfterDelay(expected: "Relation policy copied")
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
+    }
+
     private func copySharedRelations(repoScope: String, sourceKey: String, targetKey: String) async {
         guard !isManagingSharedAccess else { return }
         isManagingSharedAccess = true
@@ -2668,6 +2717,52 @@ final class ActivityStore: ObservableObject {
         }
         if grants.count > 8 {
             lines.append("- \(grants.count - 8) more grants omitted")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func sharedRelationPolicyCheckReport(from output: String, repoScope: String) -> String {
+        guard let payload = jsonObject(from: output) else {
+            return output.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let requestedRepo = auditString(payload["repo"]) ?? repoScope
+        let relation = auditString(payload["relation"]) ?? "unknown"
+        let relationScope = auditString(payload["relation_scope"]) ?? "shared"
+        let reason = auditString(payload["reason"]) ?? "unknown"
+        let allowed = auditBool(payload["allowed"]) == true
+        let factRating = auditDecimal(payload["fact_rating"]) ?? "0.50"
+        let minFactRating = auditDecimal(payload["min_fact_rating"]) ?? "0.00"
+        let labels = (payload["allowed_relation_labels"] as? [Any] ?? [])
+            .compactMap { auditString($0) }
+        let labelCount = auditInt(payload["allowed_relation_label_count"]) ?? labels.count
+        let policyRepo = auditString(payload["policy_repo"]) ?? requestedRepo
+        let inheritedFrom = auditString(payload["policy_inherited_from"]) ?? ""
+        let policyScope = inheritedFrom.isEmpty ? policyRepo : "\(policyRepo) inherited from \(inheritedFrom)"
+        let allowShared = auditBool(payload["allow_shared_relations"]) != false
+        let allowPersonal = auditBool(payload["allow_personal_relations"]) != false
+
+        var lines = [
+            "Autopsy Relation Policy Check",
+            "Result: \(allowed ? "allowed" : "blocked")",
+            "Repo: \(requestedRepo)",
+            "Scope: \(relationScope)",
+            "Relation: \(relation)",
+            "Reason: \(reason)",
+            "Fact rating: \(factRating)",
+            "Minimum fact rating: \(minFactRating)",
+            "Allowed relation labels: \(labels.isEmpty ? "any" : labels.joined(separator: ", "))",
+            "Allowed label count: \(labelCount)",
+            "Repo policy: \(policyScope)",
+            "Shared relations: \(allowShared ? "allowed" : "disabled")",
+            "Personal links: \(allowPersonal ? "allowed" : "disabled")",
+            "Dry run: \(auditBool(payload["dry_run"]) == true ? "yes" : "no")",
+        ]
+        if let version = auditString(payload["policy_version_ns"]), !version.isEmpty {
+            lines.append("Policy version: \(version)")
+        }
+        if let fingerprint = auditString(payload["policy_fingerprint"]) {
+            lines.append("Policy fingerprint: \(shortAuditHash(fingerprint))")
         }
         return lines.joined(separator: "\n")
     }

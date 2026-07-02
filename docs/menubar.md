@@ -88,13 +88,13 @@ Run checks:
   shared memory archive/restore, and
   shared memory history copy/version restore, shared context copy with optional
   relation evidence threshold, shared
-  relation create/list/unlink with evidence rating, and private
-  personal-to-shared link create/list/unlink with link evidence rating and linked-context evidence
-  threshold. Raw audit copies include privacy-preserving context-read events
+  relation policy-check copy plus create/list/unlink with evidence rating, and
+  private personal-to-shared policy-check copy plus link/list/unlink with link
+  evidence rating and linked-context evidence threshold. Raw audit copies include privacy-preserving context-read events
   with hashed queries and counts when the server records them. Activity-audit
   summaries request sensitive shared-server read events such as access checks,
-  token/grant/user inventories, policy reads/inventories, memory lists/history,
-  shared relation lists, and audit reads, then copy counts, limits, statuses,
+  token/grant/user inventories, policy reads/inventories, relation policy checks,
+  memory lists/history, shared relation lists, and audit reads, then copy counts, limits, statuses,
   roles/reasons, short policy fingerprints, policy metadata, and filter-presence
   flags. Context-audit
   summaries request only shared-context and
