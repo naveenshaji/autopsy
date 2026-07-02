@@ -5529,6 +5529,27 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         )
         print(json.dumps(payload, indent=2))
         return
+    if action == "handoff-owner":
+        from_user_id = str(getattr(args, "from_user_id", "") or "").strip()
+        to_user_id = str(getattr(args, "to_user_id", "") or "").strip()
+        source_role_after = str(getattr(args, "source_role_after", "") or "writer").strip()
+        if not from_user_id or not to_user_id:
+            fail("shared-server handoff-owner requires --from-user-id and --to-user-id", 2)
+        payload = shared_server_request_or_fail(
+            config,
+            "/v1/grants/handoff-owner",
+            method="POST",
+            payload={
+                "from_user_id": from_user_id,
+                "to_user_id": to_user_id,
+                "graph_slug": graph_slug,
+                "repo": repo,
+                "source_role_after": source_role_after,
+            },
+            timeout=10,
+        )
+        print(json.dumps(payload, indent=2))
+        return
     if action == "list":
         payload = shared_server_request_or_fail(
             config,

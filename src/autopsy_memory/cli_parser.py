@@ -414,6 +414,7 @@ def build_parser(
             "invite",
             "revoke-token",
             "revoke-grant",
+            "handoff-owner",
             "publish",
             "list",
             "memory-history",
@@ -438,11 +439,14 @@ def build_parser(
     shared_server_parser.add_argument("--base-url", help="Shared server base URL, for example https://autopsy-server.fly.dev.")
     shared_server_parser.add_argument("--graph-slug", help="Shared graph slug. Defaults to autopsy when configuring.")
     shared_server_parser.add_argument("--user-id", help="Server user id for config, token, user lifecycle, or grant operations.")
+    shared_server_parser.add_argument("--from-user-id", help="Source owner user id for shared-server handoff-owner.")
+    shared_server_parser.add_argument("--to-user-id", help="Target owner user id for shared-server handoff-owner.")
     shared_server_parser.add_argument("--email", help="Email for shared-server create-user or invite.")
     shared_server_parser.add_argument("--name", default="", help="Display name for shared-server create-user or invite.")
     shared_server_parser.add_argument("--label", default="default", help="Token label for shared-server create-token or invite.")
     shared_server_parser.add_argument("--expires-at", help="ISO-8601 expiration timestamp for shared-server create-token or invite.")
     shared_server_parser.add_argument("--role", choices=("reader", "writer", "owner"), help="Grant role for shared-server grant or invite.")
+    shared_server_parser.add_argument("--source-role-after", choices=("reader", "writer", "none"), default="writer", help="Role to leave the source owner with after shared-server handoff-owner.")
     shared_server_parser.add_argument("--mode", choices=("read", "write", "admin"), default="read", help="Access mode for shared-server access-check.")
     shared_server_parser.add_argument("--repo-scope", help="Exact shared-server repo scope. Overrides --repo path resolution for shared-server operations.")
     shared_server_parser.add_argument("--token", help="Bearer token for shared memory server access. Stored in a 0600 local config file.")

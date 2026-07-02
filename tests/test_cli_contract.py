@@ -209,6 +209,18 @@ class AutopsyCLIContractTests(unittest.TestCase):
         enable_args = parser.parse_args(["shared-server", "enable-user", "--user-id", "usr_1"])
         revoke_args = parser.parse_args(["shared-server", "revoke-token", "tok_1"])
         scoped_tokens_args = parser.parse_args(["shared-server", "scoped-tokens", "--repo-scope", "repo-a"])
+        handoff_args = parser.parse_args([
+            "shared-server",
+            "handoff-owner",
+            "--from-user-id",
+            "usr_owner",
+            "--to-user-id",
+            "usr_peer",
+            "--repo-scope",
+            "repo-a",
+            "--source-role-after",
+            "none",
+        ])
         access_check_args = parser.parse_args(["shared-server", "access-check", "--repo-scope", "repo-a", "--mode", "write"])
         audit_args = parser.parse_args([
             "shared-server",
@@ -334,6 +346,11 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(revoke_args.stable_key, "tok_1")
         self.assertEqual(scoped_tokens_args.shared_server_action, "scoped-tokens")
         self.assertEqual(scoped_tokens_args.repo_scope, "repo-a")
+        self.assertEqual(handoff_args.shared_server_action, "handoff-owner")
+        self.assertEqual(handoff_args.from_user_id, "usr_owner")
+        self.assertEqual(handoff_args.to_user_id, "usr_peer")
+        self.assertEqual(handoff_args.source_role_after, "none")
+        self.assertEqual(handoff_args.repo_scope, "repo-a")
         self.assertEqual(access_check_args.shared_server_action, "access-check")
         self.assertEqual(access_check_args.repo_scope, "repo-a")
         self.assertEqual(access_check_args.mode, "write")
@@ -882,6 +899,53 @@ class AutopsyCLIContractTests(unittest.TestCase):
                     "/v1/shared-graphs/autopsy/tokens?repo=repo-a",
                     "GET",
                     None,
+                )
+            ],
+        )
+
+    def test_shared_server_handoff_owner_posts_transfer_payload(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "shared-server",
+            "handoff-owner",
+            "--from-user-id",
+            "usr_owner",
+            "--to-user-id",
+            "usr_peer",
+            "--repo-scope",
+            "repo-a",
+            "--source-role-after",
+            "reader",
+        ])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        calls: list[tuple[str, str, dict[str, str] | None]] = []
+
+        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
+            calls.append((path, method, payload))
+            return {"from_user_id": "usr_owner", "to_user_id": "usr_peer", "source_role_after": "reader"}
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        self.assertEqual(json.loads(stream.getvalue())["source_role_after"], "reader")
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "/v1/grants/handoff-owner",
+                    "POST",
+                    {
+                        "from_user_id": "usr_owner",
+                        "to_user_id": "usr_peer",
+                        "graph_slug": "autopsy",
+                        "repo": "repo-a",
+                        "source_role_after": "reader",
+                    },
                 )
             ],
         )
