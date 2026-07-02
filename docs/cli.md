@@ -182,9 +182,10 @@ last-used, expired, and revoked scoped-token counts,
 explicit repo-policy inventory counts, constrained-policy counts, and
 effective repo-policy source, version, and fingerprint fields without exposing
 policy notes or relation label values, plus server-side audit integrity status
-for the selected repo. It also summarizes recent audit-log reads by direct vs
-scoped actor token, scope match, repo, role, and latest timestamp without
-exposing token IDs. Stale relation-policy write conflicts are summarized by
+for the selected repo. It also summarizes recent audit-log reads and shared
+graph reads by direct vs scoped actor token, scope match, repo, role, and
+latest timestamp without exposing token IDs. Stale relation-policy write
+conflicts are summarized by
 count, relation scope, current rejection reason, and latest timestamp,
 preferring the server-side audit summary endpoint and falling back to bounded raw
 audit reads only for older servers, without echoing raw audit events or stable

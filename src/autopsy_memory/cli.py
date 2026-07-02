@@ -5072,20 +5072,28 @@ def summarize_shared_server_invite_expiration_summary(summary: dict[str, Any]) -
     }
 
 
-def summarize_shared_server_audit_reader_summary(summary: dict[str, Any]) -> dict[str, Any]:
+def summarize_shared_server_actor_scope_audit_summary(summary: dict[str, Any], *, prefix: str) -> dict[str, Any]:
     metadata_counts = summary.get("metadata_counts") if isinstance(summary.get("metadata_counts"), dict) else {}
     scoped_counts = _int_count_map(metadata_counts.get("actor_token_scoped"))
     return {
-        "audit_reader_audit_count": _safe_int(summary.get("event_count")),
-        "audit_reader_scoped_token_count": scoped_counts.get("true", 0),
-        "audit_reader_direct_token_count": scoped_counts.get("false", 0),
-        "audit_reader_unknown_token_scope_count": scoped_counts.get("unknown", 0),
-        "audit_reader_scope_match_counts": _int_count_map(metadata_counts.get("actor_token_scope_matches")),
-        "audit_reader_scope_graph_counts": _int_count_map(metadata_counts.get("actor_token_scope_graph_slug")),
-        "audit_reader_scope_repo_counts": _int_count_map(metadata_counts.get("actor_token_scope_repo")),
-        "audit_reader_scope_role_counts": _int_count_map(metadata_counts.get("actor_token_scope_role")),
-        "latest_audit_reader_audit_at": str(summary.get("latest_created_at") or ""),
+        f"{prefix}_audit_count": _safe_int(summary.get("event_count")),
+        f"{prefix}_scoped_token_count": scoped_counts.get("true", 0),
+        f"{prefix}_direct_token_count": scoped_counts.get("false", 0),
+        f"{prefix}_unknown_token_scope_count": scoped_counts.get("unknown", 0),
+        f"{prefix}_scope_match_counts": _int_count_map(metadata_counts.get("actor_token_scope_matches")),
+        f"{prefix}_scope_graph_counts": _int_count_map(metadata_counts.get("actor_token_scope_graph_slug")),
+        f"{prefix}_scope_repo_counts": _int_count_map(metadata_counts.get("actor_token_scope_repo")),
+        f"{prefix}_scope_role_counts": _int_count_map(metadata_counts.get("actor_token_scope_role")),
+        f"latest_{prefix}_audit_at": str(summary.get("latest_created_at") or ""),
     }
+
+
+def summarize_shared_server_audit_reader_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    return summarize_shared_server_actor_scope_audit_summary(summary, prefix="audit_reader")
+
+
+def summarize_shared_server_shared_read_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    return summarize_shared_server_actor_scope_audit_summary(summary, prefix="shared_read")
 
 
 def summarize_shared_server_storage_status(status: dict[str, Any]) -> dict[str, Any]:
@@ -5136,6 +5144,7 @@ def build_shared_server_team_status_payload(*, config_path: str | None = None, r
         "can_read_relation_policy_conflicts": False,
         "can_read_invite_expiration_summary": False,
         "can_read_audit_reader_summary": False,
+        "can_read_shared_read_summary": False,
         "can_read_storage_status": False,
     }
     payload["team"] = team
@@ -5308,6 +5317,39 @@ def build_shared_server_team_status_payload(*, config_path: str | None = None, r
         team["can_read_audit_reader_summary"] = True
         team["audit_reader_summary_source"] = "summary"
         team.update(summarize_shared_server_audit_reader_summary(audit_reader_summary_payload))
+    try:
+        shared_read_summary_payload = shared_server_request(
+            config,
+            shared_server_audit_summary_path(
+                graph_slug,
+                repo or "*",
+                limit=50,
+                actions=[
+                    "read_memories",
+                    "read_memory_history",
+                    "read_shared_context",
+                    "read_shared_relations",
+                    "read_personal_relations",
+                    "read_personal_context",
+                ],
+                metadata_fields=[
+                    "actor_token_scoped",
+                    "actor_token_scope_matches",
+                    "actor_token_scope_graph_slug",
+                    "actor_token_scope_repo",
+                    "actor_token_scope_role",
+                ],
+            ),
+            timeout=10,
+        )
+    except urllib.error.HTTPError as exc:
+        team["shared_read_summary_error"] = shared_server_http_error_message(exc)
+    except Exception as exc:
+        team["shared_read_summary_error"] = str(exc)
+    else:
+        team["can_read_shared_read_summary"] = True
+        team["shared_read_summary_source"] = "summary"
+        team.update(summarize_shared_server_shared_read_summary(shared_read_summary_payload))
     if read_raw_conflict_audits:
         try:
             conflict_payload = shared_server_request(

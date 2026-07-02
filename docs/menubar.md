@@ -81,9 +81,9 @@ Run checks:
   including active never-used, stale, and latest-use signals,
   expiring invite/token issuance,
   invite-token inventory copy, token cleanup, policy-aware access-check copy,
-  policy-conflict count/status display, audit-access scope summary display,
-  raw audit copy, policy-aware access-change audit copy, activity-audit
-  summary copy, context-audit summary copy,
+  policy-conflict count/status display, audit-access and shared-read scope
+  summary display, raw audit copy, policy-aware access-change audit copy,
+  activity-audit summary copy, context-audit summary copy,
   audit-integrity summary copy, global security-audit summary copy with
   authorization-denial actor-token scope details for
   global-admin tokens, audit receipt verification report copy, versioned repo policy copy/update/reset,
@@ -132,7 +132,7 @@ Run checks:
   token because they intentionally omit graph and repo filters.
   Team status is requested for the current workspace repo scope by default and
   also surfaces disabled-user counts, explicit/constrained repo-policy inventory
-  counts, effective repo-policy source/fingerprint, and the server-side audit
-  integrity status inline.
+  counts, effective repo-policy source/fingerprint, server-side audit integrity,
+  audit-access actor scope, and shared-read actor scope inline.
 - Attention items when available.
 - Quit action.

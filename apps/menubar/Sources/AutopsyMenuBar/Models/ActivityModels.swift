@@ -99,6 +99,7 @@ struct SharedServerTeamPayload: Decodable {
     var canReadRelationPolicyConflicts: Bool?
     var canReadInviteExpirationSummary: Bool?
     var canReadAuditReaderSummary: Bool?
+    var canReadSharedReadSummary: Bool?
     var canReadStorageStatus: Bool?
     var usersCount: Int?
     var activeUsersCount: Int?
@@ -158,6 +159,16 @@ struct SharedServerTeamPayload: Decodable {
     var auditReaderScopeRepoCounts: [String: Int]?
     var auditReaderScopeRoleCounts: [String: Int]?
     var latestAuditReaderAuditAt: String?
+    var sharedReadSummarySource: String?
+    var sharedReadAuditCount: Int?
+    var sharedReadScopedTokenCount: Int?
+    var sharedReadDirectTokenCount: Int?
+    var sharedReadUnknownTokenScopeCount: Int?
+    var sharedReadScopeMatchCounts: [String: Int]?
+    var sharedReadScopeGraphCounts: [String: Int]?
+    var sharedReadScopeRepoCounts: [String: Int]?
+    var sharedReadScopeRoleCounts: [String: Int]?
+    var latestSharedReadAuditAt: String?
     var storageOK: Bool?
     var storageBackend: String?
     var storageCheckedAt: String?
@@ -193,6 +204,7 @@ struct SharedServerTeamPayload: Decodable {
     var relationPolicyConflictsError: String?
     var inviteExpirationSummaryError: String?
     var auditReaderSummaryError: String?
+    var sharedReadSummaryError: String?
     var storageStatusError: String?
 
     enum CodingKeys: String, CodingKey {
@@ -206,6 +218,7 @@ struct SharedServerTeamPayload: Decodable {
         case canReadRelationPolicyConflicts = "can_read_relation_policy_conflicts"
         case canReadInviteExpirationSummary = "can_read_invite_expiration_summary"
         case canReadAuditReaderSummary = "can_read_audit_reader_summary"
+        case canReadSharedReadSummary = "can_read_shared_read_summary"
         case canReadStorageStatus = "can_read_storage_status"
         case usersCount = "users_count"
         case activeUsersCount = "active_users_count"
@@ -265,6 +278,16 @@ struct SharedServerTeamPayload: Decodable {
         case auditReaderScopeRepoCounts = "audit_reader_scope_repo_counts"
         case auditReaderScopeRoleCounts = "audit_reader_scope_role_counts"
         case latestAuditReaderAuditAt = "latest_audit_reader_audit_at"
+        case sharedReadSummarySource = "shared_read_summary_source"
+        case sharedReadAuditCount = "shared_read_audit_count"
+        case sharedReadScopedTokenCount = "shared_read_scoped_token_count"
+        case sharedReadDirectTokenCount = "shared_read_direct_token_count"
+        case sharedReadUnknownTokenScopeCount = "shared_read_unknown_token_scope_count"
+        case sharedReadScopeMatchCounts = "shared_read_scope_match_counts"
+        case sharedReadScopeGraphCounts = "shared_read_scope_graph_counts"
+        case sharedReadScopeRepoCounts = "shared_read_scope_repo_counts"
+        case sharedReadScopeRoleCounts = "shared_read_scope_role_counts"
+        case latestSharedReadAuditAt = "latest_shared_read_audit_at"
         case storageOK = "storage_ok"
         case storageBackend = "storage_backend"
         case storageCheckedAt = "storage_checked_at"
@@ -300,6 +323,7 @@ struct SharedServerTeamPayload: Decodable {
         case relationPolicyConflictsError = "relation_policy_conflicts_error"
         case inviteExpirationSummaryError = "invite_expiration_summary_error"
         case auditReaderSummaryError = "audit_reader_summary_error"
+        case sharedReadSummaryError = "shared_read_summary_error"
         case storageStatusError = "storage_status_error"
     }
 }

@@ -494,34 +494,43 @@ final class ActivityStore: ObservableObject {
         return ""
     }
 
-    var sharedServerAuditAccessText: String {
-        guard let team = currentSharedServer?.team else { return "" }
-        if let count = team.auditReaderAuditCount {
+    private func sharedServerActorScopeAuditText(
+        count: Int?,
+        scoped: Int?,
+        direct: Int?,
+        unknown: Int?,
+        matchCounts: [String: Int]?,
+        roleCounts: [String: Int]?,
+        repoCounts: [String: Int]?,
+        latest: String?,
+        error: String?
+    ) -> String {
+        if let count {
             var parts: [String] = []
-            if let scoped = team.auditReaderScopedTokenCount, scoped > 0 {
+            if let scoped, scoped > 0 {
                 parts.append("scoped: \(scoped)")
             }
-            if let direct = team.auditReaderDirectTokenCount, direct > 0 {
+            if let direct, direct > 0 {
                 parts.append("direct: \(direct)")
             }
-            if let unknown = team.auditReaderUnknownTokenScopeCount, unknown > 0 {
+            if let unknown, unknown > 0 {
                 parts.append("unknown: \(unknown)")
             }
-            if let matchCounts = team.auditReaderScopeMatchCounts, !matchCounts.isEmpty {
+            if let matchCounts, !matchCounts.isEmpty {
                 let matches = matchCounts
                     .sorted { $0.key < $1.key }
                     .map { "\($0.key): \($0.value)" }
                     .joined(separator: ", ")
                 parts.append("scope match \(matches)")
             }
-            if let roleCounts = team.auditReaderScopeRoleCounts, !roleCounts.isEmpty {
+            if let roleCounts, !roleCounts.isEmpty {
                 let roles = roleCounts
                     .sorted { $0.key < $1.key }
                     .map { "\($0.key): \($0.value)" }
                     .joined(separator: ", ")
                 parts.append("roles \(roles)")
             }
-            if let repoCounts = team.auditReaderScopeRepoCounts, !repoCounts.isEmpty {
+            if let repoCounts, !repoCounts.isEmpty {
                 let repos = repoCounts
                     .sorted { $0.key < $1.key }
                     .prefix(3)
@@ -531,16 +540,46 @@ final class ActivityStore: ObservableObject {
                     parts.append("repos \(repos)")
                 }
             }
-            if let latest = team.latestAuditReaderAuditAt, !latest.isEmpty {
+            if let latest, !latest.isEmpty {
                 parts.append("latest \(compactSharedServerDate(latest))")
             }
             let text = parts.isEmpty ? "\(count)" : "\(count) (\(parts.joined(separator: ", ")))"
             return text.clippedForMenuBar(limit: 110)
         }
-        if let error = team.auditReaderSummaryError, !error.isEmpty {
+        if let error, !error.isEmpty {
             return error.clippedForMenuBar(limit: 28)
         }
         return ""
+    }
+
+    var sharedServerAuditAccessText: String {
+        guard let team = currentSharedServer?.team else { return "" }
+        return sharedServerActorScopeAuditText(
+            count: team.auditReaderAuditCount,
+            scoped: team.auditReaderScopedTokenCount,
+            direct: team.auditReaderDirectTokenCount,
+            unknown: team.auditReaderUnknownTokenScopeCount,
+            matchCounts: team.auditReaderScopeMatchCounts,
+            roleCounts: team.auditReaderScopeRoleCounts,
+            repoCounts: team.auditReaderScopeRepoCounts,
+            latest: team.latestAuditReaderAuditAt,
+            error: team.auditReaderSummaryError
+        )
+    }
+
+    var sharedServerSharedReadAccessText: String {
+        guard let team = currentSharedServer?.team else { return "" }
+        return sharedServerActorScopeAuditText(
+            count: team.sharedReadAuditCount,
+            scoped: team.sharedReadScopedTokenCount,
+            direct: team.sharedReadDirectTokenCount,
+            unknown: team.sharedReadUnknownTokenScopeCount,
+            matchCounts: team.sharedReadScopeMatchCounts,
+            roleCounts: team.sharedReadScopeRoleCounts,
+            repoCounts: team.sharedReadScopeRepoCounts,
+            latest: team.latestSharedReadAuditAt,
+            error: team.sharedReadSummaryError
+        )
     }
 
     var sharedServerStorageText: String {

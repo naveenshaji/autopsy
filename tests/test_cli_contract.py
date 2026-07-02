@@ -2908,6 +2908,45 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "filtered_window": True,
                     },
                 }
+            if path == (
+                "/v1/audit-events/summary?graph_slug=autopsy&limit=50&repo=repo-a"
+                "&action=read_memories&action=read_memory_history&action=read_shared_context&action=read_shared_relations"
+                "&action=read_personal_relations&action=read_personal_context"
+                "&metadata_field=actor_token_scoped&metadata_field=actor_token_scope_matches"
+                "&metadata_field=actor_token_scope_graph_slug&metadata_field=actor_token_scope_repo"
+                "&metadata_field=actor_token_scope_role"
+            ):
+                return {
+                    "event_count": 9,
+                    "metadata_counts": {
+                        "actor_token_scoped": {"true": 3, "false": 5, "unknown": 1},
+                        "actor_token_scope_matches": {"true": 3, "false": 5, "unknown": 1},
+                        "actor_token_scope_graph_slug": {"autopsy": 3, "unknown": 6},
+                        "actor_token_scope_repo": {"repo-a": 3, "unknown": 6},
+                        "actor_token_scope_role": {"owner": 2, "reader": 1, "unknown": 6},
+                    },
+                    "latest_created_at": "2026-07-02T10:45:00Z",
+                    "scope": {
+                        "graph_slug": "autopsy",
+                        "repo": "repo-a",
+                        "actions": [
+                            "read_memories",
+                            "read_memory_history",
+                            "read_shared_context",
+                            "read_shared_relations",
+                            "read_personal_relations",
+                            "read_personal_context",
+                        ],
+                        "metadata_fields": [
+                            "actor_token_scoped",
+                            "actor_token_scope_matches",
+                            "actor_token_scope_graph_slug",
+                            "actor_token_scope_repo",
+                            "actor_token_scope_role",
+                        ],
+                        "filtered_window": True,
+                    },
+                }
             raise AssertionError(path)
 
         with mock.patch.object(cli, "load_shared_server_config", return_value=config), mock.patch.object(cli, "shared_server_request", side_effect=fake_request):
@@ -3010,6 +3049,17 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["team"]["audit_reader_scope_repo_counts"], {"repo-a": 2, "unknown": 4})
         self.assertEqual(payload["team"]["audit_reader_scope_role_counts"], {"owner": 1, "reader": 1, "unknown": 4})
         self.assertEqual(payload["team"]["latest_audit_reader_audit_at"], "2026-07-02T10:30:00Z")
+        self.assertTrue(payload["team"]["can_read_shared_read_summary"])
+        self.assertEqual(payload["team"]["shared_read_summary_source"], "summary")
+        self.assertEqual(payload["team"]["shared_read_audit_count"], 9)
+        self.assertEqual(payload["team"]["shared_read_scoped_token_count"], 3)
+        self.assertEqual(payload["team"]["shared_read_direct_token_count"], 5)
+        self.assertEqual(payload["team"]["shared_read_unknown_token_scope_count"], 1)
+        self.assertEqual(payload["team"]["shared_read_scope_match_counts"], {"false": 5, "true": 3, "unknown": 1})
+        self.assertEqual(payload["team"]["shared_read_scope_graph_counts"], {"autopsy": 3, "unknown": 6})
+        self.assertEqual(payload["team"]["shared_read_scope_repo_counts"], {"repo-a": 3, "unknown": 6})
+        self.assertEqual(payload["team"]["shared_read_scope_role_counts"], {"owner": 2, "reader": 1, "unknown": 6})
+        self.assertEqual(payload["team"]["latest_shared_read_audit_at"], "2026-07-02T10:45:00Z")
         self.assertNotIn("audit_1", json.dumps(payload["team"]["audit_integrity"]))
         self.assertNotIn("audit_conflict_1", json.dumps(payload["team"]))
         self.assertNotIn("secret-shared-target", json.dumps(payload["team"]))
