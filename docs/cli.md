@@ -83,6 +83,7 @@ autopsy shared-server grants --repo-scope /path/to/repo
 autopsy shared-server scoped-tokens --repo-scope /path/to/repo
 autopsy shared-server access-check --repo-scope /path/to/repo --mode write
 autopsy shared-server audit --repo-scope /path/to/repo --action read_shared_context
+autopsy shared-server audit --global-audit --action auth_failure
 autopsy shared-server invite --email dev@example.com --role writer --repo-scope /path/to/repo
 autopsy shared-server revoke-token tok_123 --repo-scope /path/to/repo
 autopsy shared-server archive shared:key --repo-scope /path/to/repo --reason duplicate
@@ -158,6 +159,9 @@ tokens for repos they own without global token access. `shared-server audit
 --repo-scope <repo>` lists scoped server audit events for graph owners or admins.
 Add repeated or comma-separated `--action <event>` filters when you only need a
 specific event class such as `read_shared_context` or `read_personal_context`.
+Use `shared-server audit --global-audit` with a global-admin token to omit
+graph/repo filters for server-wide security events such as `auth_failure`; the
+same flag works with `shared-server audit-integrity`.
 `shared-server audit-integrity --repo-scope <repo>` returns the server-side
 bounded integrity summary for the same filters, including per-status counts,
 window chain status, external filtered gaps, uncheckable pairs, and real

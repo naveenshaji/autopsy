@@ -4487,10 +4487,9 @@ def shared_server_audit_query_params(
     limit: int,
     actions: list[str] | tuple[str, ...] | str | None = None,
 ) -> list[tuple[str, Any]]:
-    query: list[tuple[str, Any]] = [
-        ("graph_slug", graph_slug),
-        ("limit", max(1, min(int(limit), 500))),
-    ]
+    query: list[tuple[str, Any]] = [("limit", max(1, min(int(limit), 500)))]
+    if graph_slug:
+        query.insert(0, ("graph_slug", graph_slug))
     if repo and repo != "*":
         query.append(("repo", repo))
     for action in split_cli_csv_values(actions):
@@ -5366,11 +5365,13 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         print(json.dumps(payload, indent=2))
         return
     if action == "audit":
+        audit_graph_slug = "" if bool(getattr(args, "global_audit", False)) else graph_slug
+        audit_repo = "*" if bool(getattr(args, "global_audit", False)) else repo
         payload = shared_server_request_or_fail(
             config,
             shared_server_audit_path(
-                graph_slug,
-                repo,
+                audit_graph_slug,
+                audit_repo,
                 limit=int(getattr(args, "limit", 100) or 100),
                 actions=split_cli_csv_values(getattr(args, "action", None)),
             ),
@@ -5379,11 +5380,13 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         print(json.dumps(payload, indent=2))
         return
     if action == "audit-integrity":
+        audit_graph_slug = "" if bool(getattr(args, "global_audit", False)) else graph_slug
+        audit_repo = "*" if bool(getattr(args, "global_audit", False)) else repo
         payload = shared_server_request_or_fail(
             config,
             shared_server_audit_integrity_path(
-                graph_slug,
-                repo,
+                audit_graph_slug,
+                audit_repo,
                 limit=int(getattr(args, "limit", 100) or 100),
                 actions=split_cli_csv_values(getattr(args, "action", None)),
             ),

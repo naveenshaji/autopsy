@@ -180,6 +180,13 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "--action",
             "read_shared_context,read_personal_context",
         ])
+        global_audit_args = parser.parse_args([
+            "shared-server",
+            "audit",
+            "--global-audit",
+            "--action",
+            "auth_failure",
+        ])
         audit_integrity_args = parser.parse_args([
             "shared-server",
             "audit-integrity",
@@ -290,6 +297,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(audit_args.repo_scope, "repo-a")
         self.assertEqual(audit_args.limit, 25)
         self.assertEqual(audit_args.action, ["read_shared_context,read_personal_context"])
+        self.assertTrue(global_audit_args.global_audit)
+        self.assertEqual(global_audit_args.action, ["auth_failure"])
         self.assertEqual(audit_integrity_args.shared_server_action, "audit-integrity")
         self.assertEqual(audit_integrity_args.repo_scope, "repo-a")
         self.assertEqual(audit_integrity_args.limit, 25)
@@ -364,6 +373,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
             actions=["read_shared_context,read_personal_context"],
         )
         unscoped_path = cli.shared_server_audit_path("autopsy", "*", limit=1000)
+        global_path = cli.shared_server_audit_path("", "*", limit=25, actions=["auth_failure"])
+        global_integrity_path = cli.shared_server_audit_integrity_path("", "*", limit=25, actions=["auth_failure"])
 
         self.assertEqual(path, "/v1/audit-events?graph_slug=autopsy&limit=25&repo=repo-a")
         self.assertEqual(integrity_path, "/v1/audit-events/integrity?graph_slug=autopsy&limit=25&repo=repo-a")
@@ -373,6 +384,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
         )
         self.assertEqual(csv_filtered_path, filtered_path)
         self.assertEqual(unscoped_path, "/v1/audit-events?graph_slug=autopsy&limit=500")
+        self.assertEqual(global_path, "/v1/audit-events?limit=25&action=auth_failure")
+        self.assertEqual(global_integrity_path, "/v1/audit-events/integrity?limit=25&action=auth_failure")
 
     def test_shared_server_access_check_path_is_graph_scoped(self):
         self.assertEqual(
