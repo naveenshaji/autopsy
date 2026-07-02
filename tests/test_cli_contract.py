@@ -72,6 +72,12 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(Path(configured["AUTOPSY_APP_SUPPORT_DIR"]).name, "AutopsyDev")
         self.assertIn("AutopsyDev", configured["AUTOPSY_UNIFIED_MEMORY_ROOT"])
         self.assertIn("AutopsyDev", configured["AUTOPSY_FALKORDB_LITE_PATH"])
+        self.assertIn("AutopsyDev", configured["AUTOPSY_SHARED_SERVER_CONFIG"])
+        self.assertIn("AutopsyDev", configured["AUTOPSY_ACTIVITY_SNAPSHOT_PATH"])
+        self.assertIn("AutopsyDev", configured["AUTOPSY_MEMORY_GUARD_LOG_PATH"])
+        self.assertIn("AutopsyDev", configured["AUTOPSY_MEMORY_RELATION_LOG_PATH"])
+        self.assertEqual(configured["AUTOPSY_MEMORY_BACKEND"], "falkordb")
+        self.assertEqual(configured["AUTOPSY_FALKORDB_ENABLED"], "1")
         self.assertEqual(env["AUTOPSY_APP_SUPPORT_DIR"], configured["AUTOPSY_APP_SUPPORT_DIR"])
 
     def test_autopsy_dev_refuses_production_support_without_override(self):
@@ -79,6 +85,14 @@ class AutopsyCLIContractTests(unittest.TestCase):
         with self.assertRaises(SystemExit) as raised:
             dev_cli.configure_dev_environment({"AUTOPSY_APP_SUPPORT_DIR": production})
 
+        self.assertIn("refused to use production memory", str(raised.exception))
+
+    def test_autopsy_dev_refuses_production_shared_server_config_without_override(self):
+        production_config = str(dev_cli.PRODUCTION_APP_SUPPORT_DIR / "SharedServer" / "config.json")
+        with self.assertRaises(SystemExit) as raised:
+            dev_cli.configure_dev_environment({"AUTOPSY_SHARED_SERVER_CONFIG": production_config})
+
+        self.assertIn("AUTOPSY_SHARED_SERVER_CONFIG", str(raised.exception))
         self.assertIn("refused to use production memory", str(raised.exception))
 
     def test_autopsy_dev_allows_production_support_with_explicit_override(self):
@@ -90,6 +104,30 @@ class AutopsyCLIContractTests(unittest.TestCase):
         configured = dev_cli.configure_dev_environment(env)
 
         self.assertEqual(configured["AUTOPSY_APP_SUPPORT_DIR"], production)
+
+    def test_autopsy_dev_scrubs_inherited_remote_falkordb_by_default(self):
+        env = {
+            "AUTOPSY_FALKORDB_HOST": "memory.internal",
+            "AUTOPSY_FALKORDB_PORT": "6379",
+        }
+        configured = dev_cli.configure_dev_environment(env)
+
+        self.assertNotIn("AUTOPSY_FALKORDB_HOST", env)
+        self.assertNotIn("AUTOPSY_FALKORDB_PORT", env)
+        self.assertIn("AUTOPSY_FALKORDB_HOST", configured["scrubbed_remote_falkordb_env"])
+        self.assertIn("AUTOPSY_FALKORDB_PORT", configured["scrubbed_remote_falkordb_env"])
+
+    def test_autopsy_dev_preserves_remote_falkordb_with_explicit_override(self):
+        env = {
+            "AUTOPSY_FALKORDB_HOST": "memory.internal",
+            "AUTOPSY_FALKORDB_PORT": "6379",
+            dev_cli.ALLOW_REMOTE_FALKOR_ENV: "1",
+        }
+        configured = dev_cli.configure_dev_environment(env)
+
+        self.assertEqual(env["AUTOPSY_FALKORDB_HOST"], "memory.internal")
+        self.assertEqual(env["AUTOPSY_FALKORDB_PORT"], "6379")
+        self.assertEqual(configured["scrubbed_remote_falkordb_env"], "")
 
     def test_autopsy_dev_main_forwards_argv_and_restores_process_argv(self):
         original_argv = list(sys.argv)

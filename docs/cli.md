@@ -20,13 +20,16 @@ Silicon.
 
 Use `autopsy` for real memory. Use `autopsy-dev` for source-tree development and
 local experiments. `autopsy-dev` runs the same CLI code but defaults
-`AUTOPSY_APP_SUPPORT_DIR`, `AUTOPSY_UNIFIED_MEMORY_ROOT`, and
-`AUTOPSY_FALKORDB_LITE_PATH` to
-`~/Library/Application Support/AutopsyDev`, so development writes, embedded
-FalkorDB snapshots, and worker settings cannot collide with the Homebrew-managed
-production memory store. If you intentionally need to point `autopsy-dev` at the
-production store, set `AUTOPSY_DEV_ALLOW_PRODUCTION_MEMORY=1`; otherwise it
-refuses production paths.
+`AUTOPSY_APP_SUPPORT_DIR`, `AUTOPSY_UNIFIED_MEMORY_ROOT`,
+`AUTOPSY_FALKORDB_LITE_PATH`, shared-server config, activity snapshots, and
+diagnostic logs to `~/Library/Application Support/AutopsyDev`, so development
+writes, embedded FalkorDB snapshots, worker settings, and shared-server commands
+cannot collide with the Homebrew-managed production memory store. It also
+removes inherited `AUTOPSY_FALKORDB_HOST` and `AUTOPSY_FALKORDB_PORT` settings
+before the normal CLI starts, forcing the embedded dev database unless
+`AUTOPSY_DEV_ALLOW_REMOTE_FALKORDB=1` is set intentionally. If you intentionally
+need to point `autopsy-dev` at the production support tree, set
+`AUTOPSY_DEV_ALLOW_PRODUCTION_MEMORY=1`; otherwise it refuses production paths.
 
 From a source checkout, `./scripts/autopsy-dev ...` runs the development CLI via
 the repo virtualenv and `src/` tree even when `.venv/bin/autopsy-dev` has not
