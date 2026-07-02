@@ -20,7 +20,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -44,6 +44,7 @@ SHARED_SERVER_CONFIG_PATH_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "SharedServer" / "
 SHARED_SERVER_OWNER_CONFIG_DEFAULT = Path.home() / ".config" / "autopsy-server" / "owner.json"
 MODEL_WARMUP_STATUS_PATH_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "ML" / "model-warmup.json"
 STATUS_WINDOW_DAYS_DEFAULT = 21
+SHARED_SERVER_STALE_TOKEN_DAYS_DEFAULT = 30
 MENUBAR_RELATIVE_DIR = Path("apps") / "menubar"
 MENUBAR_INSTALLED_DIR_NAME = "menubar"
 MENUBAR_PRODUCT_NAME = "AutopsyMenuBar"
@@ -4823,11 +4824,17 @@ def summarize_shared_server_users(items: list[dict[str, Any]]) -> dict[str, Any]
     }
 
 
-def summarize_shared_server_tokens(items: list[dict[str, Any]]) -> dict[str, Any]:
+def summarize_shared_server_tokens(
+    items: list[dict[str, Any]],
+    *,
+    now: datetime | None = None,
+    stale_after_days: int = SHARED_SERVER_STALE_TOKEN_DAYS_DEFAULT,
+) -> dict[str, Any]:
     role_counts: dict[str, int] = {}
     active_count = 0
     active_with_last_used_count = 0
     active_never_used_count = 0
+    stale_active_count = 0
     expired_count = 0
     revoked_count = 0
     disabled_count = 0
@@ -4835,12 +4842,14 @@ def summarize_shared_server_tokens(items: list[dict[str, Any]]) -> dict[str, Any
     latest_last_used_at = ""
     latest_active_last_used_at = ""
     oldest_active_last_used_at = ""
+    stale_cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=max(0, stale_after_days))
     for item in items:
         role = str(item.get("issued_role") or "unknown")
         role_counts[role] = role_counts.get(role, 0) + 1
         revoked = bool(item.get("revoked"))
         expired = bool(item.get("expired"))
         last_used_at = str(item.get("last_used_at") or "").strip()
+        parsed_last_used_at = parse_iso_datetime(last_used_at)
         if last_used_at:
             tokens_with_last_used_count += 1
             if not latest_last_used_at or last_used_at > latest_last_used_at:
@@ -4859,6 +4868,8 @@ def summarize_shared_server_tokens(items: list[dict[str, Any]]) -> dict[str, Any
                     latest_active_last_used_at = last_used_at
                 if not oldest_active_last_used_at or last_used_at < oldest_active_last_used_at:
                     oldest_active_last_used_at = last_used_at
+                if parsed_last_used_at is not None and parsed_last_used_at <= stale_cutoff:
+                    stale_active_count += 1
             else:
                 active_never_used_count += 1
     return {
@@ -4866,6 +4877,8 @@ def summarize_shared_server_tokens(items: list[dict[str, Any]]) -> dict[str, Any
         "active_tokens_count": active_count,
         "active_tokens_with_last_used_count": active_with_last_used_count,
         "active_tokens_never_used_count": active_never_used_count,
+        "stale_active_tokens_count": stale_active_count,
+        "stale_token_days": max(0, stale_after_days),
         "expired_tokens_count": expired_count,
         "revoked_tokens_count": revoked_count,
         "disabled_tokens_count": disabled_count,

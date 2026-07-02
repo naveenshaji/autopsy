@@ -2213,9 +2213,17 @@ class AutopsyCLIContractTests(unittest.TestCase):
                             "revoked": False,
                             "expired": False,
                             "disabled": False,
-                            "last_used_at": "2026-07-02T09:44:00Z",
+                            "last_used_at": "2999-01-01T00:00:00Z",
                         },
                         {"id": "tok_4", "issued_role": "writer", "revoked": False, "expired": False, "disabled": False},
+                        {
+                            "id": "tok_5",
+                            "issued_role": "reader",
+                            "revoked": False,
+                            "expired": False,
+                            "disabled": False,
+                            "last_used_at": "2000-01-01T00:00:00Z",
+                        },
                         {"id": "tok_2", "issued_role": "reader", "revoked": False, "expired": True, "disabled": True},
                         {
                             "id": "tok_3",
@@ -2302,18 +2310,20 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["team"]["disabled_owner_grants_count"], 0)
         self.assertTrue(payload["team"]["last_owner_grant_risk"])
         self.assertEqual(payload["team"]["role_counts"], {"owner": 1, "reader": 1})
-        self.assertEqual(payload["team"]["tokens_count"], 4)
-        self.assertEqual(payload["team"]["active_tokens_count"], 2)
-        self.assertEqual(payload["team"]["active_tokens_with_last_used_count"], 1)
+        self.assertEqual(payload["team"]["tokens_count"], 5)
+        self.assertEqual(payload["team"]["active_tokens_count"], 3)
+        self.assertEqual(payload["team"]["active_tokens_with_last_used_count"], 2)
         self.assertEqual(payload["team"]["active_tokens_never_used_count"], 1)
+        self.assertEqual(payload["team"]["stale_active_tokens_count"], 1)
+        self.assertEqual(payload["team"]["stale_token_days"], 30)
         self.assertEqual(payload["team"]["expired_tokens_count"], 1)
         self.assertEqual(payload["team"]["revoked_tokens_count"], 1)
         self.assertEqual(payload["team"]["disabled_tokens_count"], 1)
-        self.assertEqual(payload["team"]["tokens_with_last_used_count"], 2)
-        self.assertEqual(payload["team"]["latest_token_last_used_at"], "2026-07-02T09:44:00Z")
-        self.assertEqual(payload["team"]["latest_active_token_last_used_at"], "2026-07-02T09:44:00Z")
-        self.assertEqual(payload["team"]["oldest_active_token_last_used_at"], "2026-07-02T09:44:00Z")
-        self.assertEqual(payload["team"]["token_role_counts"], {"writer": 2, "reader": 2})
+        self.assertEqual(payload["team"]["tokens_with_last_used_count"], 3)
+        self.assertEqual(payload["team"]["latest_token_last_used_at"], "2999-01-01T00:00:00Z")
+        self.assertEqual(payload["team"]["latest_active_token_last_used_at"], "2999-01-01T00:00:00Z")
+        self.assertEqual(payload["team"]["oldest_active_token_last_used_at"], "2000-01-01T00:00:00Z")
+        self.assertEqual(payload["team"]["token_role_counts"], {"writer": 2, "reader": 3})
         self.assertTrue(payload["team"]["can_list_policies"])
         self.assertEqual(payload["team"]["policies_count"], 1)
         self.assertEqual(payload["team"]["constrained_policies_count"], 1)
