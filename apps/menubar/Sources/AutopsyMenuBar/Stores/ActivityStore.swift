@@ -286,6 +286,7 @@ final class ActivityStore: ObservableObject {
                 ("repo_policy_inventory", "policy inventory"),
                 ("repo_policy_fingerprints", "policy fingerprints"),
                 ("relation_policy_preflight", "relation checks"),
+                ("relation_policy_write_cas", "stale-safe relation writes"),
                 ("mutation_audit_receipts", "audit receipts"),
                 ("audit_receipt_verification", "audit verification"),
                 ("personal_shared_relations", "personal links"),
@@ -1845,13 +1846,14 @@ final class ActivityStore: ObservableObject {
             sharedServerError = "Relation required"
             return
         }
+        let normalizedRepo = normalizedRepoScope(repoScope)
         var arguments = [
             "shared-server",
             "relate",
             trimmedSourceKey,
             trimmedTargetKey,
             "--repo-scope",
-            normalizedRepoScope(repoScope),
+            normalizedRepo,
             "--relation",
             trimmedRelation,
             "--fact",
@@ -1861,10 +1863,13 @@ final class ActivityStore: ObservableObject {
         if !trimmedFactRating.isEmpty {
             arguments += ["--fact-rating", trimmedFactRating]
         }
-        await runSharedAccessCommand(
+        await runCheckedRelationWriteCommand(
             arguments,
-            successMessage: "Shared relation created",
-            refreshTeam: false
+            repoScope: normalizedRepo,
+            relation: trimmedRelation,
+            factRating: trimmedFactRating,
+            relationScope: "shared",
+            successMessage: "Shared relation created"
         )
     }
 
@@ -1907,6 +1912,71 @@ final class ActivityStore: ObservableObject {
         } catch {
             sharedServerError = error.localizedDescription
         }
+    }
+
+    private func runCheckedRelationWriteCommand(
+        _ baseArguments: [String],
+        repoScope: String,
+        relation: String,
+        factRating: String,
+        relationScope: String,
+        successMessage: String
+    ) async {
+        guard !isManagingSharedAccess else { return }
+        isManagingSharedAccess = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingSharedAccess = false
+        }
+
+        do {
+            let expectationArguments = try await relationPolicyExpectationArguments(
+                repoScope: repoScope,
+                relation: relation,
+                factRating: factRating,
+                relationScope: relationScope
+            )
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run(baseArguments + expectationArguments)
+            lastActionMessage = messageWithAuditReceipt(successMessage, output: output)
+        } catch {
+            sharedServerError = sharedAccessErrorMessage(error)
+        }
+    }
+
+    private func relationPolicyExpectationArguments(repoScope: String, relation: String, factRating: String, relationScope: String) async throws -> [String] {
+        var arguments = [
+            "shared-server",
+            "check-relation",
+            "--repo-scope",
+            repoScope,
+            "--relation",
+            relation,
+            "--relation-scope",
+            relationScope,
+        ]
+        let trimmedFactRating = factRating.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedFactRating.isEmpty {
+            arguments += ["--fact-rating", trimmedFactRating]
+        }
+
+        let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run(arguments)
+        guard let payload = jsonObject(from: output) else {
+            throw CLIError.failed("relation policy check returned invalid JSON")
+        }
+        guard auditBool(payload["allowed"]) == true else {
+            let reason = auditString(payload["reason"]) ?? "blocked"
+            throw CLIError.failed("relation policy blocked: \(reason)")
+        }
+
+        var expectationArguments: [String] = []
+        if let fingerprint = auditString(payload["policy_fingerprint"]), !fingerprint.isEmpty {
+            expectationArguments += ["--expected-policy-fingerprint", fingerprint]
+        }
+        if let version = auditString(payload["policy_version_ns"]), !version.isEmpty {
+            expectationArguments += ["--expected-policy-version-ns", version]
+        }
+        return expectationArguments
     }
 
     private func copySharedRelations(repoScope: String, sourceKey: String, targetKey: String) async {
@@ -1980,13 +2050,14 @@ final class ActivityStore: ObservableObject {
             sharedServerError = "Relation required"
             return
         }
+        let normalizedRepo = normalizedRepoScope(repoScope)
         var arguments = [
             "shared-server",
             "link",
             trimmedPersonalKey,
             trimmedSharedKey,
             "--repo-scope",
-            normalizedRepoScope(repoScope),
+            normalizedRepo,
             "--relation",
             trimmedRelation,
             "--fact",
@@ -1996,10 +2067,13 @@ final class ActivityStore: ObservableObject {
         if !trimmedFactRating.isEmpty {
             arguments += ["--fact-rating", trimmedFactRating]
         }
-        await runSharedAccessCommand(
+        await runCheckedRelationWriteCommand(
             arguments,
-            successMessage: "Personal link created",
-            refreshTeam: false
+            repoScope: normalizedRepo,
+            relation: trimmedRelation,
+            factRating: trimmedFactRating,
+            relationScope: "personal",
+            successMessage: "Personal link created"
         )
     }
 

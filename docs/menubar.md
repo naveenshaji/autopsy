@@ -88,9 +88,12 @@ Run checks:
   shared memory archive/restore, and
   shared memory history copy/version restore, shared context copy with optional
   relation evidence threshold, shared
-  relation policy-check copy plus create/list/unlink with evidence rating, and
-  private personal-to-shared policy-check copy plus link/list/unlink with link
-  evidence rating and linked-context evidence threshold. Raw audit copies include privacy-preserving context-read events
+  relation policy-check copy plus stale-safe create/list/unlink with evidence
+  rating, and private personal-to-shared policy-check copy plus stale-safe
+  link/list/unlink with link evidence rating and linked-context evidence
+  threshold. Relation create/link actions dry-run the repo policy first and pass
+  the returned policy fingerprint/version into the write so stale policy changes
+  fail instead of writing against a different rule. Raw audit copies include privacy-preserving context-read events
   with hashed queries and counts when the server records them. Activity-audit
   summaries request sensitive shared-server read events such as access checks,
   token/grant/user inventories, policy reads/inventories, relation policy checks,
