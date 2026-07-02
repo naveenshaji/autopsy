@@ -82,7 +82,8 @@ Run checks:
   invite-token inventory copy, token cleanup, raw audit copy, activity-audit
   summary copy, context-audit summary copy,
   audit-integrity summary copy, global security-audit summary copy for
-  global-admin tokens, audit receipt verification report copy, shared memory archive/restore, and
+  global-admin tokens, audit receipt verification report copy, repo policy copy/update,
+  shared memory archive/restore, and
   shared memory history copy/version restore, shared context copy with optional
   relation evidence threshold, shared
   relation create/list/unlink with evidence rating, and private
@@ -102,6 +103,9 @@ Run checks:
   Receipt verification accepts an audit event id, integrity hash, repo scope,
   and optional expected action/target, then copies a match/mismatch report with
   redacted receipt fields and hash prefixes.
+  Repo policy controls copy the current exact or inherited policy and let owners
+  update allowed relation labels, minimum evidence rating, and shared/personal
+  relation write toggles from the same Shared settings tab.
   Security-audit summaries request global `auth_failure`,
   `authorization_denied`, `disable_user`, and `enable_user` events, copy auth
   reason counts, denial reason and mode counts, throttle counts, keyed client

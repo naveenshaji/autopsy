@@ -4505,6 +4505,10 @@ def shared_server_access_check_path(graph_slug: str, repo: str, *, mode: str = "
     return shared_server_path(graph_slug, f"/access-check?{urllib.parse.urlencode(query)}")
 
 
+def shared_server_policy_path(graph_slug: str, repo: str) -> str:
+    return shared_server_path(graph_slug, f"/policy?{urllib.parse.urlencode({'repo': repo})}")
+
+
 def shared_server_audit_query_params(
     graph_slug: str,
     repo: str | None,
@@ -5460,6 +5464,58 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         payload = shared_server_request_or_fail(
             config,
             shared_server_access_check_path(graph_slug, repo, mode=str(getattr(args, "mode", "read") or "read")),
+            timeout=10,
+        )
+        print(json.dumps(payload, indent=2))
+        return
+    if action == "policy":
+        payload = shared_server_request_or_fail(config, shared_server_policy_path(graph_slug, repo), timeout=10)
+        print(json.dumps(payload, indent=2))
+        return
+    if action == "update-policy":
+        if bool(getattr(args, "allow_shared_relations", False)) and bool(getattr(args, "disable_shared_relations", False)):
+            fail("shared-server update-policy cannot combine --allow-shared-relations and --disable-shared-relations", 2)
+        if bool(getattr(args, "allow_personal_relations", False)) and bool(getattr(args, "disable_personal_relations", False)):
+            fail("shared-server update-policy cannot combine --allow-personal-relations and --disable-personal-relations", 2)
+        existing = shared_server_request_or_fail(config, shared_server_policy_path(graph_slug, repo), timeout=10)
+        supplied_labels = split_cli_csv_values(getattr(args, "allowed_relation_label", None))
+        if bool(getattr(args, "clear_relation_labels", False)):
+            allowed_relation_labels: list[str] = []
+        elif supplied_labels:
+            allowed_relation_labels = supplied_labels
+        else:
+            allowed_relation_labels = [
+                str(label)
+                for label in existing.get("allowed_relation_labels", [])
+                if str(label or "").strip()
+            ]
+        min_fact_rating = normalize_fact_rating(getattr(args, "min_fact_rating", None))
+        if min_fact_rating is None:
+            min_fact_rating = normalize_fact_rating(existing.get("min_fact_rating")) or 0.0
+        allow_shared_relations = bool(existing.get("allow_shared_relations", True))
+        if bool(getattr(args, "allow_shared_relations", False)):
+            allow_shared_relations = True
+        if bool(getattr(args, "disable_shared_relations", False)):
+            allow_shared_relations = False
+        allow_personal_relations = bool(existing.get("allow_personal_relations", True))
+        if bool(getattr(args, "allow_personal_relations", False)):
+            allow_personal_relations = True
+        if bool(getattr(args, "disable_personal_relations", False)):
+            allow_personal_relations = False
+        notes = getattr(args, "policy_notes", None)
+        policy_payload = {
+            "repo": repo,
+            "allowed_relation_labels": allowed_relation_labels,
+            "min_fact_rating": min_fact_rating,
+            "allow_shared_relations": allow_shared_relations,
+            "allow_personal_relations": allow_personal_relations,
+            "notes": str(existing.get("notes") or "") if notes is None else str(notes),
+        }
+        payload = shared_server_request_or_fail(
+            config,
+            shared_server_path(graph_slug, "/policy"),
+            method="PUT",
+            payload=policy_payload,
             timeout=10,
         )
         print(json.dumps(payload, indent=2))

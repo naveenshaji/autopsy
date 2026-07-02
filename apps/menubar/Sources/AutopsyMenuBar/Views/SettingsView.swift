@@ -118,6 +118,12 @@ private struct SharedSettingsTab: View {
     @State private var newUserName = ""
     @State private var accessCheckRepoScope = ""
     @State private var accessCheckMode = "read"
+    @State private var policyRepoScope = ""
+    @State private var policyRelationLabels = ""
+    @State private var policyMinFactRating = "0"
+    @State private var policyAllowSharedRelations = true
+    @State private var policyAllowPersonalRelations = true
+    @State private var policyNotes = ""
     @State private var inviteRepoScope = ""
     @State private var inviteRole = "writer"
     @State private var inviteTokenLabel = "menubar-invite"
@@ -231,6 +237,37 @@ private struct SharedSettingsTab: View {
                     store.copySharedServerAccessCheck(repoScope: accessCheckRepoScope, mode: accessCheckMode)
                 }
                 .disabled(sharedActionDisabled)
+            }
+
+            Section("Repo Policy") {
+                TextField("Policy Repo Scope", text: $policyRepoScope)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Allowed Relation Labels", text: $policyRelationLabels)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Minimum Fact Rating", text: $policyMinFactRating)
+                    .textFieldStyle(.roundedBorder)
+                Toggle("Allow Shared Relations", isOn: $policyAllowSharedRelations)
+                Toggle("Allow Personal Links", isOn: $policyAllowPersonalRelations)
+                TextField("Policy Notes", text: $policyNotes)
+                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    Button("Copy Policy") {
+                        store.copySharedServerRepoPolicy(repoScope: policyRepoScope)
+                    }
+                    .disabled(sharedActionDisabled)
+
+                    Button("Save Policy") {
+                        store.updateSharedServerRepoPolicy(
+                            repoScope: policyRepoScope,
+                            relationLabels: policyRelationLabels,
+                            minFactRating: policyMinFactRating,
+                            allowSharedRelations: policyAllowSharedRelations,
+                            allowPersonalRelations: policyAllowPersonalRelations,
+                            notes: policyNotes
+                        )
+                    }
+                    .disabled(sharedActionDisabled)
+                }
             }
 
             Section("Invite User") {
@@ -682,6 +719,9 @@ private struct SharedSettingsTab: View {
             }
             if inviteRepoScope.isEmpty {
                 inviteRepoScope = store.sharedServerDefaultRepoScope
+            }
+            if policyRepoScope.isEmpty {
+                policyRepoScope = store.sharedServerDefaultRepoScope
             }
             if auditRepoScope.isEmpty {
                 auditRepoScope = store.sharedServerDefaultRepoScope

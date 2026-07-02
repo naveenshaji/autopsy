@@ -275,6 +275,7 @@ final class ActivityStore: ObservableObject {
                 ("owner_handoff", "owner handoff"),
                 ("grant_downgrade_token_revocation", "downgrade cleanup"),
                 ("tamper_evident_audit_chain", "audit chain"),
+                ("repo_policies", "repo policies"),
                 ("mutation_audit_receipts", "audit receipts"),
                 ("audit_receipt_verification", "audit verification"),
                 ("personal_shared_relations", "personal links"),
@@ -692,6 +693,32 @@ final class ActivityStore: ObservableObject {
     func copySharedServerAccessCheck(repoScope: String, mode: String) {
         Task {
             await copySharedAccessCheck(repoScope: repoScope, mode: mode)
+        }
+    }
+
+    func copySharedServerRepoPolicy(repoScope: String) {
+        Task {
+            await copySharedRepoPolicy(repoScope: repoScope)
+        }
+    }
+
+    func updateSharedServerRepoPolicy(
+        repoScope: String,
+        relationLabels: String,
+        minFactRating: String,
+        allowSharedRelations: Bool,
+        allowPersonalRelations: Bool,
+        notes: String
+    ) {
+        Task {
+            await updateSharedRepoPolicy(
+                repoScope: repoScope,
+                relationLabels: relationLabels,
+                minFactRating: minFactRating,
+                allowSharedRelations: allowSharedRelations,
+                allowPersonalRelations: allowPersonalRelations,
+                notes: notes
+            )
         }
     }
 
@@ -1116,6 +1143,63 @@ final class ActivityStore: ObservableObject {
         } catch {
             sharedServerError = error.localizedDescription
         }
+    }
+
+    private func copySharedRepoPolicy(repoScope: String) async {
+        guard !isManagingSharedAccess else { return }
+        isManagingSharedAccess = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingSharedAccess = false
+        }
+
+        do {
+            let scope = normalizedRepoScope(repoScope)
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 15).run([
+                "shared-server",
+                "policy",
+                "--repo-scope",
+                scope,
+            ])
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(sharedRepoPolicyReport(from: output, repoScope: scope), forType: .string)
+            lastActionMessage = "Policy copied"
+            clearLastActionMessageAfterDelay(expected: "Policy copied")
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
+    }
+
+    private func updateSharedRepoPolicy(
+        repoScope: String,
+        relationLabels: String,
+        minFactRating: String,
+        allowSharedRelations: Bool,
+        allowPersonalRelations: Bool,
+        notes: String
+    ) async {
+        let scope = normalizedRepoScope(repoScope)
+        var arguments = [
+            "shared-server",
+            "update-policy",
+            "--repo-scope",
+            scope,
+        ]
+        let labels = relationLabels.trimmingCharacters(in: .whitespacesAndNewlines)
+        if labels.isEmpty {
+            arguments.append("--clear-relation-labels")
+        } else {
+            arguments += ["--allowed-relation-label", labels]
+        }
+        let rating = minFactRating.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !rating.isEmpty {
+            arguments += ["--min-fact-rating", rating]
+        }
+        arguments.append(allowSharedRelations ? "--allow-shared-relations" : "--disable-shared-relations")
+        arguments.append(allowPersonalRelations ? "--allow-personal-relations" : "--disable-personal-relations")
+        arguments += ["--policy-notes", notes.trimmingCharacters(in: .whitespacesAndNewlines)]
+        await runSharedAccessCommand(arguments, successMessage: "Policy updated", refreshTeam: false)
     }
 
     private func copySharedUsers() async {
@@ -2294,6 +2378,39 @@ final class ActivityStore: ObservableObject {
                 parts.append("updated \(updatedAt)")
             }
             lines.append("- \(parts.joined(separator: ", "))")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func sharedRepoPolicyReport(from output: String, repoScope: String) -> String {
+        guard let payload = jsonObject(from: output) else {
+            return output.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let labels = (payload["allowed_relation_labels"] as? [Any] ?? [])
+            .compactMap { auditString($0) }
+        let policyRepo = auditString(payload["repo"]) ?? repoScope
+        let requestedRepo = auditString(payload["requested_repo"]) ?? repoScope
+        let inheritedFrom = auditString(payload["inherited_from"]) ?? ""
+        let minFactRating = auditString(payload["min_fact_rating"]) ?? "0"
+        let allowShared = auditBool(payload["allow_shared_relations"]) != false
+        let allowPersonal = auditBool(payload["allow_personal_relations"]) != false
+        let policyScope = inheritedFrom.isEmpty ? policyRepo : "\(policyRepo) inherited from \(inheritedFrom)"
+        var lines = [
+            "Shared Repo Policy",
+            "Repo: \(requestedRepo)",
+            "Policy scope: \(policyScope)",
+            "Allowed relation labels: \(labels.isEmpty ? "any" : labels.joined(separator: ", "))",
+            "Minimum fact rating: \(minFactRating)",
+            "Shared relations: \(allowShared ? "allowed" : "disabled")",
+            "Personal links: \(allowPersonal ? "allowed" : "disabled")",
+        ]
+        if let updatedAt = auditString(payload["updated_at"]) {
+            lines.append("Updated: \(updatedAt)")
+        }
+        if let notes = auditString(payload["notes"]) {
+            lines.append("")
+            lines.append("Notes: \(notes)")
         }
         return lines.joined(separator: "\n")
     }

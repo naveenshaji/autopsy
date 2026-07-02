@@ -229,6 +229,20 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "none",
         ])
         access_check_args = parser.parse_args(["shared-server", "access-check", "--repo-scope", "repo-a", "--mode", "write"])
+        policy_args = parser.parse_args(["shared-server", "policy", "--repo-scope", "repo-a"])
+        update_policy_args = parser.parse_args([
+            "shared-server",
+            "update-policy",
+            "--repo-scope",
+            "repo-a",
+            "--allowed-relation-label",
+            "supports,depends_on",
+            "--min-fact-rating",
+            "0.8",
+            "--disable-personal-relations",
+            "--policy-notes",
+            "strong evidence only",
+        ])
         audit_args = parser.parse_args([
             "shared-server",
             "audit",
@@ -378,6 +392,13 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(access_check_args.shared_server_action, "access-check")
         self.assertEqual(access_check_args.repo_scope, "repo-a")
         self.assertEqual(access_check_args.mode, "write")
+        self.assertEqual(policy_args.shared_server_action, "policy")
+        self.assertEqual(policy_args.repo_scope, "repo-a")
+        self.assertEqual(update_policy_args.shared_server_action, "update-policy")
+        self.assertEqual(update_policy_args.allowed_relation_label, ["supports,depends_on"])
+        self.assertEqual(update_policy_args.min_fact_rating, 0.8)
+        self.assertTrue(update_policy_args.disable_personal_relations)
+        self.assertEqual(update_policy_args.policy_notes, "strong evidence only")
         self.assertEqual(audit_args.shared_server_action, "audit")
         self.assertEqual(audit_args.repo_scope, "repo-a")
         self.assertEqual(audit_args.limit, 25)
@@ -1567,6 +1588,89 @@ class AutopsyCLIContractTests(unittest.TestCase):
                 "/v1/audit-events/aud%2F1/receipt?"
                 "integrity_hash=sha256%3Aabc&graph_slug=autopsy&repo=repo-a&"
                 "action=grant_access&target=usr_1&prev_hash=sha256%3Aprev&created_at=2026-07-02T00%3A00%3A00Z"
+            ],
+        )
+
+    def test_shared_server_policy_reads_repo_policy(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["shared-server", "policy", "--repo-scope", "repo-a"])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        calls: list[str] = []
+
+        def fake_request(_config, path, **_kwargs):
+            calls.append(path)
+            return {"graph_slug": "autopsy", "repo": "repo-a", "allowed_relation_labels": []}
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        payload = json.loads(stream.getvalue())
+        self.assertEqual(payload["repo"], "repo-a")
+        self.assertEqual(calls, ["/v1/shared-graphs/autopsy/policy?repo=repo-a"])
+
+    def test_shared_server_update_policy_merges_existing_policy(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "shared-server",
+            "update-policy",
+            "--repo-scope",
+            "repo-a",
+            "--allowed-relation-label",
+            "supports,depends_on",
+            "--min-fact-rating",
+            "0.8",
+            "--disable-personal-relations",
+            "--policy-notes",
+            "strong only",
+        ])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+        def fake_request(_config, path, *, method="GET", payload=None, **_kwargs):
+            calls.append((path, method, payload))
+            if method == "GET":
+                return {
+                    "graph_slug": "autopsy",
+                    "repo": "repo-a",
+                    "allowed_relation_labels": ["references"],
+                    "min_fact_rating": 0.2,
+                    "allow_shared_relations": True,
+                    "allow_personal_relations": True,
+                    "notes": "old",
+                }
+            return {"repo": "repo-a", **(payload or {})}
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        payload = json.loads(stream.getvalue())
+        self.assertEqual(payload["allowed_relation_labels"], ["supports", "depends_on"])
+        self.assertEqual(
+            calls,
+            [
+                ("/v1/shared-graphs/autopsy/policy?repo=repo-a", "GET", None),
+                (
+                    "/v1/shared-graphs/autopsy/policy",
+                    "PUT",
+                    {
+                        "repo": "repo-a",
+                        "allowed_relation_labels": ["supports", "depends_on"],
+                        "min_fact_rating": 0.8,
+                        "allow_shared_relations": True,
+                        "allow_personal_relations": False,
+                        "notes": "strong only",
+                    },
+                ),
             ],
         )
 

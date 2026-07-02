@@ -410,6 +410,8 @@ def build_parser(
             "grants",
             "grant",
             "access-check",
+            "policy",
+            "update-policy",
             "audit",
             "audit-integrity",
             "verify-receipt",
@@ -462,6 +464,13 @@ def build_parser(
     shared_server_parser.add_argument("--reason", default="", help="Reason for shared-server archive or restore lifecycle actions.")
     shared_server_parser.add_argument("--version-id", help="Shared memory version id for shared-server restore-version.")
     shared_server_parser.add_argument("--version-ns", type=int, help="Shared memory version_ns for shared-server restore-version.")
+    shared_server_parser.add_argument("--allowed-relation-label", action="append", help="With shared-server update-policy, allowed relation labels. Repeat or comma-separate values.")
+    shared_server_parser.add_argument("--clear-relation-labels", action="store_true", help="With shared-server update-policy, clear the allowed relation label allow-list.")
+    shared_server_parser.add_argument("--allow-shared-relations", action="store_true", help="With shared-server update-policy, allow shared relation writes.")
+    shared_server_parser.add_argument("--disable-shared-relations", action="store_true", help="With shared-server update-policy, disable shared relation writes.")
+    shared_server_parser.add_argument("--allow-personal-relations", action="store_true", help="With shared-server update-policy, allow personal-to-shared relation writes.")
+    shared_server_parser.add_argument("--disable-personal-relations", action="store_true", help="With shared-server update-policy, disable personal-to-shared relation writes.")
+    shared_server_parser.add_argument("--policy-notes", help="With shared-server update-policy, operator notes for the repo policy.")
     shared_server_parser.add_argument("--integrity-hash", help="Expected audit event integrity hash for shared-server verify-receipt.")
     shared_server_parser.add_argument("--receipt-action", help="Optional expected audit action for shared-server verify-receipt.")
     shared_server_parser.add_argument("--receipt-target", help="Optional expected audit target for shared-server verify-receipt.")

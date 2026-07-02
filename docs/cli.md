@@ -88,6 +88,8 @@ autopsy shared-server enable-user --user-id usr_123
 autopsy shared-server grants --repo-scope /path/to/repo
 autopsy shared-server scoped-tokens --repo-scope /path/to/repo
 autopsy shared-server access-check --repo-scope /path/to/repo --mode write
+autopsy shared-server policy --repo-scope /path/to/repo
+autopsy shared-server update-policy --repo-scope /path/to/repo --allowed-relation-label supports --min-fact-rating 0.8
 autopsy shared-server audit --repo-scope /path/to/repo --action read_shared_context
 autopsy shared-server audit --global-audit --action auth_failure
 autopsy shared-server verify-receipt aud_123 --repo-scope /path/to/repo --integrity-hash <hash>
@@ -201,6 +203,12 @@ read-time `integrity_status` values.
 `shared-server access-check --repo-scope <repo> --mode read|write|admin`
 explains the configured caller's effective access for one graph/repo action,
 including the matching caller-owned grant and capabilities.
+`shared-server policy --repo-scope <repo>` reads the current repo policy,
+including any inherited wildcard policy. `shared-server update-policy
+--repo-scope <repo>` lets owners update allowed relation labels, minimum
+`fact_rating`, shared-relation enablement, personal-link enablement, and policy
+notes. Omitted fields preserve the current server policy; use
+`--clear-relation-labels` to intentionally allow any relation label.
 `--repo` resolves to a team-stable Git scope such as
 `git:github.com/owner/repo` from `origin` when available, and falls back to the
 local absolute path for non-Git repos. `--repo-scope` passes an exact
