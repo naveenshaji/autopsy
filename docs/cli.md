@@ -101,10 +101,10 @@ autopsy shared-server memory-history shared:key --repo-scope /path/to/repo
 autopsy shared-server restore-version shared:key --repo-scope /path/to/repo --version-id ver_123
 autopsy shared-server context --repo-scope /path/to/repo --query "current task" --min-fact-rating 0.8
 autopsy shared-server restore shared:key --repo-scope /path/to/repo --reason needed
-autopsy shared-server relate shared:source shared:target --repo-scope /path/to/repo --relation depends_on --fact-rating 0.9
+autopsy shared-server relate shared:source shared:target --repo-scope /path/to/repo --relation depends_on --fact-rating 0.9 --expected-policy-fingerprint sha256:... --expected-policy-version-ns 12
 autopsy shared-server shared-relations --repo-scope /path/to/repo --source-key shared:source
 autopsy shared-server unrelate rel_123 --repo-scope /path/to/repo
-autopsy shared-server link graph-note:local shared:key --repo-scope /path/to/repo --relation references --fact-rating 0.9
+autopsy shared-server link graph-note:local shared:key --repo-scope /path/to/repo --relation references --fact-rating 0.9 --expected-policy-fingerprint sha256:... --expected-policy-version-ns 12
 autopsy shared-server personal-links --repo-scope /path/to/repo --personal-key graph-note:local
 autopsy shared-server personal-context --repo-scope /path/to/repo --personal-key graph-note:local
 autopsy shared-server unlink plink_123 --repo-scope /path/to/repo
@@ -253,7 +253,9 @@ facts and their related memory expansion.
 `shared-server link <personal-key> <shared-key> --repo <repo> --relation <name>`
 creates a private personal-to-shared relation without uploading the personal
 graph; add `--fact-rating 0.0..1.0` to attach evidence quality to that private
-bridge. `shared-server personal-links --repo-scope <repo>` lists only your own
+bridge. Add `--expected-policy-fingerprint` and
+`--expected-policy-version-ns` from `shared-server check-relation` when the link
+must fail if the repo policy changed after the dry-run. `shared-server personal-links --repo-scope <repo>` lists only your own
 private personal-to-shared relation records, including each `fact_rating`; add `--personal-key` or
 `--shared-key` to filter. Personal-link list reads are audited with item counts
 and filter-presence flags, not raw personal stable keys. `shared-server personal-context --repo-scope <repo>
@@ -264,8 +266,10 @@ adjacent shared graph relation filtering. `shared-server unlink <relation-id> --
 <repo>` revokes one of your private relation records. `shared-server relate
 <source-shared-key> <target-shared-key> --repo-scope <repo> --relation <name>`
 creates a team-visible relation between two active shared memories; add
-`--fact-rating 0.0..1.0` to attach evidence quality for future filtering, while
-`shared-server shared-relations --repo-scope <repo>` lists shared graph edges
+`--fact-rating 0.0..1.0` to attach evidence quality for future filtering. Add
+`--expected-policy-fingerprint` and `--expected-policy-version-ns` from
+`shared-server check-relation` to reject stale writes when the effective repo
+policy changed after the preflight. `shared-server shared-relations --repo-scope <repo>` lists shared graph edges
 with optional `--source-key` and `--target-shared-key` filters. `shared-server
 unrelate <relation-id> --repo-scope <repo>` revokes one shared graph edge and
 requires graph-owner or admin access. `shared-server archive <shared-key>

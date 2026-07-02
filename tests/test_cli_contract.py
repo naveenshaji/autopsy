@@ -333,7 +333,22 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "--fact-rating",
             "0.9",
         ])
-        relate_args = parser.parse_args(["shared-server", "relate", "shared:1", "shared:2", "--repo-scope", "repo-a", "--relation", "depends_on", "--fact-rating", "0.85"])
+        relate_args = parser.parse_args([
+            "shared-server",
+            "relate",
+            "shared:1",
+            "shared:2",
+            "--repo-scope",
+            "repo-a",
+            "--relation",
+            "depends_on",
+            "--fact-rating",
+            "0.85",
+            "--expected-policy-fingerprint",
+            "sha256:abc",
+            "--expected-policy-version-ns",
+            "12",
+        ])
         shared_relations_args = parser.parse_args([
             "shared-server",
             "shared-relations",
@@ -367,7 +382,22 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "--limit",
             "10",
         ])
-        link_args = parser.parse_args(["shared-server", "link", "graph-note:local", "shared:1", "--repo-scope", "repo-a", "--relation", "references", "--fact-rating", "0.75"])
+        link_args = parser.parse_args([
+            "shared-server",
+            "link",
+            "graph-note:local",
+            "shared:1",
+            "--repo-scope",
+            "repo-a",
+            "--relation",
+            "references",
+            "--fact-rating",
+            "0.75",
+            "--expected-policy-fingerprint",
+            "sha256:def",
+            "--expected-policy-version-ns",
+            "13",
+        ])
         unlink_args = parser.parse_args(["shared-server", "unlink", "plink_1", "--repo-scope", "repo-a"])
         invite_args = parser.parse_args([
             "shared-server",
@@ -469,6 +499,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(relate_args.target_key, "shared:2")
         self.assertEqual(relate_args.relation, "depends_on")
         self.assertEqual(relate_args.fact_rating, 0.85)
+        self.assertEqual(relate_args.expected_policy_fingerprint, "sha256:abc")
+        self.assertEqual(relate_args.expected_policy_version_ns, 12)
         self.assertEqual(shared_relations_args.shared_server_action, "shared-relations")
         self.assertEqual(shared_relations_args.source_key, "shared:1")
         self.assertEqual(shared_relations_args.target_shared_key, "shared:2")
@@ -485,6 +517,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(link_args.stable_key, "graph-note:local")
         self.assertEqual(link_args.target_key, "shared:1")
         self.assertEqual(link_args.fact_rating, 0.75)
+        self.assertEqual(link_args.expected_policy_fingerprint, "sha256:def")
+        self.assertEqual(link_args.expected_policy_version_ns, 13)
         self.assertEqual(unlink_args.shared_server_action, "unlink")
         self.assertEqual(unlink_args.stable_key, "plink_1")
         self.assertEqual(invite_args.shared_server_action, "invite")
@@ -1341,6 +1375,10 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "one depends on two",
             "--fact-rating",
             "0.85",
+            "--expected-policy-fingerprint",
+            "sha256:abc",
+            "--expected-policy-version-ns",
+            "12",
         ])
         config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
         calls: list[tuple[str, str, dict[str, str] | None]] = []
@@ -1370,6 +1408,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "relation": "depends_on",
                         "fact": "one depends on two",
                         "fact_rating": 0.85,
+                        "expected_policy_fingerprint": "sha256:abc",
+                        "expected_policy_version_ns": 12,
                         "repo": "repo-a",
                     },
                 )
@@ -1445,6 +1485,10 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "local references shared",
             "--fact-rating",
             "0.75",
+            "--expected-policy-fingerprint",
+            "sha256:def",
+            "--expected-policy-version-ns",
+            "13",
         ])
         config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
         calls: list[tuple[str, str, dict[str, str] | None]] = []
@@ -1474,6 +1518,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "relation": "references",
                         "fact": "local references shared",
                         "fact_rating": 0.75,
+                        "expected_policy_fingerprint": "sha256:def",
+                        "expected_policy_version_ns": 13,
                         "repo": "repo-a",
                     },
                 )
@@ -1877,6 +1923,35 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(
             cli.shared_server_http_error_message(error),
             "HTTP 409: repo policy version conflict; graph=autopsy; repo=repo-a; expected_version=10; current_version=11",
+        )
+
+    def test_shared_server_http_error_formats_relation_policy_version_conflict(self):
+        error = urllib.error.HTTPError(
+            "/v1/shared-graphs/autopsy/relations",
+            409,
+            "Conflict",
+            {},
+            io.BytesIO(
+                json.dumps(
+                    {
+                        "detail": {
+                            "error": "relation policy version conflict",
+                            "graph_slug": "autopsy",
+                            "repo": "repo-a",
+                            "relation": "supports",
+                            "relation_scope": "shared",
+                            "expected_policy_version_ns": 10,
+                            "current_policy_version_ns": 11,
+                            "current": {"policy_version_ns": 11, "reason": "relation_label_not_allowed"},
+                        }
+                    }
+                ).encode()
+            ),
+        )
+
+        self.assertEqual(
+            cli.shared_server_http_error_message(error),
+            "HTTP 409: relation policy version conflict; graph=autopsy; repo=repo-a; expected_policy_version=10; current_policy_version=11; relation=supports; relation_scope=shared; current_reason=relation_label_not_allowed",
         )
 
     def test_shared_server_publish_payload_carries_local_memory_metadata(self):

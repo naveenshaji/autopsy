@@ -4401,6 +4401,10 @@ def format_shared_server_error_detail(value: Any) -> str:
                 ("repo", "repo"),
                 ("mode", "mode"),
                 ("expected_version_ns", "expected_version"),
+                ("expected_policy_version_ns", "expected_policy_version"),
+                ("current_policy_version_ns", "current_policy_version"),
+                ("relation", "relation"),
+                ("relation_scope", "relation_scope"),
                 ("active_owner_count", "active_owners"),
                 ("removed_owner_count", "removing"),
                 ("remaining_owner_count", "remaining"),
@@ -4413,6 +4417,12 @@ def format_shared_server_error_detail(value: Any) -> str:
             current_version = "" if current.get("version_ns") is None else str(current.get("version_ns")).strip()
             if current_version:
                 parts.append(f"current_version={current_version}")
+            current_policy_version = "" if current.get("policy_version_ns") is None else str(current.get("policy_version_ns")).strip()
+            if current_policy_version and not any(part.startswith("current_policy_version=") for part in parts):
+                parts.append(f"current_policy_version={current_policy_version}")
+            current_reason = str(current.get("reason") or "").strip()
+            if current_reason:
+                parts.append(f"current_reason={current_reason}")
             return "; ".join(parts)
         return json.dumps(value, sort_keys=True)
     return str(value)
@@ -6025,6 +6035,12 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         fact_rating = normalize_fact_rating(getattr(args, "fact_rating", None))
         if fact_rating is not None:
             relation_payload["fact_rating"] = fact_rating
+        expected_policy_fingerprint = str(getattr(args, "expected_policy_fingerprint", "") or "").strip()
+        if expected_policy_fingerprint:
+            relation_payload["expected_policy_fingerprint"] = expected_policy_fingerprint
+        expected_policy_version_ns = getattr(args, "expected_policy_version_ns", None)
+        if expected_policy_version_ns is not None:
+            relation_payload["expected_policy_version_ns"] = int(expected_policy_version_ns)
         related = shared_server_request_or_fail(
             config,
             shared_server_path(graph_slug, "/relations"),
@@ -6054,6 +6070,12 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         fact_rating = normalize_fact_rating(getattr(args, "fact_rating", None))
         if fact_rating is not None:
             link_payload["fact_rating"] = fact_rating
+        expected_policy_fingerprint = str(getattr(args, "expected_policy_fingerprint", "") or "").strip()
+        if expected_policy_fingerprint:
+            link_payload["expected_policy_fingerprint"] = expected_policy_fingerprint
+        expected_policy_version_ns = getattr(args, "expected_policy_version_ns", None)
+        if expected_policy_version_ns is not None:
+            link_payload["expected_policy_version_ns"] = int(expected_policy_version_ns)
         linked = shared_server_request_or_fail(
             config,
             shared_server_path(graph_slug, "/personal-relations"),
