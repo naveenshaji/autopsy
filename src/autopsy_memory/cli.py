@@ -5073,6 +5073,9 @@ def attach_shared_context_to_context_payload(payload: dict[str, Any], shared_con
             label = str(relation.get("relation") or "related_to")
             fact = summary_snippet(str(relation.get("fact") or ""), limit=220)
             text = f"shared relation: {source_key} -{label}-> {target_key}"
+            fact_rating = context_fact_rating_annotation(relation.get("fact_rating"))
+            if fact_rating:
+                text = f"{text} ({fact_rating})"
             if fact:
                 text = f"{text}: {fact}"
             used_chars, was_truncated = append_context_entry(
@@ -5142,7 +5145,14 @@ def attach_linked_shared_context_to_context_payload(payload: dict[str, Any], lin
                 text = f"{text} - {content}"
             link_bits = []
             if personal_key or stable_key:
-                link_bits.append(f"link: {personal_key} -{relation}-> {stable_key}")
+                link_text = f"link: {personal_key} -{relation}-> {stable_key}"
+                fact_rating = context_fact_rating_annotation(personal_relation.get("fact_rating"))
+                if fact_rating:
+                    link_text = f"{link_text} ({fact_rating})"
+                link_bits.append(link_text)
+            link_fact = summary_snippet(str(personal_relation.get("fact") or ""), limit=220)
+            if link_fact:
+                link_bits.append(f"link fact: {link_fact}")
             link_bits.append(f"source: shared_server graph={source_graph} repo={source_repo}")
             text = f"{text} [{'; '.join(link_bits)}]"
             used_chars, was_truncated = append_context_entry(
@@ -5165,6 +5175,9 @@ def attach_linked_shared_context_to_context_payload(payload: dict[str, Any], lin
             label = str(relation.get("relation") or "related_to")
             fact = summary_snippet(str(relation.get("fact") or ""), limit=220)
             text = f"linked shared relation: {source_key} -{label}-> {target_key}"
+            fact_rating = context_fact_rating_annotation(relation.get("fact_rating"))
+            if fact_rating:
+                text = f"{text} ({fact_rating})"
             if fact:
                 text = f"{text}: {fact}"
             used_chars, was_truncated = append_context_entry(

@@ -7359,7 +7359,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
                     }
                 ],
                 "relations": [
-                    {"id": "rel_1", "source_key": "shared:1", "target_key": "shared:2", "relation": "supports", "fact": "one supports two"}
+                    {"id": "rel_1", "source_key": "shared:1", "target_key": "shared:2", "relation": "supports", "fact": "one supports two", "fact_rating": 0.91}
                 ],
                 "context_block": "Autopsy Shared Context",
             }
@@ -7390,6 +7390,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertIn("neighbor memory from the shared graph", payload["context_block"])
         self.assertIn("Shared Context Relations", payload["context_block"])
         self.assertIn("shared:1 -supports-> shared:2", payload["context_block"])
+        self.assertIn("shared:1 -supports-> shared:2 (rating 0.91): one supports two", payload["context_block"])
         self.assertEqual(calls[0][0], "/v1/shared-graphs/autopsy/context?repo=repo-a&query=needle&limit=3&min_fact_rating=0.8")
 
     def test_context_command_can_follow_private_shared_links(self):
@@ -7438,11 +7439,13 @@ class AutopsyCLIContractTests(unittest.TestCase):
                             "personal_key": "graph-note:local",
                             "shared_key": "shared:1",
                             "relation": "references",
+                            "fact": "local references shared link",
+                            "fact_rating": 0.75,
                         },
                     }
                 ],
                 "relations": [
-                    {"id": "rel_1", "source_key": "shared:1", "target_key": "shared:2", "relation": "supports", "fact": "one supports two"}
+                    {"id": "rel_1", "source_key": "shared:1", "target_key": "shared:2", "relation": "supports", "fact": "one supports two", "fact_rating": 0.84}
                 ],
                 "context_block": "Autopsy Linked Shared Context",
             }
@@ -7468,8 +7471,11 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertIn("Linked Shared Context", payload["context_block"])
         self.assertIn("[shared:1] linked shared observation: Shared Link", payload["context_block"])
         self.assertIn("link: graph-note:local -references-> shared:1", payload["context_block"])
+        self.assertIn("link: graph-note:local -references-> shared:1 (rating 0.75)", payload["context_block"])
+        self.assertIn("link fact: local references shared link", payload["context_block"])
         self.assertIn("Linked Shared Context Relations", payload["context_block"])
         self.assertIn("linked shared relation: shared:1 -supports-> shared:2", payload["context_block"])
+        self.assertIn("linked shared relation: shared:1 -supports-> shared:2 (rating 0.84): one supports two", payload["context_block"])
         self.assertEqual(calls[0][0], "/v1/shared-graphs/autopsy/personal-context?repo=repo-a&limit=3&personal_key=graph-note%3Alocal&min_fact_rating=0.8")
 
     def test_context_command_shared_context_errors_are_nonfatal(self):
