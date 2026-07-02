@@ -2027,11 +2027,19 @@ final class ActivityStore: ObservableObject {
 
         var fingerprintEventCount = 0
         var fingerprints: Set<String> = []
+        var clientFingerprints: Set<String> = []
+        var rateLimitedCount = 0
         for item in securityEvents {
             let metadata = item["metadata"] as? [String: Any] ?? [:]
             if let fingerprint = auditString(metadata["token_fingerprint"]) {
                 fingerprintEventCount += 1
                 fingerprints.insert(fingerprint)
+            }
+            if let clientFingerprint = auditString(metadata["client_fingerprint"]) {
+                clientFingerprints.insert(clientFingerprint)
+            }
+            if auditBool(metadata["rate_limited"]) == true {
+                rateLimitedCount += 1
             }
         }
 
@@ -2055,6 +2063,8 @@ final class ActivityStore: ObservableObject {
             "Audit window: \(items.count) latest events",
             "Auth failures: \(securityEvents.count)",
             "Token fingerprints: \(fingerprints.count) unique across \(fingerprintEventCount) events",
+            "Client fingerprints: \(clientFingerprints.count) unique",
+            "Rate limited: \(rateLimitedCount)",
             "Integrity: \(auditString(integrityPayload?["status"]) ?? "unknown") (verified \(verified), missing \(missing), mismatch \(mismatch), unknown \(unknown))",
             "Chain: \(chainStatus), linked \(linkedPairs)/\(checkedPairs), gaps \(externalGaps), breaks \(chainBreaks)",
         ]
@@ -2100,8 +2110,17 @@ final class ActivityStore: ObservableObject {
         if let target = auditString(item["target"]) {
             parts.append("target \(target)")
         }
+        if let clientFingerprint = auditString(metadata["client_fingerprint"]) {
+            parts.append("client \(clientFingerprint)")
+        }
         if let fingerprint = auditString(metadata["token_fingerprint"]) {
             parts.append("fingerprint \(fingerprint)")
+        }
+        if auditBool(metadata["rate_limited"]) == true {
+            parts.append("rate limited")
+            if let retryAfter = auditInt(metadata["retry_after_seconds"]) {
+                parts.append("retry \(retryAfter)s")
+            }
         }
         if let integrityStatus = auditString(item["integrity_status"]) {
             parts.append("integrity \(integrityStatus)")
