@@ -461,6 +461,7 @@ def build_parser(
     shared_server_parser.add_argument("--relation-scope", choices=("shared", "personal"), default="shared", help="Relation policy scope for shared-server check-relation.")
     shared_server_parser.add_argument("--fact", default="", help="Optional relation fact text for shared-server link or relate.")
     shared_server_parser.add_argument("--fact-rating", type=float, help="Optional 0.0-1.0 quality rating for shared-server relate, link, or check-relation.")
+    shared_server_parser.add_argument("--check-policy", action="store_true", help="With shared-server relate or link, dry-run the repo relation policy first and send the returned fingerprint/version as a stale-write guard.")
     shared_server_parser.add_argument("--expected-policy-fingerprint", help="With shared-server relate or link, reject the write unless the effective repo policy fingerprint still matches this value.")
     shared_server_parser.add_argument("--expected-policy-version-ns", type=int, help="With shared-server relate or link, reject the write unless the effective repo policy version_ns still matches this value.")
     shared_server_parser.add_argument("--personal-key", help="Personal stable-key filter for shared-server personal-links or personal-context, or personal key for link.")

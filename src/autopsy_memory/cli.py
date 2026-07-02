@@ -5045,6 +5045,42 @@ def shared_server_path(graph_slug: str, suffix: str) -> str:
     return f"/v1/shared-graphs/{urllib.parse.quote(graph_slug, safe='')}{suffix}"
 
 
+def checked_relation_policy_expectation(
+    config: dict[str, Any],
+    graph_slug: str,
+    *,
+    repo: str,
+    relation: str,
+    relation_scope: str,
+    fact_rating: float | None,
+) -> tuple[str, int, dict[str, Any]]:
+    check_payload: dict[str, Any] = {
+        "repo": repo,
+        "relation": relation,
+        "relation_scope": relation_scope,
+    }
+    if fact_rating is not None:
+        check_payload["fact_rating"] = fact_rating
+    check_result = shared_server_request_or_fail(
+        config,
+        shared_server_path(graph_slug, "/relations/check"),
+        method="POST",
+        payload=check_payload,
+        timeout=15,
+    )
+    if not bool(check_result.get("allowed")):
+        reason = str(check_result.get("reason") or "denied").strip()
+        fail(
+            f"shared-server --check-policy denied relation write: reason={reason}; repo={repo}; relation={relation}; relation_scope={relation_scope}",
+            1,
+        )
+    policy_fingerprint = str(check_result.get("policy_fingerprint") or "").strip()
+    policy_version_ns = check_result.get("policy_version_ns")
+    if not policy_fingerprint or policy_version_ns is None:
+        fail("shared-server --check-policy response did not include policy_fingerprint and policy_version_ns", 1)
+    return policy_fingerprint, int(policy_version_ns), check_result
+
+
 def build_shared_server_publish_payload(item: dict[str, Any], *, repo: str, expected_version_ns: int | None = None) -> dict[str, Any]:
     metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
     payload: dict[str, Any] = {
@@ -6036,9 +6072,22 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         if fact_rating is not None:
             relation_payload["fact_rating"] = fact_rating
         expected_policy_fingerprint = str(getattr(args, "expected_policy_fingerprint", "") or "").strip()
+        expected_policy_version_ns = getattr(args, "expected_policy_version_ns", None)
+        check_policy = bool(getattr(args, "check_policy", False))
+        policy_check: dict[str, Any] | None = None
+        if check_policy:
+            if expected_policy_fingerprint or expected_policy_version_ns is not None:
+                fail("shared-server relate cannot combine --check-policy with --expected-policy-fingerprint or --expected-policy-version-ns", 2)
+            expected_policy_fingerprint, expected_policy_version_ns, policy_check = checked_relation_policy_expectation(
+                config,
+                graph_slug,
+                repo=repo,
+                relation=relation,
+                relation_scope="shared",
+                fact_rating=fact_rating,
+            )
         if expected_policy_fingerprint:
             relation_payload["expected_policy_fingerprint"] = expected_policy_fingerprint
-        expected_policy_version_ns = getattr(args, "expected_policy_version_ns", None)
         if expected_policy_version_ns is not None:
             relation_payload["expected_policy_version_ns"] = int(expected_policy_version_ns)
         related = shared_server_request_or_fail(
@@ -6048,11 +6097,14 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
             payload=relation_payload,
             timeout=15,
         )
-        print(json.dumps({
+        output = {
             "shared_server": redacted_shared_server_config(config, path=config_path),
             "repo": repo,
             "related": related,
-        }, indent=2))
+        }
+        if policy_check is not None:
+            output["policy_check"] = policy_check
+        print(json.dumps(output, indent=2))
         return
     if action == "link":
         personal_key = str(getattr(args, "stable_key", "") or getattr(args, "personal_key", "") or "").strip()
@@ -6071,9 +6123,22 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         if fact_rating is not None:
             link_payload["fact_rating"] = fact_rating
         expected_policy_fingerprint = str(getattr(args, "expected_policy_fingerprint", "") or "").strip()
+        expected_policy_version_ns = getattr(args, "expected_policy_version_ns", None)
+        check_policy = bool(getattr(args, "check_policy", False))
+        policy_check: dict[str, Any] | None = None
+        if check_policy:
+            if expected_policy_fingerprint or expected_policy_version_ns is not None:
+                fail("shared-server link cannot combine --check-policy with --expected-policy-fingerprint or --expected-policy-version-ns", 2)
+            expected_policy_fingerprint, expected_policy_version_ns, policy_check = checked_relation_policy_expectation(
+                config,
+                graph_slug,
+                repo=repo,
+                relation=relation,
+                relation_scope="personal",
+                fact_rating=fact_rating,
+            )
         if expected_policy_fingerprint:
             link_payload["expected_policy_fingerprint"] = expected_policy_fingerprint
-        expected_policy_version_ns = getattr(args, "expected_policy_version_ns", None)
         if expected_policy_version_ns is not None:
             link_payload["expected_policy_version_ns"] = int(expected_policy_version_ns)
         linked = shared_server_request_or_fail(
@@ -6083,11 +6148,14 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
             payload=link_payload,
             timeout=15,
         )
-        print(json.dumps({
+        output = {
             "shared_server": redacted_shared_server_config(config, path=config_path),
             "repo": repo,
             "linked": linked,
-        }, indent=2))
+        }
+        if policy_check is not None:
+            output["policy_check"] = policy_check
+        print(json.dumps(output, indent=2))
         return
 
 
