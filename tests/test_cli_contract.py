@@ -7273,6 +7273,16 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "source": {"type": "shared_server", "graph_slug": "autopsy", "repo": "repo-a"},
                     }
                 ],
+                "related_items": [
+                    {
+                        "stable_key": "shared:2",
+                        "kind": "decision",
+                        "title": "Shared Two",
+                        "content": "neighbor memory from the shared graph",
+                        "repo": "repo-a",
+                        "source": {"type": "shared_server", "graph_slug": "autopsy", "repo": "repo-a"},
+                    }
+                ],
                 "relations": [
                     {"id": "rel_1", "source_key": "shared:1", "target_key": "shared:2", "relation": "supports", "fact": "one supports two"}
                 ],
@@ -7297,8 +7307,12 @@ class AutopsyCLIContractTests(unittest.TestCase):
 
         self.assertEqual(payload["shared_context"]["status"], "ok")
         self.assertEqual(payload["shared_context"]["items"][0]["stable_key"], "shared:1")
+        self.assertEqual(payload["shared_context"]["related_items"][0]["stable_key"], "shared:2")
         self.assertIn("Shared Context", payload["context_block"])
         self.assertIn("[shared:1] shared observation: Shared One", payload["context_block"])
+        self.assertIn("Shared Context Related Memory", payload["context_block"])
+        self.assertIn("[shared:2] related shared decision: Shared Two", payload["context_block"])
+        self.assertIn("neighbor memory from the shared graph", payload["context_block"])
         self.assertIn("Shared Context Relations", payload["context_block"])
         self.assertIn("shared:1 -supports-> shared:2", payload["context_block"])
         self.assertEqual(calls[0][0], "/v1/shared-graphs/autopsy/context?repo=repo-a&query=needle&limit=3")

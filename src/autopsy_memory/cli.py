@@ -4813,6 +4813,7 @@ def build_shared_context_command_payload(args: argparse.Namespace, query: str) -
         "repo": repo,
         "query": shared_query,
         "items": [],
+        "related_items": [],
         "relations": [],
         "context_block": "",
     }
@@ -5009,6 +5010,32 @@ def attach_shared_context_to_context_payload(payload: dict[str, Any], shared_con
                 {
                     "section": "shared_context",
                     "priority": 1,
+                    "stable_key": stable_key,
+                    "text": text,
+                },
+                max_chars=max_chars,
+                used_chars=used_chars,
+            )
+            truncated = truncated or was_truncated
+        for item in list(shared_context.get("related_items") or [])[:8]:
+            if not isinstance(item, dict):
+                continue
+            stable_key = str(item.get("stable_key") or "")
+            title = summary_snippet(str(item.get("title") or ""), limit=160)
+            content = summary_snippet(str(item.get("content") or ""), limit=360)
+            kind = str(item.get("kind") or "shared_memory")
+            source = item.get("source") if isinstance(item.get("source"), dict) else {}
+            source_graph = str(source.get("graph_slug") or graph_slug)
+            source_repo = str(source.get("repo") or repo)
+            text = f"related shared {kind}: {title}"
+            if content:
+                text = f"{text} - {content}"
+            text = f"{text} [source: shared_server graph={source_graph} repo={source_repo}]"
+            used_chars, was_truncated = append_context_entry(
+                entries,
+                {
+                    "section": "shared_context_related",
+                    "priority": 2,
                     "stable_key": stable_key,
                     "text": text,
                 },
@@ -11142,6 +11169,7 @@ def context_block_section_title(section: str) -> str:
         "observations": "Observations",
         "retrieved_memory": "Retrieved Memory",
         "shared_context": "Shared Context",
+        "shared_context_related": "Shared Context Related Memory",
         "shared_context_relations": "Shared Context Relations",
         "linked_shared_context": "Linked Shared Context",
         "linked_shared_context_relations": "Linked Shared Context Relations",
