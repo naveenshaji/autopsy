@@ -661,6 +661,11 @@ private struct SharedSettingsTab: View {
                 TextField("Token Repo Scope", text: $revokeTokenRepoScope)
                     .textFieldStyle(.roundedBorder)
                 HStack {
+                    Button("Copy Token Inventory") {
+                        store.copySharedServerAdminTokens()
+                    }
+                    .disabled(sharedActionDisabled)
+
                     Button("Copy Invite Tokens") {
                         store.copySharedServerScopedTokens(repoScope: revokeTokenRepoScope)
                     }

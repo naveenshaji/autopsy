@@ -4531,6 +4531,13 @@ def shared_server_storage_status_path() -> str:
     return "/v1/admin/storage-status"
 
 
+def shared_server_admin_tokens_path(*, limit: int = 500, include_revoked: bool = False) -> str:
+    query: dict[str, Any] = {"limit": max(1, min(1000, int(limit)))}
+    if include_revoked:
+        query["include_revoked"] = "true"
+    return f"/v1/admin/tokens?{urllib.parse.urlencode(query)}"
+
+
 def shared_server_access_check_path(graph_slug: str, repo: str, *, mode: str = "read") -> str:
     query = {
         "repo": repo,
@@ -5796,6 +5803,17 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         return
     if action == "storage-status":
         payload = shared_server_request_or_fail(config, shared_server_storage_status_path(), timeout=10)
+        print(json.dumps(payload, indent=2))
+        return
+    if action == "admin-tokens":
+        payload = shared_server_request_or_fail(
+            config,
+            shared_server_admin_tokens_path(
+                limit=int(getattr(args, "limit", 50) or 50),
+                include_revoked=bool(getattr(args, "include_revoked", False)),
+            ),
+            timeout=10,
+        )
         print(json.dumps(payload, indent=2))
         return
     if action == "users":

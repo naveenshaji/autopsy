@@ -216,6 +216,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         enable_args = parser.parse_args(["shared-server", "enable-user", "--user-id", "usr_1"])
         revoke_args = parser.parse_args(["shared-server", "revoke-token", "tok_1"])
         scoped_tokens_args = parser.parse_args(["shared-server", "scoped-tokens", "--repo-scope", "repo-a"])
+        admin_tokens_args = parser.parse_args(["shared-server", "admin-tokens", "--include-revoked", "--limit", "25"])
         handoff_args = parser.parse_args([
             "shared-server",
             "handoff-owner",
@@ -451,6 +452,9 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(revoke_args.stable_key, "tok_1")
         self.assertEqual(scoped_tokens_args.shared_server_action, "scoped-tokens")
         self.assertEqual(scoped_tokens_args.repo_scope, "repo-a")
+        self.assertEqual(admin_tokens_args.shared_server_action, "admin-tokens")
+        self.assertTrue(admin_tokens_args.include_revoked)
+        self.assertEqual(admin_tokens_args.limit, 25)
         self.assertEqual(handoff_args.shared_server_action, "handoff-owner")
         self.assertEqual(handoff_args.from_user_id, "usr_owner")
         self.assertEqual(handoff_args.to_user_id, "usr_peer")
@@ -610,6 +614,13 @@ class AutopsyCLIContractTests(unittest.TestCase):
 
     def test_shared_server_scoped_tokens_path_is_graph_scoped(self):
         self.assertEqual(cli.shared_server_scoped_tokens_path("autopsy", "repo/a"), "/v1/shared-graphs/autopsy/tokens?repo=repo%2Fa")
+
+    def test_shared_server_admin_tokens_path_is_admin_scoped(self):
+        self.assertEqual(cli.shared_server_admin_tokens_path(limit=25), "/v1/admin/tokens?limit=25")
+        self.assertEqual(
+            cli.shared_server_admin_tokens_path(limit=5000, include_revoked=True),
+            "/v1/admin/tokens?limit=1000&include_revoked=true",
+        )
 
     def test_shared_server_repo_scope_prefers_normalized_git_remote(self):
         parser = cli.build_parser()
@@ -2019,6 +2030,39 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["backend"], "falkordb")
         self.assertEqual(payload["counts"]["shared_memories"], 54)
+
+    def test_shared_server_admin_tokens_action_prints_remote_payload(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["shared-server", "admin-tokens", "--include-revoked", "--limit", "25"])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+
+        def fake_request(_config, path, **_kwargs):
+            self.assertEqual(path, "/v1/admin/tokens?limit=25&include_revoked=true")
+            return {
+                "items": [
+                    {
+                        "id": "tok_1",
+                        "user_id": "usr_1",
+                        "email": "dev@example.com",
+                        "label": "laptop",
+                        "revoked": False,
+                        "expired": False,
+                        "last_used_at": "2026-07-02T00:00:00Z",
+                    }
+                ]
+            }
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        payload = json.loads(stream.getvalue())
+        self.assertEqual(payload["items"][0]["id"], "tok_1")
+        self.assertNotIn("token_hash", stream.getvalue())
 
     def test_shared_server_verify_receipt_checks_expected_fields(self):
         parser = cli.build_parser()

@@ -401,6 +401,7 @@ def build_parser(
             "capabilities",
             "team-status",
             "storage-status",
+            "admin-tokens",
             "users",
             "create-user",
             "disable-user",
@@ -490,6 +491,7 @@ def build_parser(
     shared_server_parser.add_argument("--global-audit", action="store_true", help="With shared-server audit or audit-integrity, read the global audit stream instead of one shared graph/repo window.")
     shared_server_parser.add_argument("--expected-version-ns", type=int, help="With shared-server publish or restore-version, reject the write unless the current shared memory version_ns matches this value.")
     shared_server_parser.add_argument("--include-archived", action="store_true", help="With shared-server list, context, or personal-context, include archived shared memories.")
+    shared_server_parser.add_argument("--include-revoked", action="store_true", help="With shared-server admin-tokens, include revoked token rows.")
     shared_server_parser.add_argument("--no-relations", action="store_true", help="With shared-server context or personal-context, omit adjacent shared graph relations.")
     shared_server_parser.add_argument("--min-fact-rating", type=float, help="With shared-server context or personal-context, omit adjacent shared relations below this 0.0-1.0 evidence rating.")
     shared_server_parser.add_argument(

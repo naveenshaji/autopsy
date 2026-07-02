@@ -69,6 +69,7 @@ final class ActivityStore: ObservableObject {
     ]
     private static let sharedActivityAuditActions = [
         "read_users",
+        "read_admin_tokens",
         "read_user_tokens",
         "read_scoped_tokens",
         "read_grants",
@@ -295,6 +296,7 @@ final class ActivityStore: ObservableObject {
                 ("audit_event_summaries", "audit summaries"),
                 ("admin_storage_status", "storage status"),
                 ("admin_storage_token_hygiene", "token hygiene"),
+                ("admin_token_inventory", "token inventory"),
                 ("repo_policies", "repo policies"),
                 ("repo_policy_inventory", "policy inventory"),
                 ("repo_policy_fingerprints", "policy fingerprints"),
@@ -1089,6 +1091,12 @@ final class ActivityStore: ObservableObject {
     func copySharedServerScopedTokens(repoScope: String) {
         Task {
             await copySharedScopedTokens(repoScope: repoScope)
+        }
+    }
+
+    func copySharedServerAdminTokens() {
+        Task {
+            await copySharedAdminTokens()
         }
     }
 
@@ -2403,6 +2411,32 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    private func copySharedAdminTokens() async {
+        guard !isManagingSharedAccess else { return }
+        isManagingSharedAccess = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingSharedAccess = false
+        }
+
+        do {
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run([
+                "shared-server",
+                "admin-tokens",
+                "--include-revoked",
+                "--limit",
+                "200",
+            ])
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(sharedAdminTokenInventoryReport(from: output), forType: .string)
+            lastActionMessage = "Token inventory copied"
+            clearLastActionMessageAfterDelay(expected: "Token inventory copied")
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
+    }
+
     private func copySharedAudit(repoScope: String) async {
         guard !isManagingSharedAccess else { return }
         isManagingSharedAccess = true
@@ -2818,6 +2852,93 @@ final class ActivityStore: ObservableObject {
                 parts.append("created \(createdAt)")
             }
             lines.append("- \(parts.joined(separator: ", "))")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func sharedAdminTokenInventoryReport(from output: String) -> String {
+        guard let payload = jsonObject(from: output),
+              let rawItems = payload["items"] as? [Any]
+        else {
+            return output.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let items = rawItems.compactMap { $0 as? [String: Any] }
+        let revokedCount = items.filter { auditBool($0["revoked"]) == true }.count
+        let expiredCount = items.filter { auditBool($0["expired"]) == true }.count
+        let disabledUserCount = items.filter { auditBool($0["disabled"]) == true }.count
+        let activeCount = items.filter {
+            auditBool($0["revoked"]) != true && auditBool($0["expired"]) != true
+        }.count
+        let noExpirationCount = items.filter {
+            auditBool($0["revoked"]) != true && auditString($0["expires_at"]) == nil
+        }.count
+        let neverUsedCount = items.filter {
+            auditBool($0["revoked"]) != true && auditString($0["last_used_at"]) == nil
+        }.count
+        let scopedCount = items.filter { auditString($0["issued_graph_slug"]) != nil }.count
+        let globalCount = items.count - scopedCount
+        var lines = [
+            "Shared Token Inventory",
+            "Tokens: \(items.count) (active \(activeCount), revoked \(revokedCount), expired \(expiredCount))",
+            "Hygiene: no expiration \(noExpirationCount), never used \(neverUsedCount), disabled-user \(disabledUserCount)",
+            "Scope: global \(globalCount), scoped \(scopedCount)",
+            "",
+        ]
+        if items.isEmpty {
+            lines.append("No token rows were returned.")
+            return lines.joined(separator: "\n")
+        }
+        for item in items.prefix(100) {
+            let tokenID = auditString(item["id"]) ?? "unknown token"
+            let email = auditString(item["email"]) ?? "unknown email"
+            let userID = auditString(item["user_id"]) ?? "unknown user"
+            var parts = ["\(email)", "user \(userID)", "token \(tokenID)"]
+            if let label = auditString(item["label"]) {
+                parts.append("label \(label)")
+            }
+            let graphSlug = auditString(item["issued_graph_slug"]) ?? ""
+            let repo = auditString(item["issued_repo"]) ?? ""
+            let role = auditString(item["issued_role"]) ?? ""
+            if graphSlug.isEmpty {
+                parts.append("scope global")
+            } else {
+                var scopeParts = ["graph \(graphSlug)"]
+                if !repo.isEmpty {
+                    scopeParts.append("repo \(repo)")
+                }
+                if !role.isEmpty {
+                    scopeParts.append("role \(role)")
+                }
+                parts.append(scopeParts.joined(separator: " "))
+            }
+            if auditBool(item["disabled"]) == true {
+                parts.append("disabled user")
+            }
+            if auditBool(item["revoked"]) == true {
+                parts.append("revoked")
+            } else if auditBool(item["expired"]) == true {
+                parts.append("expired")
+            } else {
+                parts.append("active")
+            }
+            if let expiresAt = auditString(item["expires_at"]) {
+                parts.append("expires \(expiresAt)")
+            } else {
+                parts.append("no expiration")
+            }
+            if let lastUsedAt = auditString(item["last_used_at"]) {
+                parts.append("last used \(lastUsedAt)")
+            } else {
+                parts.append("never used")
+            }
+            if let issuedBy = auditString(item["issued_by"]) {
+                parts.append("issued by \(issuedBy)")
+            }
+            lines.append("- \(parts.joined(separator: ", "))")
+        }
+        if items.count > 100 {
+            lines.append("- \(items.count - 100) more token rows omitted")
         }
         return lines.joined(separator: "\n")
     }
