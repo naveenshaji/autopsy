@@ -46,6 +46,7 @@ final class ActivityStore: ObservableObject {
     private let workerKeepaliveIntervalSeconds: UInt64 = 60
     private static let sharedSecurityAuditActions = [
         "auth_failure",
+        "authorization_denied",
         "disable_user",
         "enable_user",
     ]
@@ -2075,6 +2076,9 @@ final class ActivityStore: ObservableObject {
         let authFailures = securityEvents.filter { item in
             auditString(item["action"]) == "auth_failure"
         }
+        let authorizationDenials = securityEvents.filter { item in
+            auditString(item["action"]) == "authorization_denied"
+        }
         let userLifecycleEvents = securityEvents.filter { item in
             guard let action = auditString(item["action"]) else { return false }
             return action == "disable_user" || action == "enable_user"
@@ -2085,6 +2089,14 @@ final class ActivityStore: ObservableObject {
         let reasonCounts = Dictionary(grouping: authFailures) { item in
             let metadata = item["metadata"] as? [String: Any] ?? [:]
             return auditString(metadata["reason"]) ?? "unknown"
+        }.mapValues(\.count)
+        let denialReasonCounts = Dictionary(grouping: authorizationDenials) { item in
+            let metadata = item["metadata"] as? [String: Any] ?? [:]
+            return auditString(metadata["reason"]) ?? "unknown"
+        }.mapValues(\.count)
+        let denialModeCounts = Dictionary(grouping: authorizationDenials) { item in
+            let metadata = item["metadata"] as? [String: Any] ?? [:]
+            return auditString(metadata["mode"]) ?? "unknown"
         }.mapValues(\.count)
 
         var fingerprintEventCount = 0
@@ -2104,6 +2116,10 @@ final class ActivityStore: ObservableObject {
                 rateLimitedCount += 1
             }
         }
+        let tokenScopedDenials = authorizationDenials.filter { item in
+            let metadata = item["metadata"] as? [String: Any] ?? [:]
+            return auditBool(metadata["token_scoped"]) == true
+        }.count
 
         let integrityPayload = jsonObject(from: integrityOutput)
         let integrityCounts = integrityPayload?["integrity_counts"] as? [String: Any] ?? [:]
@@ -2125,10 +2141,12 @@ final class ActivityStore: ObservableObject {
             "Audit window: \(items.count) latest events",
             "Security events: \(securityEvents.count)",
             "Auth failures: \(authFailures.count)",
+            "Authorization denials: \(authorizationDenials.count)",
             "User lifecycle: \(userLifecycleEvents.count)",
             "Token fingerprints: \(fingerprints.count) unique across \(fingerprintEventCount) events",
             "Client fingerprints: \(clientFingerprints.count) unique",
             "Rate limited: \(rateLimitedCount)",
+            "Token-scoped denials: \(tokenScopedDenials)",
             "Integrity: \(auditString(integrityPayload?["status"]) ?? "unknown") (verified \(verified), missing \(missing), mismatch \(mismatch), unknown \(unknown))",
             "Chain: \(chainStatus), linked \(linkedPairs)/\(checkedPairs), gaps \(externalGaps), breaks \(chainBreaks)",
         ]
@@ -2143,6 +2161,28 @@ final class ActivityStore: ObservableObject {
             .map { "\($0.key) \($0.value)" }
         if !reasonSummary.isEmpty {
             lines.append("Reasons: \(reasonSummary.joined(separator: ", "))")
+        }
+        let denialReasonSummary = denialReasonCounts
+            .sorted { left, right in
+                if left.value == right.value {
+                    return left.key < right.key
+                }
+                return left.value > right.value
+            }
+            .map { "\($0.key) \($0.value)" }
+        if !denialReasonSummary.isEmpty {
+            lines.append("Denial reasons: \(denialReasonSummary.joined(separator: ", "))")
+        }
+        let denialModeSummary = denialModeCounts
+            .sorted { left, right in
+                if left.value == right.value {
+                    return left.key < right.key
+                }
+                return left.value > right.value
+            }
+            .map { "\($0.key) \($0.value)" }
+        if !denialModeSummary.isEmpty {
+            lines.append("Denial modes: \(denialModeSummary.joined(separator: ", "))")
         }
         let actionSummary = Self.sharedSecurityAuditActions
             .compactMap { action -> String? in
@@ -2171,6 +2211,9 @@ final class ActivityStore: ObservableObject {
 
     private func formatSharedSecurityAuditItem(_ item: [String: Any]) -> String {
         let action = auditString(item["action"]) ?? "security_event"
+        if action == "authorization_denied" {
+            return formatSharedAuthorizationDeniedAuditItem(item)
+        }
         if action == "disable_user" || action == "enable_user" {
             return formatSharedUserLifecycleAuditItem(item, action: action)
         }
@@ -2204,6 +2247,51 @@ final class ActivityStore: ObservableObject {
         }
 
         return "- \(createdAt) auth failure: \(parts.joined(separator: ", "))"
+    }
+
+    private func formatSharedAuthorizationDeniedAuditItem(_ item: [String: Any]) -> String {
+        let createdAt = auditString(item["created_at"]) ?? "unknown time"
+        let metadata = item["metadata"] as? [String: Any] ?? [:]
+
+        var parts = [
+            "mode \(auditString(metadata["mode"]) ?? "unknown")",
+            "reason \(auditString(metadata["reason"]) ?? "unknown")",
+        ]
+        if let actor = auditString(item["actor_id"]) {
+            parts.append("actor \(actor)")
+        }
+        if let graph = auditString(item["graph_slug"]), !graph.isEmpty {
+            parts.append("graph \(graph)")
+        }
+        if let repo = auditString(item["repo"]), !repo.isEmpty {
+            parts.append("repo \(repo)")
+        }
+        if let effectiveRole = auditString(metadata["effective_role"]), !effectiveRole.isEmpty {
+            parts.append("effective \(effectiveRole)")
+        }
+        if let grantCount = auditInt(metadata["matching_grant_count"]) {
+            parts.append("matching grants \(grantCount)")
+        }
+        if auditBool(metadata["token_scoped"]) == true {
+            parts.append("token scoped")
+            if let scopeRole = auditString(metadata["token_scope_role"]), !scopeRole.isEmpty {
+                parts.append("scope role \(scopeRole)")
+            }
+            if let tokenID = auditString(metadata["token_id"]), !tokenID.isEmpty {
+                parts.append("token \(tokenID)")
+            }
+            if let scopeMatches = auditBool(metadata["token_scope_matches"]) {
+                parts.append("scope match \(scopeMatches ? "yes" : "no")")
+            }
+        }
+        if let target = auditString(item["target"]) {
+            parts.append("target \(target)")
+        }
+        if let integrityStatus = auditString(item["integrity_status"]) {
+            parts.append("integrity \(integrityStatus)")
+        }
+
+        return "- \(createdAt) authorization denied: \(parts.joined(separator: ", "))"
     }
 
     private func formatSharedUserLifecycleAuditItem(_ item: [String: Any], action: String) -> String {
