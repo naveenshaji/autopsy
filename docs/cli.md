@@ -76,6 +76,7 @@ autopsy shared-server health
 autopsy shared-server team-status
 autopsy shared-server users
 autopsy shared-server grants --repo-scope /path/to/repo
+autopsy shared-server scoped-tokens --repo-scope /path/to/repo
 autopsy shared-server access-check --repo-scope /path/to/repo --mode write
 autopsy shared-server audit --repo-scope /path/to/repo
 autopsy shared-server invite --email dev@example.com --role writer --repo-scope /path/to/repo
@@ -140,7 +141,10 @@ UTC timestamp. Global admins can also use
 `create-token --user-id <id> --label <label>`, `grants --repo-scope <repo>`,
 `grant --user-id <id> --role reader|writer|owner --repo-scope <repo>`,
 `revoke-token <token-id>`, and `revoke-grant --user-id <id> --repo-scope <repo>`
-to manage shared access. `revoke-token` first uses the global-admin endpoint and
+to manage shared access. `shared-server scoped-tokens --repo-scope <repo>` lists
+non-secret invite-token metadata that graph owners are allowed to revoke.
+`team-status` includes active, expired, and revoked scoped-token counts for the
+selected repo. `revoke-token` first uses the global-admin endpoint and
 falls back to graph-scoped revocation, so graph owners can clean up invite-issued
 tokens for repos they own without global token access. `shared-server audit
 --repo-scope <repo>` lists scoped server audit events for graph owners or admins.

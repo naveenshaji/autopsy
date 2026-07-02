@@ -266,6 +266,30 @@ final class ActivityStore: ObservableObject {
         return ""
     }
 
+    var sharedServerTokensText: String {
+        guard let team = currentSharedServer?.team else { return "" }
+        if let count = team.tokensCount {
+            var parts: [String] = []
+            if let active = team.activeTokensCount {
+                parts.append("active: \(active)")
+            }
+            if let expired = team.expiredTokensCount, expired > 0 {
+                parts.append("expired: \(expired)")
+            }
+            if let revoked = team.revokedTokensCount, revoked > 0 {
+                parts.append("revoked: \(revoked)")
+            }
+            if parts.isEmpty {
+                return "\(count)"
+            }
+            return "\(count) (\(parts.joined(separator: ", ")))"
+        }
+        if let error = team.tokensError, !error.isEmpty {
+            return error.clippedForMenuBar(limit: 28)
+        }
+        return ""
+    }
+
     var shouldShowOnboardingPrompt: Bool {
         (hasEmptyMemoryState || instructionStatus != nil) && !hasPriorMemory && !hasInstalledInstructions
     }

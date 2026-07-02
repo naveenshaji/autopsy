@@ -159,6 +159,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "repo-a",
         ])
         revoke_args = parser.parse_args(["shared-server", "revoke-token", "tok_1"])
+        scoped_tokens_args = parser.parse_args(["shared-server", "scoped-tokens", "--repo-scope", "repo-a"])
         access_check_args = parser.parse_args(["shared-server", "access-check", "--repo-scope", "repo-a", "--mode", "write"])
         audit_args = parser.parse_args(["shared-server", "audit", "--repo-scope", "repo-a", "--limit", "25"])
         publish_args = parser.parse_args(["shared-server", "publish", "graph-note:1", "--repo-scope", "repo-a", "--expected-version-ns", "123"])
@@ -247,6 +248,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(grant_args.repo_scope, "repo-a")
         self.assertEqual(revoke_args.shared_server_action, "revoke-token")
         self.assertEqual(revoke_args.stable_key, "tok_1")
+        self.assertEqual(scoped_tokens_args.shared_server_action, "scoped-tokens")
+        self.assertEqual(scoped_tokens_args.repo_scope, "repo-a")
         self.assertEqual(access_check_args.shared_server_action, "access-check")
         self.assertEqual(access_check_args.repo_scope, "repo-a")
         self.assertEqual(access_check_args.mode, "write")
@@ -315,6 +318,9 @@ class AutopsyCLIContractTests(unittest.TestCase):
 
     def test_shared_server_invitation_path_is_graph_scoped(self):
         self.assertEqual(cli.shared_server_invitation_path("autopsy"), "/v1/shared-graphs/autopsy/invitations")
+
+    def test_shared_server_scoped_tokens_path_is_graph_scoped(self):
+        self.assertEqual(cli.shared_server_scoped_tokens_path("autopsy", "repo/a"), "/v1/shared-graphs/autopsy/tokens?repo=repo%2Fa")
 
     def test_shared_server_repo_scope_prefers_normalized_git_remote(self):
         parser = cli.build_parser()
@@ -640,6 +646,36 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "label": "invite",
                         "expires_at": "2999-01-01T00:00:00Z",
                     },
+                )
+            ],
+        )
+
+    def test_shared_server_scoped_tokens_fetches_repo_tokens(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["shared-server", "scoped-tokens", "--repo-scope", "repo-a"])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        calls: list[tuple[str, str, dict[str, str] | None]] = []
+
+        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
+            calls.append((path, method, payload))
+            return {"items": [{"id": "tok_1", "issued_repo": "repo-a"}]}
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        self.assertEqual(json.loads(stream.getvalue())["items"][0]["id"], "tok_1")
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "/v1/shared-graphs/autopsy/tokens?repo=repo-a",
+                    "GET",
+                    None,
                 )
             ],
         )
@@ -1087,7 +1123,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["metadata"]["topic"], "shared")
         self.assertEqual(payload["metadata"]["autopsy_local_entity_id"], 42)
 
-    def test_shared_server_team_status_summarizes_remote_access_without_tokens(self):
+    def test_shared_server_team_status_summarizes_remote_access_and_scoped_tokens(self):
         config = {
             "base_url": "https://autopsy-server.fly.dev",
             "graph_slug": "autopsy",
@@ -1109,6 +1145,14 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         {"user_id": "usr_2", "repo": "repo-a", "role": "reader"},
                     ]
                 }
+            if path == "/v1/shared-graphs/autopsy/tokens?repo=repo-a":
+                return {
+                    "items": [
+                        {"id": "tok_1", "issued_role": "writer", "revoked": False, "expired": False},
+                        {"id": "tok_2", "issued_role": "reader", "revoked": False, "expired": True},
+                        {"id": "tok_3", "issued_role": "reader", "revoked": True, "expired": False},
+                    ]
+                }
             raise AssertionError(path)
 
         with mock.patch.object(cli, "load_shared_server_config", return_value=config), mock.patch.object(cli, "shared_server_request", side_effect=fake_request):
@@ -1118,6 +1162,11 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["team"]["users_count"], 2)
         self.assertEqual(payload["team"]["grants_count"], 2)
         self.assertEqual(payload["team"]["role_counts"], {"owner": 1, "reader": 1})
+        self.assertEqual(payload["team"]["tokens_count"], 3)
+        self.assertEqual(payload["team"]["active_tokens_count"], 1)
+        self.assertEqual(payload["team"]["expired_tokens_count"], 1)
+        self.assertEqual(payload["team"]["revoked_tokens_count"], 1)
+        self.assertEqual(payload["team"]["token_role_counts"], {"writer": 1, "reader": 2})
         self.assertNotIn("secret-token", json.dumps(payload))
 
     def test_restore_offline_requires_dry_run(self):

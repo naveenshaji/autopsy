@@ -64,21 +64,35 @@ struct SharedServerTeamPayload: Decodable {
     var repo: String?
     var canListUsers: Bool?
     var canListGrants: Bool?
+    var canListTokens: Bool?
     var usersCount: Int?
     var grantsCount: Int?
+    var tokensCount: Int?
+    var activeTokensCount: Int?
+    var expiredTokensCount: Int?
+    var revokedTokensCount: Int?
     var roleCounts: [String: Int]?
+    var tokenRoleCounts: [String: Int]?
     var usersError: String?
     var grantsError: String?
+    var tokensError: String?
 
     enum CodingKeys: String, CodingKey {
         case repo
         case canListUsers = "can_list_users"
         case canListGrants = "can_list_grants"
+        case canListTokens = "can_list_tokens"
         case usersCount = "users_count"
         case grantsCount = "grants_count"
+        case tokensCount = "tokens_count"
+        case activeTokensCount = "active_tokens_count"
+        case expiredTokensCount = "expired_tokens_count"
+        case revokedTokensCount = "revoked_tokens_count"
         case roleCounts = "role_counts"
+        case tokenRoleCounts = "token_role_counts"
         case usersError = "users_error"
         case grantsError = "grants_error"
+        case tokensError = "tokens_error"
     }
 }
 

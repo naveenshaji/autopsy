@@ -4494,6 +4494,10 @@ def shared_server_invitation_path(graph_slug: str) -> str:
     return shared_server_path(graph_slug, "/invitations")
 
 
+def shared_server_scoped_tokens_path(graph_slug: str, repo: str) -> str:
+    return shared_server_path(graph_slug, f"/tokens?{urllib.parse.urlencode({'repo': repo})}")
+
+
 def shared_server_token_revoke_path(graph_slug: str, token_id: str) -> str:
     quoted_token_id = urllib.parse.quote(token_id, safe="")
     return shared_server_path(graph_slug, f"/tokens/{quoted_token_id}/revoke")
@@ -4655,6 +4659,31 @@ def summarize_shared_server_grants(items: list[dict[str, Any]]) -> dict[str, Any
     }
 
 
+def summarize_shared_server_tokens(items: list[dict[str, Any]]) -> dict[str, Any]:
+    role_counts: dict[str, int] = {}
+    active_count = 0
+    expired_count = 0
+    revoked_count = 0
+    for item in items:
+        role = str(item.get("issued_role") or "unknown")
+        role_counts[role] = role_counts.get(role, 0) + 1
+        revoked = bool(item.get("revoked"))
+        expired = bool(item.get("expired"))
+        if revoked:
+            revoked_count += 1
+        if expired:
+            expired_count += 1
+        if not revoked and not expired:
+            active_count += 1
+    return {
+        "tokens_count": len(items),
+        "active_tokens_count": active_count,
+        "expired_tokens_count": expired_count,
+        "revoked_tokens_count": revoked_count,
+        "token_role_counts": role_counts,
+    }
+
+
 def build_shared_server_team_status_payload(*, config_path: str | None = None, repo: str | None = None) -> dict[str, Any]:
     config = load_shared_server_config(config_path)
     payload = build_shared_server_status_payload(check_remote=True, config_path=config_path)
@@ -4662,6 +4691,7 @@ def build_shared_server_team_status_payload(*, config_path: str | None = None, r
         "repo": repo or "*",
         "can_list_users": False,
         "can_list_grants": False,
+        "can_list_tokens": False,
     }
     payload["team"] = team
     if not payload.get("configured") or not config:
@@ -4689,6 +4719,16 @@ def build_shared_server_team_status_payload(*, config_path: str | None = None, r
         grants = grants_payload.get("items") if isinstance(grants_payload.get("items"), list) else []
         team["can_list_grants"] = True
         team.update(summarize_shared_server_grants(grants))
+    try:
+        tokens_payload = shared_server_request(config, shared_server_scoped_tokens_path(graph_slug, repo or "*"), timeout=10)
+    except urllib.error.HTTPError as exc:
+        team["tokens_error"] = shared_server_http_error_message(exc)
+    except Exception as exc:
+        team["tokens_error"] = str(exc)
+    else:
+        tokens = tokens_payload.get("items") if isinstance(tokens_payload.get("items"), list) else []
+        team["can_list_tokens"] = True
+        team.update(summarize_shared_server_tokens(tokens))
     return payload
 
 
@@ -5170,6 +5210,10 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
             f"/v1/users/{urllib.parse.quote(user_id, safe='')}/tokens",
             timeout=10,
         )
+        print(json.dumps(payload, indent=2))
+        return
+    if action == "scoped-tokens":
+        payload = shared_server_request_or_fail(config, shared_server_scoped_tokens_path(graph_slug, repo), timeout=10)
         print(json.dumps(payload, indent=2))
         return
     if action == "create-token":

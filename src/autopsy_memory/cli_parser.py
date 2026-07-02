@@ -400,6 +400,7 @@ def build_parser(
             "users",
             "create-user",
             "tokens",
+            "scoped-tokens",
             "create-token",
             "grants",
             "grant",
