@@ -44,6 +44,7 @@ final class ActivityStore: ObservableObject {
 
     private let activitySnapshotURL = ActivityStore.defaultActivitySnapshotURL
     private let workerKeepaliveIntervalSeconds: UInt64 = 60
+    private static let sharedServerTokenLabelMaxLength = 80
     private static let sharedSecurityAuditActions = [
         "auth_failure",
         "authorization_denied",
@@ -1513,6 +1514,13 @@ final class ActivityStore: ObservableObject {
             sharedServerError = "Email required"
             return
         }
+        let normalizedLabel: String
+        do {
+            normalizedLabel = try normalizedSharedTokenLabel(label, fallback: "menubar-invite")
+        } catch {
+            sharedServerError = error.localizedDescription
+            return
+        }
         guard !isManagingSharedAccess else { return }
         isManagingSharedAccess = true
         sharedServerError = nil
@@ -1522,7 +1530,6 @@ final class ActivityStore: ObservableObject {
         }
 
         do {
-            let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
             let trimmedExpiresAt = expiresAt.trimmingCharacters(in: .whitespacesAndNewlines)
             var arguments = [
                 "shared-server",
@@ -1536,7 +1543,7 @@ final class ActivityStore: ObservableObject {
                 "--role",
                 role,
                 "--label",
-                trimmedLabel.isEmpty ? "menubar-invite" : trimmedLabel,
+                normalizedLabel,
             ]
             if !trimmedExpiresAt.isEmpty {
                 arguments.append(contentsOf: ["--expires-at", trimmedExpiresAt])
@@ -1689,6 +1696,13 @@ final class ActivityStore: ObservableObject {
             sharedServerError = "User ID required"
             return
         }
+        let normalizedLabel: String
+        do {
+            normalizedLabel = try normalizedSharedTokenLabel(label, fallback: "menubar")
+        } catch {
+            sharedServerError = error.localizedDescription
+            return
+        }
         guard !isManagingSharedAccess else { return }
         isManagingSharedAccess = true
         sharedServerError = nil
@@ -1698,7 +1712,6 @@ final class ActivityStore: ObservableObject {
         }
 
         do {
-            let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
             let trimmedExpiresAt = expiresAt.trimmingCharacters(in: .whitespacesAndNewlines)
             var arguments = [
                 "shared-server",
@@ -1706,7 +1719,7 @@ final class ActivityStore: ObservableObject {
                 "--user-id",
                 trimmedUserID,
                 "--label",
-                trimmedLabel.isEmpty ? "menubar" : trimmedLabel,
+                normalizedLabel,
             ]
             if !trimmedExpiresAt.isEmpty {
                 arguments.append(contentsOf: ["--expires-at", trimmedExpiresAt])
@@ -2569,6 +2582,21 @@ final class ActivityStore: ObservableObject {
     private func normalizedRepoScope(_ value: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? sharedServerDefaultRepoScope : trimmed
+    }
+
+    private func normalizedSharedTokenLabel(_ value: String, fallback: String) throws -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let label = trimmed.isEmpty ? fallback : trimmed
+        guard label.count <= Self.sharedServerTokenLabelMaxLength else {
+            throw CLIError.failed("Token label must be \(Self.sharedServerTokenLabelMaxLength) characters or fewer")
+        }
+        let hasControlCharacter = label.unicodeScalars.contains { scalar in
+            CharacterSet.controlCharacters.contains(scalar)
+        }
+        guard !hasControlCharacter else {
+            throw CLIError.failed("Token label contains unsupported control characters")
+        }
+        return label
     }
 
     private func sharedUsersReport(from output: String) -> String {
