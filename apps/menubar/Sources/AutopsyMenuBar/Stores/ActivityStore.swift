@@ -72,6 +72,8 @@ final class ActivityStore: ObservableObject {
         "read_scoped_tokens",
         "read_grants",
         "read_access_check",
+        "read_repo_policy",
+        "read_repo_policies",
         "read_audit_events",
         "read_audit_integrity",
         "verify_audit_receipt",
@@ -2779,6 +2781,24 @@ final class ActivityStore: ObservableObject {
         }
         if let effectiveRole = auditString(metadata["effective_role"]) {
             parts.append("role \(effectiveRole)")
+        }
+        if let policyRepo = auditString(metadata["policy_repo"]) {
+            parts.append("policy \(policyRepo)")
+        }
+        if let inheritedFrom = auditString(metadata["policy_inherited_from"]), !inheritedFrom.isEmpty {
+            parts.append("inherited \(inheritedFrom)")
+        }
+        if let labelCount = auditInt(metadata["allowed_relation_label_count"]) {
+            parts.append("labels \(labelCount)")
+        }
+        if let minFactRating = auditDecimal(metadata["min_fact_rating"]) {
+            parts.append("min rating \(minFactRating)")
+        }
+        if let allowShared = auditBool(metadata["allow_shared_relations"]) {
+            parts.append("shared \(allowShared ? "allowed" : "disabled")")
+        }
+        if let allowPersonal = auditBool(metadata["allow_personal_relations"]) {
+            parts.append("personal \(allowPersonal ? "allowed" : "disabled")")
         }
         if let status = auditString(metadata["status"]) {
             parts.append("status \(status)")
