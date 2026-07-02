@@ -4698,14 +4698,18 @@ def shared_server_personal_relation_revoke_path(graph_slug: str) -> str:
 def summarize_shared_server_grants(items: list[dict[str, Any]]) -> dict[str, Any]:
     role_counts: dict[str, int] = {}
     repos: set[str] = set()
+    disabled_count = 0
     for item in items:
         role = str(item.get("role") or "unknown")
         role_counts[role] = role_counts.get(role, 0) + 1
+        if bool(item.get("disabled")):
+            disabled_count += 1
         repo = str(item.get("repo") or "")
         if repo:
             repos.add(repo)
     return {
         "grants_count": len(items),
+        "disabled_grants_count": disabled_count,
         "role_counts": role_counts,
         "repos": sorted(repos)[:20],
     }
@@ -4725,11 +4729,14 @@ def summarize_shared_server_tokens(items: list[dict[str, Any]]) -> dict[str, Any
     active_count = 0
     expired_count = 0
     revoked_count = 0
+    disabled_count = 0
     for item in items:
         role = str(item.get("issued_role") or "unknown")
         role_counts[role] = role_counts.get(role, 0) + 1
         revoked = bool(item.get("revoked"))
         expired = bool(item.get("expired"))
+        if bool(item.get("disabled")):
+            disabled_count += 1
         if revoked:
             revoked_count += 1
         if expired:
@@ -4741,6 +4748,7 @@ def summarize_shared_server_tokens(items: list[dict[str, Any]]) -> dict[str, Any
         "active_tokens_count": active_count,
         "expired_tokens_count": expired_count,
         "revoked_tokens_count": revoked_count,
+        "disabled_tokens_count": disabled_count,
         "token_role_counts": role_counts,
     }
 

@@ -70,10 +70,12 @@ struct SharedServerTeamPayload: Decodable {
     var activeUsersCount: Int?
     var disabledUsersCount: Int?
     var grantsCount: Int?
+    var disabledGrantsCount: Int?
     var tokensCount: Int?
     var activeTokensCount: Int?
     var expiredTokensCount: Int?
     var revokedTokensCount: Int?
+    var disabledTokensCount: Int?
     var roleCounts: [String: Int]?
     var tokenRoleCounts: [String: Int]?
     var auditIntegrity: SharedServerAuditIntegrityPayload?
@@ -92,10 +94,12 @@ struct SharedServerTeamPayload: Decodable {
         case activeUsersCount = "active_users_count"
         case disabledUsersCount = "disabled_users_count"
         case grantsCount = "grants_count"
+        case disabledGrantsCount = "disabled_grants_count"
         case tokensCount = "tokens_count"
         case activeTokensCount = "active_tokens_count"
         case expiredTokensCount = "expired_tokens_count"
         case revokedTokensCount = "revoked_tokens_count"
+        case disabledTokensCount = "disabled_tokens_count"
         case roleCounts = "role_counts"
         case tokenRoleCounts = "token_role_counts"
         case auditIntegrity = "audit_integrity"

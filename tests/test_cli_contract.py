@@ -1376,16 +1376,16 @@ class AutopsyCLIContractTests(unittest.TestCase):
             if path == "/v1/shared-graphs/autopsy/grants?repo=repo-a":
                 return {
                     "items": [
-                        {"user_id": "usr_1", "repo": "repo-a", "role": "owner"},
-                        {"user_id": "usr_2", "repo": "repo-a", "role": "reader"},
+                        {"user_id": "usr_1", "repo": "repo-a", "role": "owner", "disabled": False},
+                        {"user_id": "usr_2", "repo": "repo-a", "role": "reader", "disabled": True},
                     ]
                 }
             if path == "/v1/shared-graphs/autopsy/tokens?repo=repo-a":
                 return {
                     "items": [
-                        {"id": "tok_1", "issued_role": "writer", "revoked": False, "expired": False},
-                        {"id": "tok_2", "issued_role": "reader", "revoked": False, "expired": True},
-                        {"id": "tok_3", "issued_role": "reader", "revoked": True, "expired": False},
+                        {"id": "tok_1", "issued_role": "writer", "revoked": False, "expired": False, "disabled": False},
+                        {"id": "tok_2", "issued_role": "reader", "revoked": False, "expired": True, "disabled": True},
+                        {"id": "tok_3", "issued_role": "reader", "revoked": True, "expired": False, "disabled": False},
                     ]
                 }
             if path == "/v1/audit-events/integrity?graph_slug=autopsy&limit=50&repo=repo-a":
@@ -1413,11 +1413,13 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["team"]["active_users_count"], 1)
         self.assertEqual(payload["team"]["disabled_users_count"], 1)
         self.assertEqual(payload["team"]["grants_count"], 2)
+        self.assertEqual(payload["team"]["disabled_grants_count"], 1)
         self.assertEqual(payload["team"]["role_counts"], {"owner": 1, "reader": 1})
         self.assertEqual(payload["team"]["tokens_count"], 3)
         self.assertEqual(payload["team"]["active_tokens_count"], 1)
         self.assertEqual(payload["team"]["expired_tokens_count"], 1)
         self.assertEqual(payload["team"]["revoked_tokens_count"], 1)
+        self.assertEqual(payload["team"]["disabled_tokens_count"], 1)
         self.assertEqual(payload["team"]["token_role_counts"], {"writer": 1, "reader": 2})
         self.assertTrue(payload["team"]["can_read_audit_integrity"])
         self.assertEqual(payload["team"]["audit_integrity"]["status"], "verified")

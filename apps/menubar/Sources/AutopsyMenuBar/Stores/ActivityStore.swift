@@ -277,14 +277,16 @@ final class ActivityStore: ObservableObject {
     var sharedServerGrantsText: String {
         guard let team = currentSharedServer?.team else { return "" }
         if let count = team.grantsCount {
+            var parts: [String] = []
             if let roleCounts = team.roleCounts, !roleCounts.isEmpty {
-                let roles = roleCounts
+                parts.append(contentsOf: roleCounts
                     .sorted { $0.key < $1.key }
-                    .map { "\($0.key): \($0.value)" }
-                    .joined(separator: ", ")
-                return "\(count) (\(roles))"
+                    .map { "\($0.key): \($0.value)" })
             }
-            return "\(count)"
+            if let disabled = team.disabledGrantsCount, disabled > 0 {
+                parts.append("disabled: \(disabled)")
+            }
+            return parts.isEmpty ? "\(count)" : "\(count) (\(parts.joined(separator: ", ")))"
         }
         if let error = team.grantsError, !error.isEmpty {
             return error.clippedForMenuBar(limit: 28)
@@ -304,6 +306,9 @@ final class ActivityStore: ObservableObject {
             }
             if let revoked = team.revokedTokensCount, revoked > 0 {
                 parts.append("revoked: \(revoked)")
+            }
+            if let disabled = team.disabledTokensCount, disabled > 0 {
+                parts.append("disabled: \(disabled)")
             }
             if parts.isEmpty {
                 return "\(count)"
