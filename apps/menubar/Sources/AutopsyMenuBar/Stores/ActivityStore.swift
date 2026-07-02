@@ -654,6 +654,18 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    func disableSharedServerUser(userID: String) {
+        Task {
+            await updateSharedUserLifecycle(action: "disable-user", userID: userID)
+        }
+    }
+
+    func enableSharedServerUser(userID: String) {
+        Task {
+            await updateSharedUserLifecycle(action: "enable-user", userID: userID)
+        }
+    }
+
     func archiveSharedServerMemory(stableKey: String, repoScope: String, reason: String) {
         Task {
             await updateSharedMemoryLifecycle(action: "archive", stableKey: stableKey, repoScope: repoScope, reason: reason)
@@ -1152,6 +1164,36 @@ final class ActivityStore: ObservableObject {
                 normalizedRepoScope(repoScope),
             ],
             successMessage: "Shared grant revoked"
+        )
+    }
+
+    private func updateSharedUserLifecycle(action: String, userID: String) async {
+        let trimmedUserID = userID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedUserID.isEmpty else {
+            sharedServerError = "User ID required"
+            return
+        }
+        let isDisable = action == "disable-user"
+        await runSharedAccessCommand(
+            [
+                "shared-server",
+                action,
+                "--user-id",
+                trimmedUserID,
+            ],
+            successMessage: isDisable ? "Shared user disabled" : "Shared user enabled",
+            successMessageFromOutput: { output in
+                guard let payload = self.jsonObject(from: output) else {
+                    return isDisable ? "Shared user disabled" : "Shared user enabled"
+                }
+                if isDisable, self.auditBool(payload["already_disabled"]) == true {
+                    return "Shared user already disabled"
+                }
+                if !isDisable, self.auditBool(payload["already_enabled"]) == true {
+                    return "Shared user already enabled"
+                }
+                return isDisable ? "Shared user disabled" : "Shared user enabled"
+            }
         )
     }
 

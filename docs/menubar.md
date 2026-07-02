@@ -77,7 +77,8 @@ Run checks:
 - First-run setup prompt when no memory or agent instructions exist.
 - Homebrew update check/update action.
 - Shared memory Settings controls for server health, graph-owner invites,
-  repo grants, invite-token hygiene counts, expiring invite/token issuance,
+  repo grants, user disable/enable lifecycle, invite-token hygiene counts,
+  expiring invite/token issuance,
   invite-token inventory copy, token cleanup, raw audit copy, activity-audit
   summary copy, context-audit summary copy,
   audit-integrity summary copy, global auth-failure security-audit summary

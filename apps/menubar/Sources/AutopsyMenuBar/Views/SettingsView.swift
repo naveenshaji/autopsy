@@ -492,6 +492,18 @@ private struct SharedSettingsTab: View {
                     }
                     .disabled(sharedActionDisabled || grantUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
+
+                HStack {
+                    Button("Disable User") {
+                        store.disableSharedServerUser(userID: grantUserID)
+                    }
+                    .disabled(sharedActionDisabled || grantUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                    Button("Enable User") {
+                        store.enableSharedServerUser(userID: grantUserID)
+                    }
+                    .disabled(sharedActionDisabled || grantUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
             }
 
             Section("Tokens And Audit") {
