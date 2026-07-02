@@ -1128,16 +1128,17 @@ final class ActivityStore: ObservableObject {
         }
 
         do {
+            let scope = normalizedRepoScope(repoScope)
             let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 15).run([
                 "shared-server",
                 "access-check",
                 "--repo-scope",
-                normalizedRepoScope(repoScope),
+                scope,
                 "--mode",
                 mode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "read" : mode.trimmingCharacters(in: .whitespacesAndNewlines),
             ])
             NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(output.trimmingCharacters(in: .whitespacesAndNewlines), forType: .string)
+            NSPasteboard.general.setString(sharedAccessCheckReport(from: output, repoScope: scope), forType: .string)
             lastActionMessage = "Access check copied"
             clearLastActionMessageAfterDelay(expected: "Access check copied")
         } catch {
@@ -2411,6 +2412,94 @@ final class ActivityStore: ObservableObject {
         if let notes = auditString(payload["notes"]) {
             lines.append("")
             lines.append("Notes: \(notes)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func sharedAccessCheckReport(from output: String, repoScope: String) -> String {
+        guard let payload = jsonObject(from: output) else {
+            return output.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let requestedRepo = auditString(payload["repo"]) ?? repoScope
+        let mode = auditString(payload["mode"]) ?? "read"
+        let reason = auditString(payload["reason"]) ?? "unknown"
+        let effectiveRole = auditString(payload["effective_role"]) ?? "none"
+        let allowed = auditBool(payload["allowed"]) == true
+        let capabilities = payload["capabilities"] as? [String: Any] ?? [:]
+        let capabilityNames = [
+            auditBool(capabilities["can_read"]) == true ? "read" : nil,
+            auditBool(capabilities["can_write"]) == true ? "write" : nil,
+            auditBool(capabilities["can_admin"]) == true ? "admin" : nil,
+        ].compactMap { $0 }
+        let principal = payload["principal"] as? [String: Any] ?? [:]
+        let principalEmail = auditString(principal["email"]) ?? auditString(principal["id"]) ?? "unknown principal"
+
+        var lines = [
+            "Autopsy Shared Access Check",
+            "Repo: \(requestedRepo)",
+            "Mode: \(mode)",
+            "Allowed: \(allowed ? "yes" : "no")",
+            "Reason: \(reason)",
+            "Effective role: \(effectiveRole)",
+            "Capabilities: \(capabilityNames.isEmpty ? "none" : capabilityNames.joined(separator: "/"))",
+            "Principal: \(principalEmail)",
+        ]
+
+        if let tokenScope = payload["token_scope"] as? [String: Any] {
+            if auditBool(tokenScope["scoped"]) == true {
+                let tokenRepo = auditString(tokenScope["repo"]) ?? "unknown repo"
+                let tokenRole = auditString(tokenScope["role"]) ?? "unknown role"
+                let tokenMatches = auditBool(tokenScope["matches"]) == true ? "matches" : "does not match"
+                lines.append("Token scope: \(tokenRole) on \(tokenRepo), \(tokenMatches)")
+            } else {
+                lines.append("Token scope: unscoped")
+            }
+        }
+
+        if let repoPolicy = payload["repo_policy"] as? [String: Any] {
+            lines.append("")
+            if auditBool(repoPolicy["available"]) == true {
+                let policyRepo = auditString(repoPolicy["repo"]) ?? requestedRepo
+                let inheritedFrom = auditString(repoPolicy["inherited_from"]) ?? ""
+                let labels = (repoPolicy["allowed_relation_labels"] as? [Any] ?? [])
+                    .compactMap { auditString($0) }
+                let minFactRating = auditDecimal(repoPolicy["min_fact_rating"]) ?? "0.00"
+                let allowShared = auditBool(repoPolicy["allow_shared_relations"]) != false
+                let allowPersonal = auditBool(repoPolicy["allow_personal_relations"]) != false
+                let policyScope = inheritedFrom.isEmpty ? policyRepo : "\(policyRepo) inherited from \(inheritedFrom)"
+                lines.append("Repo policy: \(policyScope)")
+                lines.append("Allowed relation labels: \(labels.isEmpty ? "any" : labels.joined(separator: ", "))")
+                lines.append("Minimum fact rating: \(minFactRating)")
+                lines.append("Shared relations: \(allowShared ? "allowed" : "disabled")")
+                lines.append("Personal links: \(allowPersonal ? "allowed" : "disabled")")
+                if let notes = auditString(repoPolicy["notes"]) {
+                    lines.append("Policy notes: \(notes)")
+                }
+            } else {
+                let policyReason = auditString(repoPolicy["reason"]) ?? "not available"
+                lines.append("Repo policy: unavailable (\(policyReason))")
+            }
+        }
+
+        let grants = (payload["matching_grants"] as? [Any] ?? [])
+            .compactMap { $0 as? [String: Any] }
+        lines.append("")
+        lines.append("Matching grants: \(grants.count)")
+        for grant in grants.prefix(8) {
+            let repo = auditString(grant["repo"]) ?? "unknown repo"
+            let role = auditString(grant["role"]) ?? "unknown role"
+            let match = auditString(grant["match"]) ?? "match"
+            let grantCapabilities = [
+                auditBool(grant["can_read"]) == true ? "read" : nil,
+                auditBool(grant["can_write"]) == true ? "write" : nil,
+                auditBool(grant["can_admin"]) == true ? "admin" : nil,
+            ].compactMap { $0 }
+            let capText = grantCapabilities.isEmpty ? "none" : grantCapabilities.joined(separator: "/")
+            lines.append("- \(repo), role \(role), \(match), caps \(capText)")
+        }
+        if grants.count > 8 {
+            lines.append("- \(grants.count - 8) more grants omitted")
         }
         return lines.joined(separator: "\n")
     }

@@ -202,7 +202,8 @@ shared-server audit events also include hash-chain integrity fields and
 read-time `integrity_status` values.
 `shared-server access-check --repo-scope <repo> --mode read|write|admin`
 explains the configured caller's effective access for one graph/repo action,
-including the matching caller-owned grant and capabilities.
+including the matching caller-owned grant, capabilities, token scope, and the
+effective repo policy when the caller has read access.
 `shared-server policy --repo-scope <repo>` reads the current repo policy,
 including any inherited wildcard policy. `shared-server update-policy
 --repo-scope <repo>` lets owners update allowed relation labels, minimum

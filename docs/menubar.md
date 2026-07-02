@@ -79,7 +79,8 @@ Run checks:
 - Shared memory Settings controls for server health, graph-owner invites,
   repo grants, user disable/enable lifecycle, invite-token hygiene counts,
   expiring invite/token issuance,
-  invite-token inventory copy, token cleanup, raw audit copy, activity-audit
+  invite-token inventory copy, token cleanup, policy-aware access-check copy,
+  raw audit copy, activity-audit
   summary copy, context-audit summary copy,
   audit-integrity summary copy, global security-audit summary copy for
   global-admin tokens, audit receipt verification report copy, repo policy copy/update,
