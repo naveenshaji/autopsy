@@ -80,6 +80,7 @@ autopsy context --current-only --include-linked-shared --linked-shared-repo-scop
 autopsy audit --current-only
 autopsy activity
 autopsy shared-server health
+autopsy shared-server capabilities
 autopsy shared-server team-status
 autopsy shared-server users
 autopsy shared-server disable-user usr_123
@@ -140,12 +141,14 @@ relations in linked context.
 team graphs. `shared-server configure --from-owner-config` imports the private
 owner token file created by `autopsy-server` bootstrap into
 `~/Library/Application Support/Autopsy/SharedServer/config.json` with `0600`
-permissions. `shared-server health` checks the remote `/health` and `/v1/me`
-endpoints and always redacts the bearer token from output. The `activity` feed
-includes redacted `shared_server` state so the macOS menu bar can show and check
-shared-memory connectivity. `shared-server team-status` summarizes active and
-disabled users, repo grants, scoped-token counts, and a compact audit integrity
-report for menu bar
+permissions. `shared-server health` checks the remote `/v1/capabilities`,
+`/health`, and `/v1/me` endpoints and always redacts the bearer token from
+output. `shared-server capabilities [--base-url <url>]` prints the public server
+feature/security discovery payload directly. The `activity` feed includes redacted
+`shared_server` state so the macOS menu bar can show and check shared-memory
+connectivity and supported server features. `shared-server team-status`
+summarizes active and disabled users, repo grants, scoped-token counts, and a
+compact audit integrity report for menu bar
 clients without echoing token material or raw audit events. Graph owners
 can use `shared-server invite --email <email> --role reader|writer|owner
 --repo-scope <repo>` to create or reuse a user, grant repo access, and issue a

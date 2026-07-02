@@ -4449,6 +4449,12 @@ def build_shared_server_status_payload(*, check_remote: bool = False, config_pat
     if not check_remote or not payload.get("configured") or not config:
         return payload
     try:
+        payload["capabilities"] = shared_server_request(config, "/v1/capabilities")
+    except urllib.error.HTTPError as exc:
+        payload["capabilities_error"] = shared_server_http_error_message(exc)
+    except Exception as exc:
+        payload["capabilities_error"] = str(exc)
+    try:
         health = shared_server_request(config, "/health")
         me = shared_server_request(config, "/v1/me")
     except urllib.error.HTTPError as exc:
@@ -5341,6 +5347,14 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
             check_remote=action == "health" or bool(getattr(args, "check", False)),
             config_path=config_path,
         )
+        print(json.dumps(payload, indent=2))
+        return
+    if action == "capabilities":
+        config = load_shared_server_config(config_path) or {}
+        base_url = str(getattr(args, "base_url", "") or config.get("base_url") or "").strip().rstrip("/")
+        if not base_url:
+            fail("shared-server capabilities requires a configured server or --base-url", 2)
+        payload = shared_server_request_or_fail({**config, "base_url": base_url}, "/v1/capabilities", timeout=10)
         print(json.dumps(payload, indent=2))
         return
     config = require_shared_server_config(config_path)

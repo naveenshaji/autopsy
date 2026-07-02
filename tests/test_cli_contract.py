@@ -193,6 +193,13 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(args.shared_server_action, "configure")
         self.assertEqual(args.from_owner_config, "")
 
+    def test_shared_server_parser_accepts_capabilities_action(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["shared-server", "capabilities"])
+
+        self.assertEqual(args.command, "shared-server")
+        self.assertEqual(args.shared_server_action, "capabilities")
+
     def test_shared_server_parser_accepts_team_access_controls(self):
         parser = cli.build_parser()
         grant_args = parser.parse_args([
@@ -1427,6 +1434,68 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertFalse(payload["configured"])
         self.assertEqual(payload["status"], "missing")
         self.assertNotIn("token", payload)
+
+    def test_shared_server_health_status_includes_capabilities(self):
+        config = {
+            "base_url": "https://autopsy-server.fly.dev",
+            "graph_slug": "autopsy",
+            "user_id": "usr_1",
+            "token": "secret-token",
+        }
+        calls: list[str] = []
+
+        def fake_request(_config, path, **_kwargs):
+            calls.append(path)
+            if path == "/v1/capabilities":
+                return {
+                    "service": "autopsy-server",
+                    "api_version": 1,
+                    "features": ["owner_handoff", "grant_downgrade_token_revocation"],
+                    "capabilities": {
+                        "owner_handoff": True,
+                        "grant_downgrade_token_revocation": True,
+                    },
+                }
+            if path == "/health":
+                return {"ok": True}
+            if path == "/v1/me":
+                return {"id": "usr_1", "email": "owner@example.com", "name": "Owner", "is_admin": True}
+            raise AssertionError(path)
+
+        with mock.patch.object(cli, "load_shared_server_config", return_value=config), mock.patch.object(cli, "shared_server_request", side_effect=fake_request):
+            payload = cli.build_shared_server_status_payload(check_remote=True)
+
+        self.assertEqual(calls, ["/v1/capabilities", "/health", "/v1/me"])
+        self.assertTrue(payload["remote_ok"])
+        self.assertEqual(payload["capabilities"]["api_version"], 1)
+        self.assertTrue(payload["capabilities"]["capabilities"]["owner_handoff"])
+        self.assertTrue(payload["capabilities"]["capabilities"]["grant_downgrade_token_revocation"])
+        self.assertNotIn("secret-token", json.dumps(payload))
+
+    def test_shared_server_capabilities_action_prints_remote_payload(self):
+        parser = cli.build_parser()
+        args = parser.parse_args(["shared-server", "capabilities", "--base-url", "https://autopsy-server.fly.dev/"])
+
+        def fake_request(config, path, **_kwargs):
+            self.assertEqual(config, {"base_url": "https://autopsy-server.fly.dev"})
+            self.assertEqual(path, "/v1/capabilities")
+            return {
+                "service": "autopsy-server",
+                "api_version": 1,
+                "capabilities": {"owner_handoff": True},
+            }
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=None),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        payload = json.loads(stream.getvalue())
+        self.assertEqual(payload["service"], "autopsy-server")
+        self.assertTrue(payload["capabilities"]["owner_handoff"])
 
     def test_shared_server_publish_payload_carries_local_memory_metadata(self):
         payload = cli.build_shared_server_publish_payload(

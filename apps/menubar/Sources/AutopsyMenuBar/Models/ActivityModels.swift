@@ -30,6 +30,8 @@ struct SharedServerPayload: Decodable {
     var error: String?
     var me: SharedServerUserPayload?
     var team: SharedServerTeamPayload?
+    var capabilities: SharedServerCapabilitiesPayload?
+    var capabilitiesError: String?
 
     enum CodingKeys: String, CodingKey {
         case configured
@@ -43,6 +45,22 @@ struct SharedServerPayload: Decodable {
         case error
         case me
         case team
+        case capabilities
+        case capabilitiesError = "capabilities_error"
+    }
+}
+
+struct SharedServerCapabilitiesPayload: Decodable {
+    var service: String?
+    var apiVersion: Int?
+    var features: [String]?
+    var capabilities: [String: Bool]?
+
+    enum CodingKeys: String, CodingKey {
+        case service
+        case apiVersion = "api_version"
+        case features
+        case capabilities
     }
 }
 

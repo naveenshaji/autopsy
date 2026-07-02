@@ -267,6 +267,31 @@ final class ActivityStore: ObservableObject {
         return me.id ?? ""
     }
 
+    var sharedServerFeaturesText: String {
+        guard let sharedServer = currentSharedServer else { return "" }
+        if let capabilities = sharedServer.capabilities {
+            let enabled = [
+                ("owner_handoff", "owner handoff"),
+                ("grant_downgrade_token_revocation", "downgrade cleanup"),
+                ("tamper_evident_audit_chain", "audit chain"),
+                ("personal_shared_relations", "personal links"),
+                ("unsafe_shared_write_guard", "write guard"),
+            ].compactMap { key, label in
+                capabilities.capabilities?[key] == true ? label : nil
+            }
+            if !enabled.isEmpty {
+                return enabled.joined(separator: ", ").clippedForMenuBar(limit: 80)
+            }
+            if let features = capabilities.features, !features.isEmpty {
+                return "\(features.count) features"
+            }
+        }
+        if let error = sharedServer.capabilitiesError, !error.isEmpty {
+            return error.clippedForMenuBar(limit: 28)
+        }
+        return ""
+    }
+
     var sharedServerUsersText: String {
         guard let team = currentSharedServer?.team else { return "" }
         if let count = team.usersCount {

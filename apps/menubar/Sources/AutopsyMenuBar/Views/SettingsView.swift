@@ -180,6 +180,9 @@ private struct SharedSettingsTab: View {
                 if !store.sharedServerUserText.isEmpty {
                     LabeledContent("User", value: store.sharedServerUserText)
                 }
+                if !store.sharedServerFeaturesText.isEmpty {
+                    LabeledContent("Features", value: store.sharedServerFeaturesText)
+                }
                 if !store.sharedServerUsersText.isEmpty {
                     LabeledContent("Team Users", value: store.sharedServerUsersText)
                 }

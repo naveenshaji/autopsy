@@ -398,6 +398,7 @@ def build_parser(
             "status",
             "configure",
             "health",
+            "capabilities",
             "team-status",
             "users",
             "create-user",
