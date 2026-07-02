@@ -457,6 +457,34 @@ final class ActivityStore: ObservableObject {
         return ""
     }
 
+    var sharedServerRelationPolicyConflictsText: String {
+        guard let team = currentSharedServer?.team else { return "" }
+        if let count = team.relationPolicyConflictCount {
+            var parts: [String] = []
+            if let scopeCounts = team.relationPolicyConflictScopeCounts, !scopeCounts.isEmpty {
+                parts.append(contentsOf: scopeCounts
+                    .sorted { $0.key < $1.key }
+                    .map { "\($0.key): \($0.value)" })
+            }
+            if let reasonCounts = team.relationPolicyConflictCurrentReasonCounts, !reasonCounts.isEmpty {
+                let reasons = reasonCounts
+                    .sorted { $0.key < $1.key }
+                    .map { "\($0.key): \($0.value)" }
+                    .joined(separator: ", ")
+                parts.append("reasons \(reasons)")
+            }
+            if let latest = team.latestRelationPolicyConflictAt, !latest.isEmpty {
+                parts.append("latest \(latest)")
+            }
+            let text = parts.isEmpty ? "\(count)" : "\(count) (\(parts.joined(separator: ", ")))"
+            return text.clippedForMenuBar(limit: 110)
+        }
+        if let error = team.relationPolicyConflictsError, !error.isEmpty {
+            return error.clippedForMenuBar(limit: 28)
+        }
+        return ""
+    }
+
     var shouldShowOnboardingPrompt: Bool {
         (hasEmptyMemoryState || instructionStatus != nil) && !hasPriorMemory && !hasInstalledInstructions
     }

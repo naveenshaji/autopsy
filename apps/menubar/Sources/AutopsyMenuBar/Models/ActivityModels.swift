@@ -86,6 +86,7 @@ struct SharedServerTeamPayload: Decodable {
     var canListPolicies: Bool?
     var canReadPolicy: Bool?
     var canReadAuditIntegrity: Bool?
+    var canReadRelationPolicyConflicts: Bool?
     var usersCount: Int?
     var activeUsersCount: Int?
     var disabledUsersCount: Int?
@@ -116,12 +117,17 @@ struct SharedServerTeamPayload: Decodable {
     var roleCounts: [String: Int]?
     var tokenRoleCounts: [String: Int]?
     var auditIntegrity: SharedServerAuditIntegrityPayload?
+    var relationPolicyConflictCount: Int?
+    var relationPolicyConflictScopeCounts: [String: Int]?
+    var relationPolicyConflictCurrentReasonCounts: [String: Int]?
+    var latestRelationPolicyConflictAt: String?
     var usersError: String?
     var grantsError: String?
     var tokensError: String?
     var policiesError: String?
     var policyError: String?
     var auditIntegrityError: String?
+    var relationPolicyConflictsError: String?
 
     enum CodingKeys: String, CodingKey {
         case repo
@@ -131,6 +137,7 @@ struct SharedServerTeamPayload: Decodable {
         case canListPolicies = "can_list_policies"
         case canReadPolicy = "can_read_policy"
         case canReadAuditIntegrity = "can_read_audit_integrity"
+        case canReadRelationPolicyConflicts = "can_read_relation_policy_conflicts"
         case usersCount = "users_count"
         case activeUsersCount = "active_users_count"
         case disabledUsersCount = "disabled_users_count"
@@ -161,12 +168,17 @@ struct SharedServerTeamPayload: Decodable {
         case roleCounts = "role_counts"
         case tokenRoleCounts = "token_role_counts"
         case auditIntegrity = "audit_integrity"
+        case relationPolicyConflictCount = "relation_policy_conflict_count"
+        case relationPolicyConflictScopeCounts = "relation_policy_conflict_scope_counts"
+        case relationPolicyConflictCurrentReasonCounts = "relation_policy_conflict_current_reason_counts"
+        case latestRelationPolicyConflictAt = "latest_relation_policy_conflict_at"
         case usersError = "users_error"
         case grantsError = "grants_error"
         case tokensError = "tokens_error"
         case policiesError = "policies_error"
         case policyError = "policy_error"
         case auditIntegrityError = "audit_integrity_error"
+        case relationPolicyConflictsError = "relation_policy_conflicts_error"
     }
 }
 

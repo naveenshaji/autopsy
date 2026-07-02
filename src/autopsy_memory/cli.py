@@ -4893,6 +4893,27 @@ def summarize_shared_server_effective_policy(policy: dict[str, Any]) -> dict[str
     }
 
 
+def summarize_shared_server_relation_policy_conflicts(items: list[dict[str, Any]]) -> dict[str, Any]:
+    scope_counts: dict[str, int] = {}
+    current_reason_counts: dict[str, int] = {}
+    latest_created_at = ""
+    for item in items:
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        scope = str(metadata.get("relation_scope") or "unknown").strip() or "unknown"
+        current_reason = str(metadata.get("current_reason") or "unknown").strip() or "unknown"
+        scope_counts[scope] = scope_counts.get(scope, 0) + 1
+        current_reason_counts[current_reason] = current_reason_counts.get(current_reason, 0) + 1
+        created_at = str(item.get("created_at") or "").strip()
+        if created_at and (not latest_created_at or created_at > latest_created_at):
+            latest_created_at = created_at
+    return {
+        "relation_policy_conflict_count": len(items),
+        "relation_policy_conflict_scope_counts": dict(sorted(scope_counts.items())),
+        "relation_policy_conflict_current_reason_counts": dict(sorted(current_reason_counts.items())),
+        "latest_relation_policy_conflict_at": latest_created_at,
+    }
+
+
 def build_shared_server_team_status_payload(*, config_path: str | None = None, repo: str | None = None) -> dict[str, Any]:
     config = load_shared_server_config(config_path)
     payload = build_shared_server_status_payload(check_remote=True, config_path=config_path)
@@ -4904,6 +4925,7 @@ def build_shared_server_team_status_payload(*, config_path: str | None = None, r
         "can_list_policies": False,
         "can_read_policy": False,
         "can_read_audit_integrity": False,
+        "can_read_relation_policy_conflicts": False,
     }
     payload["team"] = team
     if not payload.get("configured") or not config:
@@ -4996,6 +5018,25 @@ def build_shared_server_team_status_payload(*, config_path: str | None = None, r
                 "external_gap_count": int(chain.get("external_gap_count") or 0),
             },
         }
+    try:
+        conflict_payload = shared_server_request(
+            config,
+            shared_server_audit_path(
+                graph_slug,
+                repo or "*",
+                limit=50,
+                actions=["relation_policy_version_conflict"],
+            ),
+            timeout=10,
+        )
+    except urllib.error.HTTPError as exc:
+        team["relation_policy_conflicts_error"] = shared_server_http_error_message(exc)
+    except Exception as exc:
+        team["relation_policy_conflicts_error"] = str(exc)
+    else:
+        conflicts = conflict_payload.get("items") if isinstance(conflict_payload.get("items"), list) else []
+        team["can_read_relation_policy_conflicts"] = True
+        team.update(summarize_shared_server_relation_policy_conflicts(conflicts))
     return payload
 
 

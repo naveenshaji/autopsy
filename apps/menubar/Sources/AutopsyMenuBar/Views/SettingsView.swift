@@ -209,6 +209,9 @@ private struct SharedSettingsTab: View {
                 if !store.sharedServerAuditIntegrityText.isEmpty {
                     LabeledContent("Audit Integrity", value: store.sharedServerAuditIntegrityText)
                 }
+                if !store.sharedServerRelationPolicyConflictsText.isEmpty {
+                    LabeledContent("Policy Conflicts", value: store.sharedServerRelationPolicyConflictsText)
+                }
                 HStack {
                     Button("Use Owner Config") {
                         store.configureSharedServerFromOwnerConfig()

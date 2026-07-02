@@ -2252,6 +2252,38 @@ class AutopsyCLIContractTests(unittest.TestCase):
                     },
                     "items": [{"id": "audit_1"}],
                 }
+            if path == "/v1/audit-events?graph_slug=autopsy&limit=50&repo=repo-a&action=relation_policy_version_conflict":
+                return {
+                    "items": [
+                        {
+                            "id": "audit_conflict_1",
+                            "created_at": "2026-07-02T08:00:00Z",
+                            "metadata": {
+                                "relation_scope": "shared",
+                                "current_reason": "relation_label_not_allowed",
+                                "target_key": "secret-shared-target",
+                                "expected_policy_fingerprint": "sha256:secret-old",
+                            },
+                        },
+                        {
+                            "id": "audit_conflict_2",
+                            "created_at": "2026-07-02T09:00:00Z",
+                            "metadata": {
+                                "relation_scope": "personal",
+                                "current_reason": "fact_rating_too_low",
+                                "personal_key_present": True,
+                            },
+                        },
+                        {
+                            "id": "audit_conflict_3",
+                            "created_at": "2026-07-02T08:30:00Z",
+                            "metadata": {
+                                "relation_scope": "shared",
+                                "current_reason": "relation_label_not_allowed",
+                            },
+                        },
+                    ]
+                }
             raise AssertionError(path)
 
         with mock.patch.object(cli, "load_shared_server_config", return_value=config), mock.patch.object(cli, "shared_server_request", side_effect=fake_request):
@@ -2294,7 +2326,18 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["team"]["audit_integrity"]["event_count"], 4)
         self.assertEqual(payload["team"]["audit_integrity"]["integrity_counts"]["verified"], 4)
         self.assertEqual(payload["team"]["audit_integrity"]["chain"]["external_gap_count"], 1)
+        self.assertTrue(payload["team"]["can_read_relation_policy_conflicts"])
+        self.assertEqual(payload["team"]["relation_policy_conflict_count"], 3)
+        self.assertEqual(payload["team"]["relation_policy_conflict_scope_counts"], {"personal": 1, "shared": 2})
+        self.assertEqual(
+            payload["team"]["relation_policy_conflict_current_reason_counts"],
+            {"fact_rating_too_low": 1, "relation_label_not_allowed": 2},
+        )
+        self.assertEqual(payload["team"]["latest_relation_policy_conflict_at"], "2026-07-02T09:00:00Z")
         self.assertNotIn("audit_1", json.dumps(payload["team"]["audit_integrity"]))
+        self.assertNotIn("audit_conflict_1", json.dumps(payload["team"]))
+        self.assertNotIn("secret-shared-target", json.dumps(payload["team"]))
+        self.assertNotIn("sha256:secret-old", json.dumps(payload["team"]))
         self.assertNotIn("keep private", json.dumps(payload["team"]))
         self.assertNotIn("secret-token", json.dumps(payload))
 

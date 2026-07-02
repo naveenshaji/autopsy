@@ -175,7 +175,9 @@ non-secret invite-token metadata that graph owners are allowed to revoke.
 explicit repo-policy inventory counts, constrained-policy counts, and
 effective repo-policy source, version, and fingerprint fields without exposing
 policy notes or relation label values, plus server-side audit integrity status
-for the selected repo. `revoke-token` first uses the global-admin endpoint and
+for the selected repo. It also summarizes recent stale relation-policy write
+conflicts by count, relation scope, current rejection reason, and latest
+timestamp without echoing raw audit events or stable keys. `revoke-token` first uses the global-admin endpoint and
 falls back to graph-scoped revocation, so graph owners can clean up invite-issued
 tokens for repos they own without global token access. `shared-server audit
 --repo-scope <repo>` lists scoped server audit events for graph owners or admins.

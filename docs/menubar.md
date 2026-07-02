@@ -80,6 +80,7 @@ Run checks:
   repo grants, user disable/enable lifecycle, invite-token hygiene counts,
   expiring invite/token issuance,
   invite-token inventory copy, token cleanup, policy-aware access-check copy,
+  policy-conflict count/status display,
   raw audit copy, policy-aware access-change audit copy, activity-audit
   summary copy, context-audit summary copy,
   audit-integrity summary copy, global security-audit summary copy for
