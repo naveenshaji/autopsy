@@ -535,6 +535,11 @@ private struct SharedSettingsTab: View {
                         store.copySharedServerContextAudit(repoScope: auditRepoScope)
                     }
                     .disabled(sharedActionDisabled)
+
+                    Button("Copy Integrity") {
+                        store.copySharedServerAuditIntegrity(repoScope: auditRepoScope)
+                    }
+                    .disabled(sharedActionDisabled)
                 }
             }
 

@@ -720,6 +720,12 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    func copySharedServerAuditIntegrity(repoScope: String) {
+        Task {
+            await copySharedAuditIntegrity(repoScope: repoScope)
+        }
+    }
+
     func copyInstructions() {
         Task {
             await copyInstructionsToPasteboard()
@@ -1621,6 +1627,35 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    private func copySharedAuditIntegrity(repoScope: String) async {
+        guard !isManagingSharedAccess else { return }
+        isManagingSharedAccess = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingSharedAccess = false
+        }
+
+        do {
+            let scope = normalizedRepoScope(repoScope)
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run([
+                "shared-server",
+                "audit",
+                "--repo-scope",
+                scope,
+                "--limit",
+                "50",
+            ])
+            let summary = sharedAuditIntegrityReport(from: output, repoScope: scope)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(summary, forType: .string)
+            lastActionMessage = "Audit integrity copied"
+            clearLastActionMessageAfterDelay(expected: "Audit integrity copied")
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
+    }
+
     private func runSharedAccessCommand(
         _ arguments: [String],
         successMessage: String,
@@ -1727,6 +1762,79 @@ final class ActivityStore: ObservableObject {
         parts.append("guard \(auditInt(metadata["read_guard_blocked_count"]) ?? 0)")
 
         return "- \(createdAt) \(label) \(repo): \(parts.joined(separator: ", "))"
+    }
+
+    private func sharedAuditIntegrityReport(from output: String, repoScope: String) -> String {
+        guard let payload = jsonObject(from: output),
+              let rawItems = payload["items"] as? [Any]
+        else {
+            return output.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let items = rawItems.compactMap { $0 as? [String: Any] }
+        var counts = ["verified": 0, "missing": 0, "mismatch": 0, "unknown": 0]
+        for item in items {
+            let status = auditString(item["integrity_status"]) ?? "unknown"
+            if counts.keys.contains(status) {
+                counts[status, default: 0] += 1
+            } else {
+                counts["unknown", default: 0] += 1
+            }
+        }
+
+        var linkedPairs = 0
+        var comparablePairs = 0
+        if items.count >= 2 {
+            for index in 0..<(items.count - 1) {
+                guard let prevHash = auditString(items[index]["prev_hash"]),
+                      let previousIntegrityHash = auditString(items[index + 1]["integrity_hash"])
+                else {
+                    continue
+                }
+                comparablePairs += 1
+                if prevHash == previousIntegrityHash {
+                    linkedPairs += 1
+                }
+            }
+        }
+
+        var lines = [
+            "Autopsy Shared Audit Integrity",
+            "Repo: \(repoScope)",
+            "Audit window: \(items.count) latest events",
+            "Verified: \(counts["verified", default: 0])",
+            "Missing: \(counts["missing", default: 0])",
+            "Mismatch: \(counts["mismatch", default: 0])",
+            "Unknown: \(counts["unknown", default: 0])",
+            "Linked pairs: \(linkedPairs)/\(comparablePairs)",
+        ]
+
+        if items.isEmpty {
+            lines.append("")
+            lines.append("No audit events were found in the latest audit window.")
+            return lines.joined(separator: "\n")
+        }
+
+        lines.append("")
+        for item in items.prefix(12) {
+            let createdAt = auditString(item["created_at"]) ?? "unknown time"
+            let action = auditString(item["action"]) ?? "unknown_action"
+            let repo = auditString(item["repo"]) ?? "unknown repo"
+            let status = auditString(item["integrity_status"]) ?? "unknown"
+            let hash = shortAuditHash(auditString(item["integrity_hash"]))
+            lines.append("- \(createdAt) \(action) \(repo): integrity \(status), hash \(hash)")
+        }
+        if items.count > 12 {
+            lines.append("- \(items.count - 12) more audit events omitted")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func shortAuditHash(_ value: String?) -> String {
+        guard let value, !value.isEmpty else {
+            return "none"
+        }
+        return String(value.prefix(12))
     }
 
     private func auditString(_ value: Any?) -> String? {
