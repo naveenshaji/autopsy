@@ -241,6 +241,9 @@ private struct SharedSettingsTab: View {
                 if !store.sharedServerSharedReadAccessText.isEmpty {
                     LabeledContent("Shared Reads", value: store.sharedServerSharedReadAccessText)
                 }
+                if !store.sharedServerRepoPolicyConflictsText.isEmpty {
+                    LabeledContent("Repo Policy Conflicts", value: store.sharedServerRepoPolicyConflictsText)
+                }
                 if !store.sharedServerRelationPolicyConflictsText.isEmpty {
                     LabeledContent("Policy Conflicts", value: store.sharedServerRelationPolicyConflictsText)
                 }

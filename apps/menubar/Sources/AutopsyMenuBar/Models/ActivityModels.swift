@@ -98,6 +98,7 @@ struct SharedServerTeamPayload: Decodable {
     var canListPolicies: Bool?
     var canReadPolicy: Bool?
     var canReadAuditIntegrity: Bool?
+    var canReadRepoPolicyConflicts: Bool?
     var canReadRelationPolicyConflicts: Bool?
     var canReadMemoryPolicyConflicts: Bool?
     var canReadMemoryVersionConflicts: Bool?
@@ -147,6 +148,10 @@ struct SharedServerTeamPayload: Decodable {
     var roleCounts: [String: Int]?
     var tokenRoleCounts: [String: Int]?
     var auditIntegrity: SharedServerAuditIntegrityPayload?
+    var repoPolicyConflictCount: Int?
+    var repoPolicyConflictModeCounts: [String: Int]?
+    var repoPolicyConflictReasonCounts: [String: Int]?
+    var latestRepoPolicyConflictAt: String?
     var relationPolicyConflictCount: Int?
     var relationPolicyConflictScopeCounts: [String: Int]?
     var relationPolicyConflictCurrentReasonCounts: [String: Int]?
@@ -218,6 +223,7 @@ struct SharedServerTeamPayload: Decodable {
     var policiesError: String?
     var policyError: String?
     var auditIntegrityError: String?
+    var repoPolicyConflictsError: String?
     var relationPolicyConflictsError: String?
     var memoryPolicyConflictsError: String?
     var memoryVersionConflictsError: String?
@@ -236,6 +242,7 @@ struct SharedServerTeamPayload: Decodable {
         case canListPolicies = "can_list_policies"
         case canReadPolicy = "can_read_policy"
         case canReadAuditIntegrity = "can_read_audit_integrity"
+        case canReadRepoPolicyConflicts = "can_read_repo_policy_conflicts"
         case canReadRelationPolicyConflicts = "can_read_relation_policy_conflicts"
         case canReadMemoryPolicyConflicts = "can_read_memory_policy_conflicts"
         case canReadMemoryVersionConflicts = "can_read_memory_version_conflicts"
@@ -285,6 +292,10 @@ struct SharedServerTeamPayload: Decodable {
         case roleCounts = "role_counts"
         case tokenRoleCounts = "token_role_counts"
         case auditIntegrity = "audit_integrity"
+        case repoPolicyConflictCount = "repo_policy_conflict_count"
+        case repoPolicyConflictModeCounts = "repo_policy_conflict_mode_counts"
+        case repoPolicyConflictReasonCounts = "repo_policy_conflict_reason_counts"
+        case latestRepoPolicyConflictAt = "latest_repo_policy_conflict_at"
         case relationPolicyConflictCount = "relation_policy_conflict_count"
         case relationPolicyConflictScopeCounts = "relation_policy_conflict_scope_counts"
         case relationPolicyConflictCurrentReasonCounts = "relation_policy_conflict_current_reason_counts"
@@ -356,6 +367,7 @@ struct SharedServerTeamPayload: Decodable {
         case policiesError = "policies_error"
         case policyError = "policy_error"
         case auditIntegrityError = "audit_integrity_error"
+        case repoPolicyConflictsError = "repo_policy_conflicts_error"
         case relationPolicyConflictsError = "relation_policy_conflicts_error"
         case memoryPolicyConflictsError = "memory_policy_conflicts_error"
         case memoryVersionConflictsError = "memory_version_conflicts_error"

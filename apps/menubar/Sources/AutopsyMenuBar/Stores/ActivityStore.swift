@@ -82,6 +82,7 @@ final class ActivityStore: ObservableObject {
         "read_repo_policies",
         "check_memory_policy",
         "check_relation_policy",
+        "repo_policy_version_conflict",
         "memory_version_conflict",
         "memory_policy_version_conflict",
         "relation_policy_version_conflict",
@@ -327,6 +328,7 @@ final class ActivityStore: ObservableObject {
                 ("repo_policies", "repo policies"),
                 ("repo_policy_inventory", "policy inventory"),
                 ("repo_policy_fingerprints", "policy fingerprints"),
+                ("repo_policy_version_conflict_audits", "policy conflict audits"),
                 ("relation_policy_preflight", "relation checks"),
                 ("relation_policy_write_cas", "stale-safe relation writes"),
                 ("memory_lifecycle_cas", "memory CAS"),
@@ -688,6 +690,34 @@ final class ActivityStore: ObservableObject {
             return text.clippedForMenuBar(limit: 110)
         }
         if let error = team.relationPolicyConflictsError, !error.isEmpty {
+            return error.clippedForMenuBar(limit: 28)
+        }
+        return ""
+    }
+
+    var sharedServerRepoPolicyConflictsText: String {
+        guard let team = currentSharedServer?.team else { return "" }
+        if let count = team.repoPolicyConflictCount {
+            var parts: [String] = []
+            if let modeCounts = team.repoPolicyConflictModeCounts, !modeCounts.isEmpty {
+                parts.append(contentsOf: modeCounts
+                    .sorted { $0.key < $1.key }
+                    .map { "\($0.key): \($0.value)" })
+            }
+            if let reasonCounts = team.repoPolicyConflictReasonCounts, !reasonCounts.isEmpty {
+                let reasons = reasonCounts
+                    .sorted { $0.key < $1.key }
+                    .map { "\($0.key): \($0.value)" }
+                    .joined(separator: ", ")
+                parts.append("reasons \(reasons)")
+            }
+            if let latest = team.latestRepoPolicyConflictAt, !latest.isEmpty {
+                parts.append("latest \(latest)")
+            }
+            let text = parts.isEmpty ? "\(count)" : "\(count) (\(parts.joined(separator: ", ")))"
+            return text.clippedForMenuBar(limit: 110)
+        }
+        if let error = team.repoPolicyConflictsError, !error.isEmpty {
             return error.clippedForMenuBar(limit: 28)
         }
         return ""

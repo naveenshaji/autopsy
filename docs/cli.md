@@ -154,7 +154,7 @@ connectivity and supported server features. `shared-server team-status`
 summarizes active and disabled users, repo grants, scoped-token counts, and a
 compact audit integrity report for menu bar
 clients without echoing token material or raw audit events. It also summarizes
-relation-policy, memory-policy, and shared-memory version conflict counts with
+repo-policy, relation-policy, memory-policy, and shared-memory version conflict counts with
 compact reason/mode breakdowns from audit summaries when available. Add `--last-hours`, `--since`, or
 `--until` to scope those audit-derived team-status summaries to a real time
 window. Scoped-token counts
@@ -194,9 +194,11 @@ conflicts are summarized by
 count, relation scope, current rejection reason, and latest timestamp,
 preferring the server-side audit summary endpoint and falling back to bounded raw
 audit reads only for older servers, without echoing raw audit events or stable
-keys. Stale shared-memory write/archive/restore conflicts are summarized by
-count, operation mode, rejection reason, memory kind, archived-state counts, and
-latest timestamp. `revoke-token` first uses the global-admin endpoint and
+keys. Stale repo-policy update/reset conflicts are summarized by count,
+operation mode, rejection reason, and latest timestamp. Stale shared-memory
+write/archive/restore conflicts are summarized by count, operation mode,
+rejection reason, memory kind, archived-state counts, and latest timestamp.
+`revoke-token` first uses the global-admin endpoint and
 falls back to graph-scoped revocation, so graph owners can clean up invite-issued
 tokens for repos they own without global token access. `shared-server audit
 --repo-scope <repo>` lists scoped server audit events for graph owners or admins.

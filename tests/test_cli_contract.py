@@ -3387,6 +3387,26 @@ class AutopsyCLIContractTests(unittest.TestCase):
                 }
             if path == (
                 "/v1/audit-events/summary?graph_slug=autopsy&limit=50&repo=repo-a"
+                "&action=repo_policy_version_conflict"
+                "&metadata_field=mode&metadata_field=reason"
+            ):
+                return {
+                    "event_count": 2,
+                    "metadata_counts": {
+                        "mode": {"reset_repo_policy": 1, "update_repo_policy": 1},
+                        "reason": {"policy_version_conflict": 2},
+                    },
+                    "latest_created_at": "2026-07-02T08:45:00Z",
+                    "scope": {
+                        "graph_slug": "autopsy",
+                        "repo": "repo-a",
+                        "actions": ["repo_policy_version_conflict"],
+                        "metadata_fields": ["mode", "reason"],
+                        "filtered_window": True,
+                    },
+                }
+            if path == (
+                "/v1/audit-events/summary?graph_slug=autopsy&limit=50&repo=repo-a"
                 "&action=relation_policy_version_conflict"
                 "&metadata_field=relation_scope&metadata_field=current_reason"
             ):
@@ -3613,6 +3633,12 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["team"]["audit_integrity"]["event_count"], 4)
         self.assertEqual(payload["team"]["audit_integrity"]["integrity_counts"]["verified"], 4)
         self.assertEqual(payload["team"]["audit_integrity"]["chain"]["external_gap_count"], 1)
+        self.assertTrue(payload["team"]["can_read_repo_policy_conflicts"])
+        self.assertEqual(payload["team"]["repo_policy_conflicts_source"], "summary")
+        self.assertEqual(payload["team"]["repo_policy_conflict_count"], 2)
+        self.assertEqual(payload["team"]["repo_policy_conflict_mode_counts"], {"reset_repo_policy": 1, "update_repo_policy": 1})
+        self.assertEqual(payload["team"]["repo_policy_conflict_reason_counts"], {"policy_version_conflict": 2})
+        self.assertEqual(payload["team"]["latest_repo_policy_conflict_at"], "2026-07-02T08:45:00Z")
         self.assertTrue(payload["team"]["can_read_relation_policy_conflicts"])
         self.assertEqual(payload["team"]["relation_policy_conflicts_source"], "summary")
         self.assertEqual(payload["team"]["relation_policy_conflict_count"], 3)
