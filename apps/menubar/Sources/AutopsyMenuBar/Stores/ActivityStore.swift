@@ -375,6 +375,7 @@ final class ActivityStore: ObservableObject {
                 ("relation_policy_preflight", "relation checks"),
                 ("relation_policy_write_cas", "stale-safe relation writes"),
                 ("memory_lifecycle_cas", "memory CAS"),
+                ("memory_lifecycle_policy_cas", "archive policy CAS"),
                 ("memory_version_conflict_audits", "memory conflict audits"),
                 ("mutation_audit_receipts", "audit receipts"),
                 ("audit_receipt_verification", "audit verification"),

@@ -153,6 +153,7 @@ struct SharedServerTeamPayload: Decodable {
     var canUseIdempotencyResponseSecretGuard: Bool?
     var canUseIdempotencyResponseSizeGuard: Bool?
     var canUseIdempotencyResponseStorageFailureGuard: Bool?
+    var canUseMemoryLifecyclePolicyCas: Bool?
     var canUseAccessMutationIdempotency: Bool?
     var idempotencyRecordRetentionDays: Int?
     var idempotencyPendingTimeoutSeconds: Int?
@@ -364,6 +365,7 @@ struct SharedServerTeamPayload: Decodable {
         case canUseIdempotencyResponseSecretGuard = "can_use_idempotency_response_secret_guard"
         case canUseIdempotencyResponseSizeGuard = "can_use_idempotency_response_size_guard"
         case canUseIdempotencyResponseStorageFailureGuard = "can_use_idempotency_response_storage_failure_guard"
+        case canUseMemoryLifecyclePolicyCas = "can_use_memory_lifecycle_policy_cas"
         case canUseAccessMutationIdempotency = "can_use_access_mutation_idempotency"
         case idempotencyRecordRetentionDays = "idempotency_record_retention_days"
         case idempotencyPendingTimeoutSeconds = "idempotency_pending_timeout_seconds"
