@@ -5211,9 +5211,17 @@ def summarize_shared_server_storage_status(status: dict[str, Any]) -> dict[str, 
     }
 
 
-def build_shared_server_team_status_payload(*, config_path: str | None = None, repo: str | None = None) -> dict[str, Any]:
+def build_shared_server_team_status_payload(
+    *,
+    config_path: str | None = None,
+    repo: str | None = None,
+    audit_since: str = "",
+    audit_until: str = "",
+) -> dict[str, Any]:
     config = load_shared_server_config(config_path)
     payload = build_shared_server_status_payload(check_remote=True, config_path=config_path)
+    audit_since = str(audit_since or "").strip()
+    audit_until = str(audit_until or "").strip()
     team: dict[str, Any] = {
         "repo": repo or "*",
         "can_list_users": False,
@@ -5229,6 +5237,9 @@ def build_shared_server_team_status_payload(*, config_path: str | None = None, r
         "can_read_shared_read_summary": False,
         "can_read_storage_status": False,
     }
+    if audit_since or audit_until:
+        team["audit_window_since"] = audit_since
+        team["audit_window_until"] = audit_until
     payload["team"] = team
     if not payload.get("configured") or not config:
         return payload
@@ -5305,7 +5316,7 @@ def build_shared_server_team_status_payload(*, config_path: str | None = None, r
     try:
         integrity_payload = shared_server_request(
             config,
-            shared_server_audit_integrity_path(graph_slug, repo or "*", limit=50),
+            shared_server_audit_integrity_path(graph_slug, repo or "*", limit=50, since=audit_since, until=audit_until),
             timeout=10,
         )
     except urllib.error.HTTPError as exc:
@@ -5340,6 +5351,8 @@ def build_shared_server_team_status_payload(*, config_path: str | None = None, r
                 limit=50,
                 actions=["relation_policy_version_conflict"],
                 metadata_fields=["relation_scope", "current_reason"],
+                since=audit_since,
+                until=audit_until,
             ),
             timeout=10,
         )
@@ -5363,6 +5376,8 @@ def build_shared_server_team_status_payload(*, config_path: str | None = None, r
                 limit=50,
                 actions=["memory_policy_version_conflict"],
                 metadata_fields=["kind", "current_reason"],
+                since=audit_since,
+                until=audit_until,
             ),
             timeout=10,
         )
@@ -5386,6 +5401,8 @@ def build_shared_server_team_status_payload(*, config_path: str | None = None, r
                 limit=50,
                 actions=["invite_user"],
                 metadata_fields=["expires_at_defaulted"],
+                since=audit_since,
+                until=audit_until,
             ),
             timeout=10,
         )
@@ -5412,6 +5429,8 @@ def build_shared_server_team_status_payload(*, config_path: str | None = None, r
                     "actor_token_scope_repo",
                     "actor_token_scope_role",
                 ],
+                since=audit_since,
+                until=audit_until,
             ),
             timeout=10,
         )
@@ -5445,6 +5464,8 @@ def build_shared_server_team_status_payload(*, config_path: str | None = None, r
                     "actor_token_scope_repo",
                     "actor_token_scope_role",
                 ],
+                since=audit_since,
+                until=audit_until,
             ),
             timeout=10,
         )
@@ -5465,6 +5486,8 @@ def build_shared_server_team_status_payload(*, config_path: str | None = None, r
                     repo or "*",
                     limit=50,
                     actions=["relation_policy_version_conflict"],
+                    since=audit_since,
+                    until=audit_until,
                 ),
                 timeout=10,
             )
@@ -5486,6 +5509,8 @@ def build_shared_server_team_status_payload(*, config_path: str | None = None, r
                     repo or "*",
                     limit=50,
                     actions=["memory_policy_version_conflict"],
+                    since=audit_since,
+                    until=audit_until,
                 ),
                 timeout=10,
             )
@@ -6076,7 +6101,18 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
     graph_slug = shared_server_graph_slug_from_args(args, config)
     repo = shared_server_repo_scope_from_args(args)
     if action == "team-status":
-        print(json.dumps(build_shared_server_team_status_payload(config_path=config_path, repo=repo), indent=2))
+        audit_since, audit_until = shared_server_audit_window_from_args(args)
+        print(
+            json.dumps(
+                build_shared_server_team_status_payload(
+                    config_path=config_path,
+                    repo=repo,
+                    audit_since=audit_since,
+                    audit_until=audit_until,
+                ),
+                indent=2,
+            )
+        )
         return
     if action == "storage-status":
         payload = shared_server_request_or_fail(config, shared_server_storage_status_path(), timeout=10)

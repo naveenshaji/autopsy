@@ -155,7 +155,9 @@ summarizes active and disabled users, repo grants, scoped-token counts, and a
 compact audit integrity report for menu bar
 clients without echoing token material or raw audit events. It also summarizes
 relation-policy and memory-policy conflict counts and compact reason breakdowns
-from audit summaries when available. Scoped-token counts
+from audit summaries when available. Add `--last-hours`, `--since`, or
+`--until` to scope those audit-derived team-status summaries to a real time
+window. Scoped-token counts
 include active, never-used, non-expiring, stale, expired, revoked, and disabled
 token totals. Graph owners
 can use `shared-server invite --email <email> --role reader|writer|owner

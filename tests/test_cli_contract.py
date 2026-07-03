@@ -3574,11 +3574,21 @@ class AutopsyCLIContractTests(unittest.TestCase):
             raise AssertionError(path)
 
         with mock.patch.object(cli, "load_shared_server_config", return_value=config), mock.patch.object(cli, "shared_server_request", side_effect=fake_request):
-            payload = cli.build_shared_server_team_status_payload(repo="repo-a")
+            payload = cli.build_shared_server_team_status_payload(
+                repo="repo-a",
+                audit_since="2026-07-03T00:00:00Z",
+                audit_until="2026-07-03T01:00:00Z",
+            )
 
         self.assertTrue(payload["remote_ok"])
         self.assertFalse(payload["team"]["can_read_storage_status"])
+        self.assertEqual(payload["team"]["audit_window_since"], "2026-07-03T00:00:00Z")
+        self.assertEqual(payload["team"]["audit_window_until"], "2026-07-03T01:00:00Z")
         self.assertNotIn("/v1/admin/storage-status", calls)
+        audit_calls = [call for call in calls if call.startswith("/v1/audit-events")]
+        self.assertTrue(audit_calls)
+        self.assertTrue(all("since=2026-07-03T00%3A00%3A00Z" in call for call in audit_calls))
+        self.assertTrue(all("until=2026-07-03T01%3A00%3A00Z" in call for call in audit_calls))
 
     def test_restore_offline_requires_dry_run(self):
         parser = cli.build_parser()
