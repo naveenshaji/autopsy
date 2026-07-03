@@ -331,6 +331,7 @@ final class ActivityStore: ObservableObject {
                 ("admin_export_snapshot", "export snapshots"),
                 ("admin_export_snapshot_validation", "export validation"),
                 ("admin_export_snapshot_restore_plan", "restore planning"),
+                ("admin_export_snapshot_restore_plan_digest", "restore plan digests"),
                 ("admin_export_snapshot_manifest", "snapshot manifests"),
                 ("admin_storage_token_hygiene", "token hygiene"),
                 ("admin_token_inventory", "token inventory"),
@@ -3592,6 +3593,15 @@ final class ActivityStore: ObservableObject {
         let currentInvalid = auditInt(totals["current_invalid_identities"]) ?? 0
         if currentInvalid > 0 {
             lines.append("Current invalid identities: \(currentInvalid)")
+        }
+        if let planDigest = auditString(payload["plan_digest"]), !planDigest.isEmpty {
+            lines.append("Plan digest: \(planDigest.clippedForMenuBar(limit: 80))")
+        }
+        if let algorithm = auditString(payload["plan_digest_algorithm"]), !algorithm.isEmpty {
+            lines.append("Digest algorithm: \(algorithm)")
+        }
+        if let canonicalization = auditString(payload["plan_digest_canonicalization"]), !canonicalization.isEmpty {
+            lines.append("Digest canonicalization: \(canonicalization.clippedForMenuBar(limit: 80))")
         }
 
         let sectionLabels = [

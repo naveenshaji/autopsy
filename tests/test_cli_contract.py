@@ -3515,6 +3515,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "admin_export_snapshot": True,
                         "admin_export_snapshot_validation": True,
                         "admin_export_snapshot_restore_plan": True,
+                        "admin_export_snapshot_restore_plan_digest": True,
                         "admin_export_snapshot_manifest": True,
                         "token_inventory_fingerprints": True,
                         "idempotency_keys": True,
@@ -3910,6 +3911,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertTrue(payload["team"]["can_use_admin_export_snapshot"])
         self.assertTrue(payload["team"]["can_use_admin_export_snapshot_validation"])
         self.assertTrue(payload["team"]["can_use_admin_export_snapshot_restore_plan"])
+        self.assertTrue(payload["team"]["can_use_admin_export_snapshot_restore_plan_digest"])
         self.assertTrue(payload["team"]["can_use_admin_export_snapshot_manifest"])
         self.assertTrue(payload["team"]["can_use_token_inventory_fingerprints"])
         self.assertTrue(payload["team"]["can_use_idempotency_keys"])
