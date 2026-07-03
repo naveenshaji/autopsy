@@ -797,7 +797,7 @@ private struct SharedSettingsTab: View {
                             scopeFilter: tokenInventoryScope
                         )
                     }
-                    .disabled(sharedActionDisabled)
+                    .disabled(adminTokenInventoryDisabled)
 
                     Button("Copy Revoke Preview") {
                         store.copySharedServerTokenRevokePreview(
@@ -806,7 +806,7 @@ private struct SharedSettingsTab: View {
                             scopeFilter: tokenInventoryScope
                         )
                     }
-                    .disabled(sharedActionDisabled || !tokenInventoryHasBulkFilter)
+                    .disabled(adminTokenBulkRevokeDisabled || !tokenInventoryHasBulkFilter)
 
                     Button("Copy Invite Tokens") {
                         store.copySharedServerScopedTokens(
@@ -823,7 +823,7 @@ private struct SharedSettingsTab: View {
                     .disabled(sharedActionDisabled || revokeTokenID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
                 Toggle("Confirm Matching Revoke", isOn: $confirmTokenInventoryRevoke)
-                    .disabled(sharedActionDisabled || !tokenInventoryHasBulkFilter)
+                    .disabled(adminTokenBulkRevokeDisabled || !tokenInventoryHasBulkFilter)
                 Button("Revoke Matching Tokens") {
                     store.revokeSharedServerMatchingTokens(
                         statusFilter: tokenInventoryStatus,
@@ -832,7 +832,7 @@ private struct SharedSettingsTab: View {
                     )
                     confirmTokenInventoryRevoke = false
                 }
-                .disabled(sharedActionDisabled || !tokenInventoryHasBulkFilter || !confirmTokenInventoryRevoke)
+                .disabled(adminTokenBulkRevokeDisabled || !tokenInventoryHasBulkFilter || !confirmTokenInventoryRevoke)
 
                 HStack {
                     Button("Copy Scoped Preview") {
@@ -1007,6 +1007,14 @@ private struct SharedSettingsTab: View {
 
     private var applyRestoreSnapshotDisabled: Bool {
         sharedActionDisabled || store.currentSharedServer?.team?.canUseAdminExportSnapshotRestoreApply != true
+    }
+
+    private var adminTokenInventoryDisabled: Bool {
+        sharedActionDisabled || store.currentSharedServer?.team?.canUseAdminTokenInventory != true
+    }
+
+    private var adminTokenBulkRevokeDisabled: Bool {
+        sharedActionDisabled || store.currentSharedServer?.team?.canUseAdminTokenBulkRevoke != true
     }
 
     private var tokenInventoryHasBulkFilter: Bool {

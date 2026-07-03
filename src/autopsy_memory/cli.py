@@ -5472,6 +5472,8 @@ def build_shared_server_team_status_payload(
         "can_use_admin_export_snapshot_restore_apply": False,
         "can_use_admin_export_snapshot_restore_apply_idempotency": False,
         "can_use_admin_export_snapshot_manifest": False,
+        "can_use_admin_token_inventory": False,
+        "can_use_admin_token_bulk_revoke": False,
         "can_use_token_inventory_fingerprints": False,
         "can_use_idempotency_keys": False,
         "can_use_idempotency_record_retention": False,
@@ -5494,6 +5496,8 @@ def build_shared_server_team_status_payload(
         server_capabilities.get("admin_export_snapshot_restore_apply_idempotency")
     )
     team["can_use_admin_export_snapshot_manifest"] = is_admin and bool(server_capabilities.get("admin_export_snapshot_manifest"))
+    team["can_use_admin_token_inventory"] = is_admin and bool(server_capabilities.get("admin_token_inventory"))
+    team["can_use_admin_token_bulk_revoke"] = is_admin and bool(server_capabilities.get("admin_token_bulk_revoke"))
     team["can_use_token_inventory_fingerprints"] = bool(server_capabilities.get("token_inventory_fingerprints"))
     team["idempotency_record_retention_days"] = _safe_int(server_security.get("idempotency_record_retention_days"))
     team["idempotency_pending_timeout_seconds"] = _safe_int(server_security.get("idempotency_pending_timeout_seconds"))

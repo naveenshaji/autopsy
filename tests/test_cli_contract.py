@@ -3668,6 +3668,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "admin_export_snapshot_restore_apply": True,
                         "admin_export_snapshot_restore_apply_idempotency": True,
                         "admin_export_snapshot_manifest": True,
+                        "admin_token_inventory": True,
+                        "admin_token_bulk_revoke": True,
                         "idempotency_keys": True,
                         "idempotency_record_retention": True,
                     },
@@ -3730,6 +3732,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertFalse(payload["team"]["can_use_admin_export_snapshot_restore_apply"])
         self.assertFalse(payload["team"]["can_use_admin_export_snapshot_restore_apply_idempotency"])
         self.assertFalse(payload["team"]["can_use_admin_export_snapshot_manifest"])
+        self.assertFalse(payload["team"]["can_use_admin_token_inventory"])
+        self.assertFalse(payload["team"]["can_use_admin_token_bulk_revoke"])
         self.assertFalse(payload["team"]["can_read_storage_status"])
         self.assertTrue(payload["team"]["can_use_idempotency_keys"])
         self.assertTrue(payload["team"]["can_use_idempotency_record_retention"])
@@ -3755,6 +3759,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "admin_export_snapshot_restore_apply": True,
                         "admin_export_snapshot_restore_apply_idempotency": True,
                         "admin_export_snapshot_manifest": True,
+                        "admin_token_inventory": True,
+                        "admin_token_bulk_revoke": True,
                         "token_inventory_fingerprints": True,
                         "idempotency_keys": True,
                         "idempotency_record_retention": True,
@@ -4153,6 +4159,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertTrue(payload["team"]["can_use_admin_export_snapshot_restore_apply"])
         self.assertTrue(payload["team"]["can_use_admin_export_snapshot_restore_apply_idempotency"])
         self.assertTrue(payload["team"]["can_use_admin_export_snapshot_manifest"])
+        self.assertTrue(payload["team"]["can_use_admin_token_inventory"])
+        self.assertTrue(payload["team"]["can_use_admin_token_bulk_revoke"])
         self.assertTrue(payload["team"]["can_use_token_inventory_fingerprints"])
         self.assertTrue(payload["team"]["can_use_idempotency_keys"])
         self.assertTrue(payload["team"]["can_use_idempotency_record_retention"])

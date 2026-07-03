@@ -119,6 +119,8 @@ struct SharedServerTeamPayload: Decodable {
     var canUseAdminExportSnapshotRestoreApply: Bool?
     var canUseAdminExportSnapshotRestoreApplyIdempotency: Bool?
     var canUseAdminExportSnapshotManifest: Bool?
+    var canUseAdminTokenInventory: Bool?
+    var canUseAdminTokenBulkRevoke: Bool?
     var canUseTokenInventoryFingerprints: Bool?
     var canUseIdempotencyKeys: Bool?
     var canUseIdempotencyRecordRetention: Bool?
@@ -294,6 +296,8 @@ struct SharedServerTeamPayload: Decodable {
         case canUseAdminExportSnapshotRestoreApply = "can_use_admin_export_snapshot_restore_apply"
         case canUseAdminExportSnapshotRestoreApplyIdempotency = "can_use_admin_export_snapshot_restore_apply_idempotency"
         case canUseAdminExportSnapshotManifest = "can_use_admin_export_snapshot_manifest"
+        case canUseAdminTokenInventory = "can_use_admin_token_inventory"
+        case canUseAdminTokenBulkRevoke = "can_use_admin_token_bulk_revoke"
         case canUseTokenInventoryFingerprints = "can_use_token_inventory_fingerprints"
         case canUseIdempotencyKeys = "can_use_idempotency_keys"
         case canUseIdempotencyRecordRetention = "can_use_idempotency_record_retention"
