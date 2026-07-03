@@ -4589,12 +4589,20 @@ def shared_server_audit_query_params(
     *,
     limit: int,
     actions: list[str] | tuple[str, ...] | str | None = None,
+    since: str = "",
+    until: str = "",
 ) -> list[tuple[str, Any]]:
     query: list[tuple[str, Any]] = [("limit", max(1, min(int(limit), 500)))]
     if graph_slug:
         query.insert(0, ("graph_slug", graph_slug))
     if repo and repo != "*":
         query.append(("repo", repo))
+    since_text = str(since or "").strip()
+    until_text = str(until or "").strip()
+    if since_text:
+        query.append(("since", since_text))
+    if until_text:
+        query.append(("until", until_text))
     for action in split_cli_csv_values(actions):
         query.append(("action", action))
     return query
@@ -4606,8 +4614,10 @@ def shared_server_audit_path(
     *,
     limit: int,
     actions: list[str] | tuple[str, ...] | str | None = None,
+    since: str = "",
+    until: str = "",
 ) -> str:
-    query = urllib.parse.urlencode(shared_server_audit_query_params(graph_slug, repo, limit=limit, actions=actions))
+    query = urllib.parse.urlencode(shared_server_audit_query_params(graph_slug, repo, limit=limit, actions=actions, since=since, until=until))
     return f"/v1/audit-events?{query}"
 
 
@@ -4618,8 +4628,10 @@ def shared_server_audit_summary_path(
     limit: int,
     actions: list[str] | tuple[str, ...] | str | None = None,
     metadata_fields: list[str] | tuple[str, ...] | str | None = None,
+    since: str = "",
+    until: str = "",
 ) -> str:
-    query = shared_server_audit_query_params(graph_slug, repo, limit=limit, actions=actions)
+    query = shared_server_audit_query_params(graph_slug, repo, limit=limit, actions=actions, since=since, until=until)
     for field in split_cli_csv_values(metadata_fields):
         query.append(("metadata_field", field))
     return f"/v1/audit-events/summary?{urllib.parse.urlencode(query)}"
@@ -4631,8 +4643,10 @@ def shared_server_audit_integrity_path(
     *,
     limit: int,
     actions: list[str] | tuple[str, ...] | str | None = None,
+    since: str = "",
+    until: str = "",
 ) -> str:
-    query = urllib.parse.urlencode(shared_server_audit_query_params(graph_slug, repo, limit=limit, actions=actions))
+    query = urllib.parse.urlencode(shared_server_audit_query_params(graph_slug, repo, limit=limit, actions=actions, since=since, until=until))
     return f"/v1/audit-events/integrity?{query}"
 
 
@@ -6311,6 +6325,8 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
                 audit_repo,
                 limit=int(getattr(args, "limit", 100) or 100),
                 actions=split_cli_csv_values(getattr(args, "action", None)),
+                since=str(getattr(args, "since", "") or ""),
+                until=str(getattr(args, "until", "") or ""),
             ),
             timeout=10,
         )
@@ -6326,6 +6342,8 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
                 audit_repo,
                 limit=int(getattr(args, "limit", 100) or 100),
                 actions=split_cli_csv_values(getattr(args, "action", None)),
+                since=str(getattr(args, "since", "") or ""),
+                until=str(getattr(args, "until", "") or ""),
             ),
             timeout=10,
         )

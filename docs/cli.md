@@ -198,6 +198,8 @@ tokens for repos they own without global token access. `shared-server audit
 --repo-scope <repo>` lists scoped server audit events for graph owners or admins.
 Add repeated or comma-separated `--action <event>` filters when you only need a
 specific event class such as `read_shared_context` or `read_personal_context`.
+Add `--since <iso-8601>` or `--until <iso-8601>` to request a bounded audit
+window from servers that advertise `audit_event_time_windows`.
 Use `shared-server audit --global-audit` with a global-admin token to omit
 graph/repo filters for server-wide security events such as `auth_failure`; the
 same flag works with `shared-server audit-integrity`.

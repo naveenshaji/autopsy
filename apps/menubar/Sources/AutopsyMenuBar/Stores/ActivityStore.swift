@@ -1270,39 +1270,39 @@ final class ActivityStore: ObservableObject {
         }
     }
 
-    func copySharedServerAudit(repoScope: String) {
+    func copySharedServerAudit(repoScope: String, since: String, until: String) {
         Task {
-            await copySharedAudit(repoScope: repoScope)
+            await copySharedAudit(repoScope: repoScope, since: since, until: until)
         }
     }
 
-    func copySharedServerContextAudit(repoScope: String) {
+    func copySharedServerContextAudit(repoScope: String, since: String, until: String) {
         Task {
-            await copySharedContextAudit(repoScope: repoScope)
+            await copySharedContextAudit(repoScope: repoScope, since: since, until: until)
         }
     }
 
-    func copySharedServerActivityAudit(repoScope: String) {
+    func copySharedServerActivityAudit(repoScope: String, since: String, until: String) {
         Task {
-            await copySharedActivityAudit(repoScope: repoScope)
+            await copySharedActivityAudit(repoScope: repoScope, since: since, until: until)
         }
     }
 
-    func copySharedServerAccessChangeAudit(repoScope: String) {
+    func copySharedServerAccessChangeAudit(repoScope: String, since: String, until: String) {
         Task {
-            await copySharedAccessChangeAudit(repoScope: repoScope)
+            await copySharedAccessChangeAudit(repoScope: repoScope, since: since, until: until)
         }
     }
 
-    func copySharedServerSecurityAudit() {
+    func copySharedServerSecurityAudit(since: String, until: String) {
         Task {
-            await copySharedSecurityAudit()
+            await copySharedSecurityAudit(since: since, until: until)
         }
     }
 
-    func copySharedServerAuditIntegrity(repoScope: String) {
+    func copySharedServerAuditIntegrity(repoScope: String, since: String, until: String) {
         Task {
-            await copySharedAuditIntegrity(repoScope: repoScope)
+            await copySharedAuditIntegrity(repoScope: repoScope, since: since, until: until)
         }
     }
 
@@ -2778,7 +2778,20 @@ final class ActivityStore: ObservableObject {
         }
     }
 
-    private func copySharedAudit(repoScope: String) async {
+    private func auditWindowArguments(since: String, until: String) -> [String] {
+        var arguments: [String] = []
+        let sinceText = since.trimmingCharacters(in: .whitespacesAndNewlines)
+        let untilText = until.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !sinceText.isEmpty {
+            arguments += ["--since", sinceText]
+        }
+        if !untilText.isEmpty {
+            arguments += ["--until", untilText]
+        }
+        return arguments
+    }
+
+    private func copySharedAudit(repoScope: String, since: String, until: String) async {
         guard !isManagingSharedAccess else { return }
         isManagingSharedAccess = true
         sharedServerError = nil
@@ -2788,14 +2801,16 @@ final class ActivityStore: ObservableObject {
         }
 
         do {
-            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run([
+            var arguments = [
                 "shared-server",
                 "audit",
                 "--repo-scope",
                 normalizedRepoScope(repoScope),
                 "--limit",
                 "50",
-            ])
+            ]
+            arguments += auditWindowArguments(since: since, until: until)
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run(arguments)
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(output.trimmingCharacters(in: .whitespacesAndNewlines), forType: .string)
             lastActionMessage = "Shared audit copied"
@@ -2805,7 +2820,7 @@ final class ActivityStore: ObservableObject {
         }
     }
 
-    private func copySharedContextAudit(repoScope: String) async {
+    private func copySharedContextAudit(repoScope: String, since: String, until: String) async {
         guard !isManagingSharedAccess else { return }
         isManagingSharedAccess = true
         sharedServerError = nil
@@ -2816,7 +2831,7 @@ final class ActivityStore: ObservableObject {
 
         do {
             let scope = normalizedRepoScope(repoScope)
-            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run([
+            var arguments = [
                 "shared-server",
                 "audit",
                 "--repo-scope",
@@ -2827,7 +2842,9 @@ final class ActivityStore: ObservableObject {
                 "read_personal_context",
                 "--limit",
                 "50",
-            ])
+            ]
+            arguments += auditWindowArguments(since: since, until: until)
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run(arguments)
             let summary = sharedContextAuditReport(from: output, repoScope: scope)
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(summary, forType: .string)
@@ -2838,7 +2855,7 @@ final class ActivityStore: ObservableObject {
         }
     }
 
-    private func copySharedActivityAudit(repoScope: String) async {
+    private func copySharedActivityAudit(repoScope: String, since: String, until: String) async {
         guard !isManagingSharedAccess else { return }
         isManagingSharedAccess = true
         sharedServerError = nil
@@ -2859,6 +2876,7 @@ final class ActivityStore: ObservableObject {
                 arguments += ["--action", action]
             }
             arguments += ["--limit", "50"]
+            arguments += auditWindowArguments(since: since, until: until)
             let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run(arguments)
             let summary = sharedActivityAuditReport(from: output, repoScope: scope)
             NSPasteboard.general.clearContents()
@@ -2870,7 +2888,7 @@ final class ActivityStore: ObservableObject {
         }
     }
 
-    private func copySharedAccessChangeAudit(repoScope: String) async {
+    private func copySharedAccessChangeAudit(repoScope: String, since: String, until: String) async {
         guard !isManagingSharedAccess else { return }
         isManagingSharedAccess = true
         sharedServerError = nil
@@ -2891,6 +2909,7 @@ final class ActivityStore: ObservableObject {
                 arguments += ["--action", action]
             }
             arguments += ["--limit", "50"]
+            arguments += auditWindowArguments(since: since, until: until)
             let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run(arguments)
             let summary = sharedAccessChangeAuditReport(from: output, repoScope: scope)
             NSPasteboard.general.clearContents()
@@ -2902,7 +2921,7 @@ final class ActivityStore: ObservableObject {
         }
     }
 
-    private func copySharedSecurityAudit() async {
+    private func copySharedSecurityAudit(since: String, until: String) async {
         guard !isManagingSharedAccess else { return }
         isManagingSharedAccess = true
         sharedServerError = nil
@@ -2928,6 +2947,8 @@ final class ActivityStore: ObservableObject {
             }
             auditArguments += ["--limit", "50"]
             integrityArguments += ["--limit", "50"]
+            auditArguments += auditWindowArguments(since: since, until: until)
+            integrityArguments += auditWindowArguments(since: since, until: until)
 
             let cli = AutopsyCLI(executable: cliPath, timeoutSeconds: 20)
             let auditOutput = try await cli.run(auditArguments)
@@ -2942,7 +2963,7 @@ final class ActivityStore: ObservableObject {
         }
     }
 
-    private func copySharedAuditIntegrity(repoScope: String) async {
+    private func copySharedAuditIntegrity(repoScope: String, since: String, until: String) async {
         guard !isManagingSharedAccess else { return }
         isManagingSharedAccess = true
         sharedServerError = nil
@@ -2953,14 +2974,16 @@ final class ActivityStore: ObservableObject {
 
         do {
             let scope = normalizedRepoScope(repoScope)
-            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run([
+            var arguments = [
                 "shared-server",
                 "audit-integrity",
                 "--repo-scope",
                 scope,
                 "--limit",
                 "50",
-            ])
+            ]
+            arguments += auditWindowArguments(since: since, until: until)
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run(arguments)
             let summary = sharedAuditIntegrityReport(from: output, repoScope: scope)
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(summary, forType: .string)

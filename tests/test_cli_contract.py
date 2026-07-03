@@ -301,6 +301,10 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "25",
             "--action",
             "read_shared_context,read_personal_context",
+            "--since",
+            "2026-07-03T00:00:00Z",
+            "--until",
+            "2026-07-03T01:00:00Z",
         ])
         global_audit_args = parser.parse_args([
             "shared-server",
@@ -588,6 +592,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(audit_args.repo_scope, "repo-a")
         self.assertEqual(audit_args.limit, 25)
         self.assertEqual(audit_args.action, ["read_shared_context,read_personal_context"])
+        self.assertEqual(audit_args.since, "2026-07-03T00:00:00Z")
+        self.assertEqual(audit_args.until, "2026-07-03T01:00:00Z")
         self.assertTrue(global_audit_args.global_audit)
         self.assertEqual(global_audit_args.action, ["auth_failure"])
         self.assertEqual(audit_integrity_args.shared_server_action, "audit-integrity")
@@ -692,6 +698,29 @@ class AutopsyCLIContractTests(unittest.TestCase):
         unscoped_path = cli.shared_server_audit_path("autopsy", "*", limit=1000)
         global_path = cli.shared_server_audit_path("", "*", limit=25, actions=["auth_failure"])
         global_integrity_path = cli.shared_server_audit_integrity_path("", "*", limit=25, actions=["auth_failure"])
+        windowed_path = cli.shared_server_audit_path(
+            "autopsy",
+            "repo-a",
+            limit=25,
+            actions=["read_shared_context"],
+            since="2026-07-03T00:00:00Z",
+            until="2026-07-03T01:00:00Z",
+        )
+        windowed_integrity_path = cli.shared_server_audit_integrity_path(
+            "autopsy",
+            "repo-a",
+            limit=25,
+            since="2026-07-03T00:00:00Z",
+        )
+        windowed_summary_path = cli.shared_server_audit_summary_path(
+            "autopsy",
+            "repo-a",
+            limit=25,
+            actions=["read_audit_events"],
+            metadata_fields=["actor_token_scoped"],
+            since="2026-07-03T00:00:00Z",
+            until="2026-07-03T01:00:00Z",
+        )
 
         self.assertEqual(path, "/v1/audit-events?graph_slug=autopsy&limit=25&repo=repo-a")
         self.assertEqual(integrity_path, "/v1/audit-events/integrity?graph_slug=autopsy&limit=25&repo=repo-a")
@@ -703,6 +732,18 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(unscoped_path, "/v1/audit-events?graph_slug=autopsy&limit=500")
         self.assertEqual(global_path, "/v1/audit-events?limit=25&action=auth_failure")
         self.assertEqual(global_integrity_path, "/v1/audit-events/integrity?limit=25&action=auth_failure")
+        self.assertEqual(
+            windowed_path,
+            "/v1/audit-events?graph_slug=autopsy&limit=25&repo=repo-a&since=2026-07-03T00%3A00%3A00Z&until=2026-07-03T01%3A00%3A00Z&action=read_shared_context",
+        )
+        self.assertEqual(
+            windowed_integrity_path,
+            "/v1/audit-events/integrity?graph_slug=autopsy&limit=25&repo=repo-a&since=2026-07-03T00%3A00%3A00Z",
+        )
+        self.assertEqual(
+            windowed_summary_path,
+            "/v1/audit-events/summary?graph_slug=autopsy&limit=25&repo=repo-a&since=2026-07-03T00%3A00%3A00Z&until=2026-07-03T01%3A00%3A00Z&action=read_audit_events&metadata_field=actor_token_scoped",
+        )
 
     def test_shared_server_access_check_path_is_graph_scoped(self):
         self.assertEqual(
