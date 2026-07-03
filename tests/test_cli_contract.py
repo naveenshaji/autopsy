@@ -3726,6 +3726,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "repo_policy_reset": True,
                         "idempotency_keys": True,
                         "idempotency_record_retention": True,
+                        "idempotency_response_secret_guard": True,
                         "access_mutation_idempotency": True,
                     },
                     "security": {
@@ -3820,6 +3821,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["team"]["repo_effective_role"], "reader")
         self.assertTrue(payload["team"]["can_use_idempotency_keys"])
         self.assertTrue(payload["team"]["can_use_idempotency_record_retention"])
+        self.assertTrue(payload["team"]["can_use_idempotency_response_secret_guard"])
         self.assertTrue(payload["team"]["can_use_access_mutation_idempotency"])
 
     def test_shared_server_team_status_summarizes_remote_access_and_scoped_tokens(self):
@@ -3855,6 +3857,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "repo_policy_reset": True,
                         "idempotency_keys": True,
                         "idempotency_record_retention": True,
+                        "idempotency_response_secret_guard": True,
                         "access_mutation_idempotency": True,
                     },
                     "security": {
@@ -4287,6 +4290,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertTrue(payload["team"]["can_reset_repo_policy"])
         self.assertTrue(payload["team"]["can_use_idempotency_keys"])
         self.assertTrue(payload["team"]["can_use_idempotency_record_retention"])
+        self.assertTrue(payload["team"]["can_use_idempotency_response_secret_guard"])
         self.assertTrue(payload["team"]["can_use_access_mutation_idempotency"])
         self.assertEqual(payload["team"]["idempotency_record_retention_days"], 7)
         self.assertEqual(payload["team"]["idempotency_pending_timeout_seconds"], 3600)
