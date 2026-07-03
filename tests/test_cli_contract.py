@@ -282,6 +282,12 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "--audit-limit",
             "25",
         ])
+        validate_export_snapshot_args = parser.parse_args([
+            "shared-server",
+            "validate-export-snapshot",
+            "--snapshot-file",
+            "/tmp/export-snapshot.json",
+        ])
         update_policy_args = parser.parse_args([
             "shared-server",
             "update-policy",
@@ -622,6 +628,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(export_snapshot_args.shared_server_action, "export-snapshot")
         self.assertTrue(export_snapshot_args.include_audit)
         self.assertEqual(export_snapshot_args.audit_limit, 25)
+        self.assertEqual(validate_export_snapshot_args.shared_server_action, "validate-export-snapshot")
+        self.assertEqual(validate_export_snapshot_args.snapshot_file, "/tmp/export-snapshot.json")
         self.assertEqual(update_policy_args.shared_server_action, "update-policy")
         self.assertEqual(update_policy_args.allowed_relation_label, ["supports,depends_on"])
         self.assertEqual(update_policy_args.allowed_memory_kind, ["decision,observation"])
@@ -2699,6 +2707,56 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["redaction"], "admin_redacted_snapshot")
         self.assertEqual(payload["audit_events"][0]["action"], "export_snapshot")
 
+    def test_shared_server_validate_export_snapshot_action_posts_snapshot_file(self):
+        parser = cli.build_parser()
+        snapshot = {
+            "service": "autopsy-server",
+            "schema_version": 1,
+            "redaction": {"mode": "admin_redacted_snapshot"},
+            "counts": {"users": 0, "exported_audit_events": 0},
+            "users": [],
+            "shared_graphs": [],
+            "grants": [],
+            "repo_policies": [],
+            "shared_memories": [],
+            "memory_versions": [],
+            "shared_relations": [],
+            "personal_relations": [],
+            "audit_events": [],
+        }
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
+            json.dump(snapshot, handle)
+            snapshot_path = handle.name
+        self.addCleanup(lambda: Path(snapshot_path).unlink(missing_ok=True))
+        args = parser.parse_args(["shared-server", "validate-export-snapshot", "--snapshot-file", snapshot_path])
+
+        def fake_request(_config, path, **kwargs):
+            self.assertEqual(path, "/v1/admin/export-snapshot/validate")
+            self.assertEqual(kwargs.get("method"), "POST")
+            self.assertEqual(kwargs.get("payload"), snapshot)
+            self.assertEqual(kwargs.get("timeout"), 30)
+            return {
+                "ok": True,
+                "dry_run": True,
+                "restore_readiness": {"safe_to_plan_restore": True},
+                "audit": {"action": "validate_export_snapshot"},
+            }
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        payload = json.loads(stream.getvalue())
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["dry_run"])
+        self.assertTrue(payload["restore_readiness"]["safe_to_plan_restore"])
+        self.assertEqual(payload["audit"]["action"], "validate_export_snapshot")
+
     def test_shared_server_admin_tokens_action_prints_remote_payload(self):
         parser = cli.build_parser()
         args = parser.parse_args([
@@ -3344,6 +3402,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
                     "api_version": 1,
                     "capabilities": {
                         "admin_export_snapshot": True,
+                        "admin_export_snapshot_validation": True,
                         "idempotency_keys": True,
                         "idempotency_record_retention": True,
                     },
@@ -3735,6 +3794,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["team"]["storage_audit_chain_status"], "verified")
         self.assertEqual(payload["team"]["storage_audit_chain_continuity_status"], "verified")
         self.assertTrue(payload["team"]["can_use_admin_export_snapshot"])
+        self.assertTrue(payload["team"]["can_use_admin_export_snapshot_validation"])
         self.assertTrue(payload["team"]["can_use_idempotency_keys"])
         self.assertTrue(payload["team"]["can_use_idempotency_record_retention"])
         self.assertEqual(payload["team"]["idempotency_record_retention_days"], 7)

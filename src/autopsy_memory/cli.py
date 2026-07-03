@@ -4580,6 +4580,32 @@ def shared_server_export_snapshot_path(*, include_audit: bool = False, audit_lim
     return f"/v1/admin/export-snapshot?{urllib.parse.urlencode(query)}"
 
 
+def shared_server_validate_export_snapshot_path() -> str:
+    return "/v1/admin/export-snapshot/validate"
+
+
+def load_shared_server_snapshot_payload(path_value: str | None) -> dict[str, Any]:
+    source = str(path_value or "").strip()
+    if source == "-":
+        raw = sys.stdin.read()
+    elif source:
+        path = Path(source).expanduser()
+        if not path.exists():
+            fail(f"shared-server validate-export-snapshot input does not exist: {path}", 2)
+        raw = path.read_text(encoding="utf-8")
+    elif not sys.stdin.isatty():
+        raw = sys.stdin.read()
+    else:
+        fail("shared-server validate-export-snapshot requires --snapshot-file <path> or JSON on stdin", 2)
+    try:
+        payload = json.loads(raw)
+    except Exception as exc:
+        fail(f"shared-server validate-export-snapshot input is not valid JSON: {exc}", 2)
+    if not isinstance(payload, dict):
+        fail("shared-server validate-export-snapshot input must be a JSON object", 2)
+    return payload
+
+
 def shared_server_admin_tokens_path(
     *,
     limit: int = 500,
@@ -5427,6 +5453,7 @@ def build_shared_server_team_status_payload(
         "can_read_shared_read_summary": False,
         "can_read_storage_status": False,
         "can_use_admin_export_snapshot": False,
+        "can_use_admin_export_snapshot_validation": False,
         "can_use_idempotency_keys": False,
         "can_use_idempotency_record_retention": False,
     }
@@ -5436,6 +5463,7 @@ def build_shared_server_team_status_payload(
     team["can_use_idempotency_keys"] = bool(server_capabilities.get("idempotency_keys"))
     team["can_use_idempotency_record_retention"] = bool(server_capabilities.get("idempotency_record_retention"))
     team["can_use_admin_export_snapshot"] = bool(server_capabilities.get("admin_export_snapshot"))
+    team["can_use_admin_export_snapshot_validation"] = bool(server_capabilities.get("admin_export_snapshot_validation"))
     team["idempotency_record_retention_days"] = _safe_int(server_security.get("idempotency_record_retention_days"))
     team["idempotency_pending_timeout_seconds"] = _safe_int(server_security.get("idempotency_pending_timeout_seconds"))
     if audit_since or audit_until:
@@ -6525,6 +6553,17 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         payload = shared_server_request_or_fail(
             config,
             shared_server_export_snapshot_path(include_audit=include_audit, audit_limit=audit_limit),
+            timeout=30,
+        )
+        print(json.dumps(payload, indent=2))
+        return
+    if action == "validate-export-snapshot":
+        snapshot_payload = load_shared_server_snapshot_payload(getattr(args, "snapshot_file", None))
+        payload = shared_server_request_or_fail(
+            config,
+            shared_server_validate_export_snapshot_path(),
+            method="POST",
+            payload=snapshot_payload,
             timeout=30,
         )
         print(json.dumps(payload, indent=2))

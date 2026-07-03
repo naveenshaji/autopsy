@@ -402,6 +402,7 @@ def build_parser(
             "team-status",
             "storage-status",
             "export-snapshot",
+            "validate-export-snapshot",
             "admin-tokens",
             "bulk-revoke-tokens",
             "bulk-revoke-scoped-tokens",
@@ -511,6 +512,7 @@ def build_parser(
     shared_server_parser.add_argument("--confirm-token-revoke", action="store_true", help="With shared-server token bulk-revoke actions, execute the filtered revoke instead of the default dry run.")
     shared_server_parser.add_argument("--include-audit", action="store_true", help="With shared-server export-snapshot, include a bounded redacted audit-event tail.")
     shared_server_parser.add_argument("--audit-limit", type=int, help="With shared-server export-snapshot, maximum redacted audit events to include; defaults to 500 with --include-audit and 0 otherwise.")
+    shared_server_parser.add_argument("--snapshot-file", help="With shared-server validate-export-snapshot, read the export snapshot JSON from this path; use '-' or omit to read stdin.")
     shared_server_parser.add_argument("--no-relations", action="store_true", help="With shared-server context or personal-context, omit adjacent shared graph relations.")
     shared_server_parser.add_argument("--min-fact-rating", type=float, help="With shared-server context or personal-context, omit adjacent shared relations below this 0.0-1.0 evidence rating.")
     shared_server_parser.add_argument(

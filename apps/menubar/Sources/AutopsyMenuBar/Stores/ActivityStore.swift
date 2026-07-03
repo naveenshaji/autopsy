@@ -79,6 +79,7 @@ final class ActivityStore: ObservableObject {
         "read_grants",
         "read_access_check",
         "export_snapshot",
+        "validate_export_snapshot",
         "read_repo_policy",
         "read_repo_policies",
         "check_memory_policy",
@@ -327,6 +328,7 @@ final class ActivityStore: ObservableObject {
                 ("audit_event_summaries", "audit summaries"),
                 ("admin_storage_status", "storage status"),
                 ("admin_export_snapshot", "export snapshots"),
+                ("admin_export_snapshot_validation", "export validation"),
                 ("admin_storage_token_hygiene", "token hygiene"),
                 ("admin_token_inventory", "token inventory"),
                 ("repo_policies", "repo policies"),
@@ -1187,6 +1189,12 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    func validateSharedServerExportSnapshotClipboard() {
+        Task {
+            await validateSharedExportSnapshotClipboard()
+        }
+    }
+
     func copySharedServerAccessCheck(repoScope: String, mode: String) {
         Task {
             await copySharedAccessCheck(repoScope: repoScope, mode: mode)
@@ -1734,6 +1742,43 @@ final class ActivityStore: ObservableObject {
             NSPasteboard.general.setString(sharedExportSnapshotReport(from: output), forType: .string)
             lastActionMessage = "Export snapshot copied"
             clearLastActionMessageAfterDelay(expected: "Export snapshot copied")
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
+    }
+
+    private func validateSharedExportSnapshotClipboard() async {
+        guard !isManagingSharedAccess else { return }
+        isManagingSharedAccess = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingSharedAccess = false
+        }
+
+        let snapshotText = NSPasteboard.general.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !snapshotText.isEmpty else {
+            sharedServerError = "Clipboard does not contain export snapshot JSON."
+            return
+        }
+
+        let snapshotURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("autopsy-export-snapshot-\(UUID().uuidString).json")
+        do {
+            try snapshotText.write(to: snapshotURL, atomically: true, encoding: .utf8)
+            defer {
+                try? FileManager.default.removeItem(at: snapshotURL)
+            }
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 45).run([
+                "shared-server",
+                "validate-export-snapshot",
+                "--snapshot-file",
+                snapshotURL.path,
+            ])
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(sharedExportSnapshotValidationReport(from: output), forType: .string)
+            lastActionMessage = "Export validation copied"
+            clearLastActionMessageAfterDelay(expected: "Export validation copied")
         } catch {
             sharedServerError = error.localizedDescription
         }
@@ -3422,6 +3467,45 @@ final class ActivityStore: ObservableObject {
 
     private func sharedExportSnapshotReport(from output: String) -> String {
         output.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func sharedExportSnapshotValidationReport(from output: String) -> String {
+        guard let payload = jsonObject(from: output) else {
+            return output.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let counts = payload["counts"] as? [String: Any] ?? [:]
+        let observed = counts["observed"] as? [String: Any] ?? [:]
+        let mismatches = counts["mismatches"] as? [String: Any] ?? [:]
+        let redaction = payload["redaction"] as? [String: Any] ?? [:]
+        let restoreReadiness = payload["restore_readiness"] as? [String: Any] ?? [:]
+        let audit = payload["audit"] as? [String: Any] ?? [:]
+        let status = auditBool(payload["ok"]) == true ? "valid" : "invalid"
+        let restoreReady = auditBool(restoreReadiness["safe_to_plan_restore"]) == true ? "yes" : "no"
+        var lines = [
+            "Shared Export Snapshot Validation",
+            "Status: \(status)",
+            "Restore plan ready: \(restoreReady)",
+        ]
+        if let schemaVersion = auditInt(payload["schema_version"]) {
+            lines.append("Schema: \(schemaVersion)")
+        }
+        lines += [
+            "Users: \(auditInt(observed["users"]) ?? 0)",
+            "Shared graphs: \(auditInt(observed["shared_graphs"]) ?? 0)",
+            "Shared memories: \(auditInt(observed["shared_memories"]) ?? 0)",
+            "Memory versions: \(auditInt(observed["memory_versions"]) ?? 0)",
+            "Relations: shared \(auditInt(observed["shared_relations"]) ?? 0), personal \(auditInt(observed["personal_relations"]) ?? 0)",
+            "Exported audit events: \(auditInt(observed["audit_events"]) ?? 0)",
+            "Secret-key leaks: \(auditInt(redaction["secret_leak_count"]) ?? 0)",
+        ]
+        if !mismatches.isEmpty {
+            lines.append("Count mismatches: \(mismatches.keys.sorted().joined(separator: ", "))")
+        }
+        if let auditID = auditString(audit["id"]) {
+            lines.append("Audit receipt: \(auditID)")
+        }
+        return lines.joined(separator: "\n")
     }
 
     private func sharedUsersReport(from output: String) -> String {

@@ -290,6 +290,11 @@ private struct SharedSettingsTab: View {
                         store.copySharedServerExportSnapshot()
                     }
                     .disabled(sharedActionDisabled)
+
+                    Button("Validate Export") {
+                        store.validateSharedServerExportSnapshotClipboard()
+                    }
+                    .disabled(sharedActionDisabled)
                 }
 
                 TextField("Team Audit Hours", text: $teamStatusAuditLastHours)

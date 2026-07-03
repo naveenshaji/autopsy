@@ -83,6 +83,7 @@ autopsy shared-server health
 autopsy shared-server capabilities
 autopsy shared-server team-status
 autopsy shared-server export-snapshot --audit-limit 0
+autopsy shared-server validate-export-snapshot --snapshot-file ./export-snapshot.json
 autopsy shared-server users
 autopsy shared-server disable-user usr_123
 autopsy shared-server enable-user --user-id usr_123
@@ -170,7 +171,9 @@ or conflicting because a key was reused for a different request.
 `shared-server export-snapshot` requires a global-admin token and returns a
 redacted shared-server snapshot suitable for backup handoff or inspection; add
 `--include-audit --audit-limit <n>` to include a bounded redacted audit-event
-tail. Graph owners can use `shared-server invite --email <email> --role reader|writer|owner
+tail. `shared-server validate-export-snapshot --snapshot-file <path>` posts a
+snapshot to the server's admin dry-run validator; use `--snapshot-file -` or
+omit the flag to read JSON from stdin. Graph owners can use `shared-server invite --email <email> --role reader|writer|owner
 --repo-scope <repo>` to create or reuse a user, grant repo access, and issue a
 one-time token in one audited operation. Successful shared mutation responses
 can include a redacted `audit` receipt with the audit event id and integrity
