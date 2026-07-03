@@ -3427,6 +3427,28 @@ class AutopsyCLIContractTests(unittest.TestCase):
                 }
             if path == (
                 "/v1/audit-events/summary?graph_slug=autopsy&limit=50&repo=repo-a"
+                "&action=memory_version_conflict"
+                "&metadata_field=mode&metadata_field=reason&metadata_field=kind&metadata_field=current_archived"
+            ):
+                return {
+                    "event_count": 4,
+                    "metadata_counts": {
+                        "mode": {"archive": 1, "restore": 1, "restore_version": 1, "upsert": 1},
+                        "reason": {"stale_memory_version": 4},
+                        "kind": {"decision": 2, "observation": 1, "unknown": 1},
+                        "current_archived": {"false": 3, "true": 1},
+                    },
+                    "latest_created_at": "2026-07-02T09:30:00Z",
+                    "scope": {
+                        "graph_slug": "autopsy",
+                        "repo": "repo-a",
+                        "actions": ["memory_version_conflict"],
+                        "metadata_fields": ["mode", "reason", "kind", "current_archived"],
+                        "filtered_window": True,
+                    },
+                }
+            if path == (
+                "/v1/audit-events/summary?graph_slug=autopsy&limit=50&repo=repo-a"
                 "&action=invite_user&metadata_field=expires_at_defaulted"
             ):
                 return {
@@ -3609,6 +3631,17 @@ class AutopsyCLIContractTests(unittest.TestCase):
             {"memory_kind_not_allowed": 1, "memory_writes_disabled": 1},
         )
         self.assertEqual(payload["team"]["latest_memory_policy_conflict_at"], "2026-07-02T09:15:00Z")
+        self.assertTrue(payload["team"]["can_read_memory_version_conflicts"])
+        self.assertEqual(payload["team"]["memory_version_conflicts_source"], "summary")
+        self.assertEqual(payload["team"]["memory_version_conflict_count"], 4)
+        self.assertEqual(
+            payload["team"]["memory_version_conflict_mode_counts"],
+            {"archive": 1, "restore": 1, "restore_version": 1, "upsert": 1},
+        )
+        self.assertEqual(payload["team"]["memory_version_conflict_reason_counts"], {"stale_memory_version": 4})
+        self.assertEqual(payload["team"]["memory_version_conflict_kind_counts"], {"decision": 2, "observation": 1, "unknown": 1})
+        self.assertEqual(payload["team"]["memory_version_conflict_current_archived_counts"], {"false": 3, "true": 1})
+        self.assertEqual(payload["team"]["latest_memory_version_conflict_at"], "2026-07-02T09:30:00Z")
         self.assertTrue(payload["team"]["can_read_invite_expiration_summary"])
         self.assertEqual(payload["team"]["invite_expiration_summary_source"], "summary")
         self.assertEqual(payload["team"]["invite_expiration_audit_count"], 5)

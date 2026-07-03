@@ -5105,6 +5105,35 @@ def summarize_shared_server_memory_policy_conflicts(items: list[dict[str, Any]])
     }
 
 
+def summarize_shared_server_memory_version_conflicts(items: list[dict[str, Any]]) -> dict[str, Any]:
+    mode_counts: dict[str, int] = {}
+    reason_counts: dict[str, int] = {}
+    kind_counts: dict[str, int] = {}
+    current_archived_counts: dict[str, int] = {}
+    latest_created_at = ""
+    for item in items:
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        mode = str(metadata.get("mode") or "unknown").strip() or "unknown"
+        reason = str(metadata.get("reason") or "unknown").strip() or "unknown"
+        kind = str(metadata.get("kind") or "unknown").strip() or "unknown"
+        current_archived = str(metadata.get("current_archived") if "current_archived" in metadata else "unknown").lower().strip() or "unknown"
+        mode_counts[mode] = mode_counts.get(mode, 0) + 1
+        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        kind_counts[kind] = kind_counts.get(kind, 0) + 1
+        current_archived_counts[current_archived] = current_archived_counts.get(current_archived, 0) + 1
+        created_at = str(item.get("created_at") or "").strip()
+        if created_at and (not latest_created_at or created_at > latest_created_at):
+            latest_created_at = created_at
+    return {
+        "memory_version_conflict_count": len(items),
+        "memory_version_conflict_mode_counts": dict(sorted(mode_counts.items())),
+        "memory_version_conflict_reason_counts": dict(sorted(reason_counts.items())),
+        "memory_version_conflict_kind_counts": dict(sorted(kind_counts.items())),
+        "memory_version_conflict_current_archived_counts": dict(sorted(current_archived_counts.items())),
+        "latest_memory_version_conflict_at": latest_created_at,
+    }
+
+
 def _safe_int(value: Any) -> int:
     try:
         return int(value or 0)
@@ -5138,6 +5167,18 @@ def summarize_shared_server_memory_policy_conflict_summary(summary: dict[str, An
         "memory_policy_conflict_kind_counts": _int_count_map(metadata_counts.get("kind")),
         "memory_policy_conflict_current_reason_counts": _int_count_map(metadata_counts.get("current_reason")),
         "latest_memory_policy_conflict_at": str(summary.get("latest_created_at") or ""),
+    }
+
+
+def summarize_shared_server_memory_version_conflict_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    metadata_counts = summary.get("metadata_counts") if isinstance(summary.get("metadata_counts"), dict) else {}
+    return {
+        "memory_version_conflict_count": _safe_int(summary.get("event_count")),
+        "memory_version_conflict_mode_counts": _int_count_map(metadata_counts.get("mode")),
+        "memory_version_conflict_reason_counts": _int_count_map(metadata_counts.get("reason")),
+        "memory_version_conflict_kind_counts": _int_count_map(metadata_counts.get("kind")),
+        "memory_version_conflict_current_archived_counts": _int_count_map(metadata_counts.get("current_archived")),
+        "latest_memory_version_conflict_at": str(summary.get("latest_created_at") or ""),
     }
 
 
@@ -5232,6 +5273,7 @@ def build_shared_server_team_status_payload(
         "can_read_audit_integrity": False,
         "can_read_relation_policy_conflicts": False,
         "can_read_memory_policy_conflicts": False,
+        "can_read_memory_version_conflicts": False,
         "can_read_invite_expiration_summary": False,
         "can_read_audit_reader_summary": False,
         "can_read_shared_read_summary": False,
@@ -5342,6 +5384,7 @@ def build_shared_server_team_status_payload(
         }
     read_raw_conflict_audits = False
     read_raw_memory_conflict_audits = False
+    read_raw_memory_version_conflict_audits = False
     try:
         conflict_summary_payload = shared_server_request(
             config,
@@ -5392,6 +5435,31 @@ def build_shared_server_team_status_payload(
         team["can_read_memory_policy_conflicts"] = True
         team["memory_policy_conflicts_source"] = "summary"
         team.update(summarize_shared_server_memory_policy_conflict_summary(memory_conflict_summary_payload))
+    try:
+        memory_version_conflict_summary_payload = shared_server_request(
+            config,
+            shared_server_audit_summary_path(
+                graph_slug,
+                repo or "*",
+                limit=50,
+                actions=["memory_version_conflict"],
+                metadata_fields=["mode", "reason", "kind", "current_archived"],
+                since=audit_since,
+                until=audit_until,
+            ),
+            timeout=10,
+        )
+    except urllib.error.HTTPError as exc:
+        if exc.code in {404, 405}:
+            read_raw_memory_version_conflict_audits = True
+        else:
+            team["memory_version_conflicts_error"] = shared_server_http_error_message(exc)
+    except Exception as exc:
+        team["memory_version_conflicts_error"] = str(exc)
+    else:
+        team["can_read_memory_version_conflicts"] = True
+        team["memory_version_conflicts_source"] = "summary"
+        team.update(summarize_shared_server_memory_version_conflict_summary(memory_version_conflict_summary_payload))
     try:
         invite_summary_payload = shared_server_request(
             config,
@@ -5523,6 +5591,29 @@ def build_shared_server_team_status_payload(
             team["can_read_memory_policy_conflicts"] = True
             team["memory_policy_conflicts_source"] = "raw_fallback"
             team.update(summarize_shared_server_memory_policy_conflicts(conflicts))
+    if read_raw_memory_version_conflict_audits:
+        try:
+            conflict_payload = shared_server_request(
+                config,
+                shared_server_audit_path(
+                    graph_slug,
+                    repo or "*",
+                    limit=50,
+                    actions=["memory_version_conflict"],
+                    since=audit_since,
+                    until=audit_until,
+                ),
+                timeout=10,
+            )
+        except urllib.error.HTTPError as exc:
+            team["memory_version_conflicts_error"] = shared_server_http_error_message(exc)
+        except Exception as exc:
+            team["memory_version_conflicts_error"] = str(exc)
+        else:
+            conflicts = conflict_payload.get("items") if isinstance(conflict_payload.get("items"), list) else []
+            team["can_read_memory_version_conflicts"] = True
+            team["memory_version_conflicts_source"] = "raw_fallback"
+            team.update(summarize_shared_server_memory_version_conflicts(conflicts))
     return payload
 
 

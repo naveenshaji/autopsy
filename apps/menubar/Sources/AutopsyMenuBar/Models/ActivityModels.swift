@@ -100,6 +100,7 @@ struct SharedServerTeamPayload: Decodable {
     var canReadAuditIntegrity: Bool?
     var canReadRelationPolicyConflicts: Bool?
     var canReadMemoryPolicyConflicts: Bool?
+    var canReadMemoryVersionConflicts: Bool?
     var canReadInviteExpirationSummary: Bool?
     var canReadAuditReaderSummary: Bool?
     var canReadSharedReadSummary: Bool?
@@ -154,6 +155,12 @@ struct SharedServerTeamPayload: Decodable {
     var memoryPolicyConflictKindCounts: [String: Int]?
     var memoryPolicyConflictCurrentReasonCounts: [String: Int]?
     var latestMemoryPolicyConflictAt: String?
+    var memoryVersionConflictCount: Int?
+    var memoryVersionConflictModeCounts: [String: Int]?
+    var memoryVersionConflictReasonCounts: [String: Int]?
+    var memoryVersionConflictKindCounts: [String: Int]?
+    var memoryVersionConflictCurrentArchivedCounts: [String: Int]?
+    var latestMemoryVersionConflictAt: String?
     var inviteExpirationAuditCount: Int?
     var inviteExpirationDefaultedCount: Int?
     var inviteExpirationExplicitCount: Int?
@@ -213,6 +220,7 @@ struct SharedServerTeamPayload: Decodable {
     var auditIntegrityError: String?
     var relationPolicyConflictsError: String?
     var memoryPolicyConflictsError: String?
+    var memoryVersionConflictsError: String?
     var inviteExpirationSummaryError: String?
     var auditReaderSummaryError: String?
     var sharedReadSummaryError: String?
@@ -230,6 +238,7 @@ struct SharedServerTeamPayload: Decodable {
         case canReadAuditIntegrity = "can_read_audit_integrity"
         case canReadRelationPolicyConflicts = "can_read_relation_policy_conflicts"
         case canReadMemoryPolicyConflicts = "can_read_memory_policy_conflicts"
+        case canReadMemoryVersionConflicts = "can_read_memory_version_conflicts"
         case canReadInviteExpirationSummary = "can_read_invite_expiration_summary"
         case canReadAuditReaderSummary = "can_read_audit_reader_summary"
         case canReadSharedReadSummary = "can_read_shared_read_summary"
@@ -284,6 +293,12 @@ struct SharedServerTeamPayload: Decodable {
         case memoryPolicyConflictKindCounts = "memory_policy_conflict_kind_counts"
         case memoryPolicyConflictCurrentReasonCounts = "memory_policy_conflict_current_reason_counts"
         case latestMemoryPolicyConflictAt = "latest_memory_policy_conflict_at"
+        case memoryVersionConflictCount = "memory_version_conflict_count"
+        case memoryVersionConflictModeCounts = "memory_version_conflict_mode_counts"
+        case memoryVersionConflictReasonCounts = "memory_version_conflict_reason_counts"
+        case memoryVersionConflictKindCounts = "memory_version_conflict_kind_counts"
+        case memoryVersionConflictCurrentArchivedCounts = "memory_version_conflict_current_archived_counts"
+        case latestMemoryVersionConflictAt = "latest_memory_version_conflict_at"
         case inviteExpirationAuditCount = "invite_expiration_audit_count"
         case inviteExpirationDefaultedCount = "invite_expiration_defaulted_count"
         case inviteExpirationExplicitCount = "invite_expiration_explicit_count"
@@ -343,6 +358,7 @@ struct SharedServerTeamPayload: Decodable {
         case auditIntegrityError = "audit_integrity_error"
         case relationPolicyConflictsError = "relation_policy_conflicts_error"
         case memoryPolicyConflictsError = "memory_policy_conflicts_error"
+        case memoryVersionConflictsError = "memory_version_conflicts_error"
         case inviteExpirationSummaryError = "invite_expiration_summary_error"
         case auditReaderSummaryError = "audit_reader_summary_error"
         case sharedReadSummaryError = "shared_read_summary_error"

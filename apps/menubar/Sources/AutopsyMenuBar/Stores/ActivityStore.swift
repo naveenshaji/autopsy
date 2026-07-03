@@ -82,6 +82,7 @@ final class ActivityStore: ObservableObject {
         "read_repo_policies",
         "check_memory_policy",
         "check_relation_policy",
+        "memory_version_conflict",
         "memory_policy_version_conflict",
         "relation_policy_version_conflict",
         "upsert_memory",
@@ -328,6 +329,8 @@ final class ActivityStore: ObservableObject {
                 ("repo_policy_fingerprints", "policy fingerprints"),
                 ("relation_policy_preflight", "relation checks"),
                 ("relation_policy_write_cas", "stale-safe relation writes"),
+                ("memory_lifecycle_cas", "memory CAS"),
+                ("memory_version_conflict_audits", "memory conflict audits"),
                 ("mutation_audit_receipts", "audit receipts"),
                 ("audit_receipt_verification", "audit verification"),
                 ("audit_event_time_windows", "audit windows"),
@@ -713,6 +716,48 @@ final class ActivityStore: ObservableObject {
             return text.clippedForMenuBar(limit: 110)
         }
         if let error = team.memoryPolicyConflictsError, !error.isEmpty {
+            return error.clippedForMenuBar(limit: 28)
+        }
+        return ""
+    }
+
+    var sharedServerMemoryVersionConflictsText: String {
+        guard let team = currentSharedServer?.team else { return "" }
+        if let count = team.memoryVersionConflictCount {
+            var parts: [String] = []
+            if let modeCounts = team.memoryVersionConflictModeCounts, !modeCounts.isEmpty {
+                parts.append(contentsOf: modeCounts
+                    .sorted { $0.key < $1.key }
+                    .map { "\($0.key): \($0.value)" })
+            }
+            if let reasonCounts = team.memoryVersionConflictReasonCounts, !reasonCounts.isEmpty {
+                let reasons = reasonCounts
+                    .sorted { $0.key < $1.key }
+                    .map { "\($0.key): \($0.value)" }
+                    .joined(separator: ", ")
+                parts.append("reasons \(reasons)")
+            }
+            if let kindCounts = team.memoryVersionConflictKindCounts, !kindCounts.isEmpty {
+                let kinds = kindCounts
+                    .sorted { $0.key < $1.key }
+                    .map { "\($0.key): \($0.value)" }
+                    .joined(separator: ", ")
+                parts.append("kinds \(kinds)")
+            }
+            if let archivedCounts = team.memoryVersionConflictCurrentArchivedCounts, !archivedCounts.isEmpty {
+                let archived = archivedCounts
+                    .sorted { $0.key < $1.key }
+                    .map { "\($0.key): \($0.value)" }
+                    .joined(separator: ", ")
+                parts.append("archived \(archived)")
+            }
+            if let latest = team.latestMemoryVersionConflictAt, !latest.isEmpty {
+                parts.append("latest \(latest)")
+            }
+            let text = parts.isEmpty ? "\(count)" : "\(count) (\(parts.joined(separator: ", ")))"
+            return text.clippedForMenuBar(limit: 110)
+        }
+        if let error = team.memoryVersionConflictsError, !error.isEmpty {
             return error.clippedForMenuBar(limit: 28)
         }
         return ""
@@ -4013,6 +4058,9 @@ final class ActivityStore: ObservableObject {
         if let expectedVersion = auditString(metadata["expected_version_ns"]), !expectedVersion.isEmpty {
             parts.append("expected version \(expectedVersion)")
         }
+        if let currentVersion = auditString(metadata["current_version_ns"]), !currentVersion.isEmpty {
+            parts.append("current version \(currentVersion)")
+        }
         if let mode = auditString(metadata["mode"]) {
             parts.append("mode \(mode)")
         }
@@ -4039,6 +4087,9 @@ final class ActivityStore: ObservableObject {
         }
         if let currentReason = auditString(metadata["current_reason"]) {
             parts.append("current reason \(currentReason)")
+        }
+        if let currentArchived = auditBool(metadata["current_archived"]) {
+            parts.append("current archived \(currentArchived ? "yes" : "no")")
         }
         if let effectiveRole = auditString(metadata["effective_role"]) {
             parts.append("role \(effectiveRole)")
