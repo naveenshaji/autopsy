@@ -121,6 +121,7 @@ private struct SharedSettingsTab: View {
     @State private var teamStatusAuditLastHours = ""
     @State private var teamStatusAuditSince = ""
     @State private var teamStatusAuditUntil = ""
+    @State private var restoreApplyExpectedDigest = ""
     @State private var policyRepoScope = ""
     @State private var policyRelationLabels = ""
     @State private var policyMemoryKinds = ""
@@ -302,6 +303,17 @@ private struct SharedSettingsTab: View {
                         store.planSharedServerExportSnapshotRestoreClipboard()
                     }
                     .disabled(sharedActionDisabled)
+                }
+
+                HStack {
+                    TextField("Expected Restore Plan Digest", text: $restoreApplyExpectedDigest)
+                        .textFieldStyle(.roundedBorder)
+                    Button("Apply Restore") {
+                        store.applySharedServerExportSnapshotRestoreClipboard(
+                            expectedPlanDigest: restoreApplyExpectedDigest
+                        )
+                    }
+                    .disabled(sharedActionDisabled || restoreApplyExpectedDigest.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
 
                 TextField("Team Audit Hours", text: $teamStatusAuditLastHours)

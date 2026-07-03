@@ -4589,6 +4589,14 @@ def shared_server_restore_plan_snapshot_path(*, sample_limit: int = 50) -> str:
     return f"/v1/admin/export-snapshot/restore-plan?{urllib.parse.urlencode(query)}"
 
 
+def shared_server_restore_apply_snapshot_path(*, expected_plan_digest: str, sample_limit: int = 50) -> str:
+    query = {
+        "expected_plan_digest": str(expected_plan_digest or "").strip(),
+        "sample_limit": max(0, min(200, int(sample_limit))),
+    }
+    return f"/v1/admin/export-snapshot/restore-apply?{urllib.parse.urlencode(query)}"
+
+
 def load_shared_server_snapshot_payload(path_value: str | None, *, action: str = "validate-export-snapshot") -> dict[str, Any]:
     source = str(path_value or "").strip()
     if source == "-":
@@ -5461,6 +5469,7 @@ def build_shared_server_team_status_payload(
         "can_use_admin_export_snapshot_validation": False,
         "can_use_admin_export_snapshot_restore_plan": False,
         "can_use_admin_export_snapshot_restore_plan_digest": False,
+        "can_use_admin_export_snapshot_restore_apply": False,
         "can_use_admin_export_snapshot_manifest": False,
         "can_use_token_inventory_fingerprints": False,
         "can_use_idempotency_keys": False,
@@ -5477,6 +5486,7 @@ def build_shared_server_team_status_payload(
     team["can_use_admin_export_snapshot_restore_plan_digest"] = bool(
         server_capabilities.get("admin_export_snapshot_restore_plan_digest")
     )
+    team["can_use_admin_export_snapshot_restore_apply"] = bool(server_capabilities.get("admin_export_snapshot_restore_apply"))
     team["can_use_admin_export_snapshot_manifest"] = bool(server_capabilities.get("admin_export_snapshot_manifest"))
     team["can_use_token_inventory_fingerprints"] = bool(server_capabilities.get("token_inventory_fingerprints"))
     team["idempotency_record_retention_days"] = _safe_int(server_security.get("idempotency_record_retention_days"))
@@ -6592,6 +6602,24 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
             method="POST",
             payload=snapshot_payload,
             timeout=30,
+        )
+        print(json.dumps(payload, indent=2))
+        return
+    if action == "restore-apply-snapshot":
+        snapshot_payload = load_shared_server_snapshot_payload(getattr(args, "snapshot_file", None), action=action)
+        expected_plan_digest = str(getattr(args, "expected_plan_digest", "") or "").strip()
+        if not expected_plan_digest:
+            fail("shared-server restore-apply-snapshot requires --expected-plan-digest", 2)
+        sample_limit = int(getattr(args, "sample_limit", 50) or 50)
+        payload = shared_server_request_or_fail(
+            config,
+            shared_server_restore_apply_snapshot_path(
+                expected_plan_digest=expected_plan_digest,
+                sample_limit=sample_limit,
+            ),
+            method="POST",
+            payload=snapshot_payload,
+            timeout=60,
         )
         print(json.dumps(payload, indent=2))
         return

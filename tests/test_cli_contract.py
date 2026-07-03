@@ -341,6 +341,16 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "--sample-limit",
             "12",
         ])
+        restore_apply_snapshot_args = parser.parse_args([
+            "shared-server",
+            "restore-apply-snapshot",
+            "--snapshot-file",
+            "/tmp/export-snapshot.json",
+            "--expected-plan-digest",
+            "a" * 64,
+            "--sample-limit",
+            "12",
+        ])
         update_policy_args = parser.parse_args([
             "shared-server",
             "update-policy",
@@ -686,6 +696,10 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(restore_plan_snapshot_args.shared_server_action, "restore-plan-snapshot")
         self.assertEqual(restore_plan_snapshot_args.snapshot_file, "/tmp/export-snapshot.json")
         self.assertEqual(restore_plan_snapshot_args.sample_limit, 12)
+        self.assertEqual(restore_apply_snapshot_args.shared_server_action, "restore-apply-snapshot")
+        self.assertEqual(restore_apply_snapshot_args.snapshot_file, "/tmp/export-snapshot.json")
+        self.assertEqual(restore_apply_snapshot_args.expected_plan_digest, "a" * 64)
+        self.assertEqual(restore_apply_snapshot_args.sample_limit, 12)
         self.assertEqual(update_policy_args.shared_server_action, "update-policy")
         self.assertEqual(update_policy_args.allowed_relation_label, ["supports,depends_on"])
         self.assertEqual(update_policy_args.allowed_memory_kind, ["decision,observation"])
@@ -2866,6 +2880,72 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertTrue(payload["restore_readiness"]["safe_to_apply"])
         self.assertEqual(payload["audit"]["action"], "plan_export_snapshot_restore")
 
+    def test_shared_server_restore_apply_snapshot_action_posts_snapshot_file(self):
+        parser = cli.build_parser()
+        snapshot = {
+            "service": "autopsy-server",
+            "schema_version": 1,
+            "redaction": {"mode": "admin_redacted_snapshot"},
+            "counts": {"users": 0, "exported_audit_events": 0},
+            "users": [],
+            "shared_graphs": [],
+            "grants": [],
+            "repo_policies": [],
+            "shared_memories": [],
+            "memory_versions": [],
+            "shared_relations": [],
+            "personal_relations": [],
+            "audit_events": [],
+        }
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        expected_digest = "a" * 64
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
+            json.dump(snapshot, handle)
+            snapshot_path = handle.name
+        self.addCleanup(lambda: Path(snapshot_path).unlink(missing_ok=True))
+        args = parser.parse_args([
+            "shared-server",
+            "restore-apply-snapshot",
+            "--snapshot-file",
+            snapshot_path,
+            "--expected-plan-digest",
+            expected_digest,
+            "--sample-limit",
+            "9",
+        ])
+
+        def fake_request(_config, path, **kwargs):
+            self.assertEqual(
+                path,
+                f"/v1/admin/export-snapshot/restore-apply?expected_plan_digest={expected_digest}&sample_limit=9",
+            )
+            self.assertEqual(kwargs.get("method"), "POST")
+            self.assertEqual(kwargs.get("payload"), snapshot)
+            self.assertEqual(kwargs.get("timeout"), 60)
+            return {
+                "ok": True,
+                "dry_run": False,
+                "mode": "restore_apply",
+                "plan_digest": expected_digest,
+                "applied": {"totals": {"created": 1, "updated": 0, "unchanged": 0, "live_only": 0}},
+                "audit": {"action": "apply_export_snapshot_restore"},
+            }
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        payload = json.loads(stream.getvalue())
+        self.assertTrue(payload["ok"])
+        self.assertFalse(payload["dry_run"])
+        self.assertEqual(payload["mode"], "restore_apply")
+        self.assertEqual(payload["plan_digest"], expected_digest)
+        self.assertEqual(payload["audit"]["action"], "apply_export_snapshot_restore")
+
     def test_shared_server_admin_tokens_action_prints_remote_payload(self):
         parser = cli.build_parser()
         args = parser.parse_args([
@@ -3516,6 +3596,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "admin_export_snapshot_validation": True,
                         "admin_export_snapshot_restore_plan": True,
                         "admin_export_snapshot_restore_plan_digest": True,
+                        "admin_export_snapshot_restore_apply": True,
                         "admin_export_snapshot_manifest": True,
                         "token_inventory_fingerprints": True,
                         "idempotency_keys": True,
@@ -3912,6 +3993,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertTrue(payload["team"]["can_use_admin_export_snapshot_validation"])
         self.assertTrue(payload["team"]["can_use_admin_export_snapshot_restore_plan"])
         self.assertTrue(payload["team"]["can_use_admin_export_snapshot_restore_plan_digest"])
+        self.assertTrue(payload["team"]["can_use_admin_export_snapshot_restore_apply"])
         self.assertTrue(payload["team"]["can_use_admin_export_snapshot_manifest"])
         self.assertTrue(payload["team"]["can_use_token_inventory_fingerprints"])
         self.assertTrue(payload["team"]["can_use_idempotency_keys"])

@@ -332,6 +332,7 @@ final class ActivityStore: ObservableObject {
                 ("admin_export_snapshot_validation", "export validation"),
                 ("admin_export_snapshot_restore_plan", "restore planning"),
                 ("admin_export_snapshot_restore_plan_digest", "restore plan digests"),
+                ("admin_export_snapshot_restore_apply", "guarded restore apply"),
                 ("admin_export_snapshot_manifest", "snapshot manifests"),
                 ("admin_storage_token_hygiene", "token hygiene"),
                 ("admin_token_inventory", "token inventory"),
@@ -1206,6 +1207,12 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    func applySharedServerExportSnapshotRestoreClipboard(expectedPlanDigest: String) {
+        Task {
+            await applySharedExportSnapshotRestoreClipboard(expectedPlanDigest: expectedPlanDigest)
+        }
+    }
+
     func copySharedServerAccessCheck(repoScope: String, mode: String) {
         Task {
             await copySharedAccessCheck(repoScope: repoScope, mode: mode)
@@ -1829,6 +1836,52 @@ final class ActivityStore: ObservableObject {
             NSPasteboard.general.setString(sharedExportSnapshotRestorePlanReport(from: output), forType: .string)
             lastActionMessage = "Restore plan copied"
             clearLastActionMessageAfterDelay(expected: "Restore plan copied")
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
+    }
+
+    private func applySharedExportSnapshotRestoreClipboard(expectedPlanDigest: String) async {
+        guard !isManagingSharedAccess else { return }
+        isManagingSharedAccess = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingSharedAccess = false
+        }
+
+        let digest = expectedPlanDigest.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !digest.isEmpty else {
+            sharedServerError = "Expected restore plan digest is required."
+            return
+        }
+        let snapshotText = NSPasteboard.general.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !snapshotText.isEmpty else {
+            sharedServerError = "Clipboard does not contain export snapshot JSON."
+            return
+        }
+
+        let snapshotURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("autopsy-export-snapshot-\(UUID().uuidString).json")
+        do {
+            try snapshotText.write(to: snapshotURL, atomically: true, encoding: .utf8)
+            defer {
+                try? FileManager.default.removeItem(at: snapshotURL)
+            }
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 75).run([
+                "shared-server",
+                "restore-apply-snapshot",
+                "--snapshot-file",
+                snapshotURL.path,
+                "--expected-plan-digest",
+                digest,
+                "--sample-limit",
+                "25",
+            ])
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(sharedExportSnapshotRestoreApplyReport(from: output), forType: .string)
+            lastActionMessage = "Restore apply copied"
+            clearLastActionMessageAfterDelay(expected: "Restore apply copied")
         } catch {
             sharedServerError = error.localizedDescription
         }
@@ -3632,6 +3685,48 @@ final class ActivityStore: ObservableObject {
                     lines.append("  \(sampleLabel): \(sampleItems.joined(separator: ", ").clippedForMenuBar(limit: 180))")
                 }
             }
+        }
+        if let auditID = auditString(audit["id"]) {
+            lines.append("Audit receipt: \(auditID)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func sharedExportSnapshotRestoreApplyReport(from output: String) -> String {
+        guard let payload = jsonObject(from: output) else {
+            return output.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let applied = payload["applied"] as? [String: Any] ?? [:]
+        let appliedTotals = applied["totals"] as? [String: Any] ?? [:]
+        let plan = payload["plan"] as? [String: Any] ?? [:]
+        let planTotals = plan["totals"] as? [String: Any] ?? [:]
+        let audit = payload["audit"] as? [String: Any] ?? [:]
+        let status = auditBool(payload["ok"]) == true ? "applied" : "blocked"
+        var lines = [
+            "Shared Export Snapshot Restore Apply",
+            "Status: \(status)",
+            "Applied creates: \(auditInt(appliedTotals["created"]) ?? 0)",
+            "Applied updates: \(auditInt(appliedTotals["updated"]) ?? 0)",
+            "Applied unchanged: \(auditInt(appliedTotals["unchanged"]) ?? 0)",
+            "Live only: \(auditInt(appliedTotals["live_only"]) ?? 0)",
+        ]
+        if !planTotals.isEmpty {
+            lines += [
+                "Plan creates: \(auditInt(planTotals["would_create"]) ?? 0)",
+                "Plan updates: \(auditInt(planTotals["would_update"]) ?? 0)",
+                "Plan unchanged: \(auditInt(planTotals["unchanged"]) ?? 0)",
+                "Plan invalid identities: \(auditInt(planTotals["invalid_identities"]) ?? 0)",
+            ]
+        }
+        if let planDigest = auditString(payload["plan_digest"]), !planDigest.isEmpty {
+            lines.append("Plan digest: \(planDigest.clippedForMenuBar(limit: 80))")
+        }
+        if let algorithm = auditString(payload["plan_digest_algorithm"]), !algorithm.isEmpty {
+            lines.append("Digest algorithm: \(algorithm)")
+        }
+        if let canonicalization = auditString(payload["plan_digest_canonicalization"]), !canonicalization.isEmpty {
+            lines.append("Digest canonicalization: \(canonicalization.clippedForMenuBar(limit: 80))")
         }
         if let auditID = auditString(audit["id"]) {
             lines.append("Audit receipt: \(auditID)")
