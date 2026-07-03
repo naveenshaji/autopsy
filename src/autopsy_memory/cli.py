@@ -5193,6 +5193,44 @@ def summarize_shared_server_memory_version_conflicts(items: list[dict[str, Any]]
     }
 
 
+def summarize_shared_server_idempotency_replays(items: list[dict[str, Any]]) -> dict[str, Any]:
+    mode_counts: dict[str, int] = {}
+    latest_created_at = ""
+    for item in items:
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        mode = str(metadata.get("mode") or "unknown").strip() or "unknown"
+        mode_counts[mode] = mode_counts.get(mode, 0) + 1
+        created_at = str(item.get("created_at") or "").strip()
+        if created_at and (not latest_created_at or created_at > latest_created_at):
+            latest_created_at = created_at
+    return {
+        "idempotency_replay_count": len(items),
+        "idempotency_replay_mode_counts": dict(sorted(mode_counts.items())),
+        "latest_idempotency_replay_at": latest_created_at,
+    }
+
+
+def summarize_shared_server_idempotency_conflicts(items: list[dict[str, Any]]) -> dict[str, Any]:
+    mode_counts: dict[str, int] = {}
+    reason_counts: dict[str, int] = {}
+    latest_created_at = ""
+    for item in items:
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        mode = str(metadata.get("mode") or "unknown").strip() or "unknown"
+        reason = str(metadata.get("reason") or "unknown").strip() or "unknown"
+        mode_counts[mode] = mode_counts.get(mode, 0) + 1
+        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        created_at = str(item.get("created_at") or "").strip()
+        if created_at and (not latest_created_at or created_at > latest_created_at):
+            latest_created_at = created_at
+    return {
+        "idempotency_conflict_count": len(items),
+        "idempotency_conflict_mode_counts": dict(sorted(mode_counts.items())),
+        "idempotency_conflict_reason_counts": dict(sorted(reason_counts.items())),
+        "latest_idempotency_conflict_at": latest_created_at,
+    }
+
+
 def _safe_int(value: Any) -> int:
     try:
         return int(value or 0)
@@ -5248,6 +5286,25 @@ def summarize_shared_server_memory_version_conflict_summary(summary: dict[str, A
         "memory_version_conflict_kind_counts": _int_count_map(metadata_counts.get("kind")),
         "memory_version_conflict_current_archived_counts": _int_count_map(metadata_counts.get("current_archived")),
         "latest_memory_version_conflict_at": str(summary.get("latest_created_at") or ""),
+    }
+
+
+def summarize_shared_server_idempotency_replay_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    metadata_counts = summary.get("metadata_counts") if isinstance(summary.get("metadata_counts"), dict) else {}
+    return {
+        "idempotency_replay_count": _safe_int(summary.get("event_count")),
+        "idempotency_replay_mode_counts": _int_count_map(metadata_counts.get("mode")),
+        "latest_idempotency_replay_at": str(summary.get("latest_created_at") or ""),
+    }
+
+
+def summarize_shared_server_idempotency_conflict_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    metadata_counts = summary.get("metadata_counts") if isinstance(summary.get("metadata_counts"), dict) else {}
+    return {
+        "idempotency_conflict_count": _safe_int(summary.get("event_count")),
+        "idempotency_conflict_mode_counts": _int_count_map(metadata_counts.get("mode")),
+        "idempotency_conflict_reason_counts": _int_count_map(metadata_counts.get("reason")),
+        "latest_idempotency_conflict_at": str(summary.get("latest_created_at") or ""),
     }
 
 
@@ -5344,6 +5401,8 @@ def build_shared_server_team_status_payload(
         "can_read_relation_policy_conflicts": False,
         "can_read_memory_policy_conflicts": False,
         "can_read_memory_version_conflicts": False,
+        "can_read_idempotency_replays": False,
+        "can_read_idempotency_conflicts": False,
         "can_read_invite_expiration_summary": False,
         "can_read_audit_reader_summary": False,
         "can_read_shared_read_summary": False,
@@ -5460,6 +5519,8 @@ def build_shared_server_team_status_payload(
     read_raw_memory_conflict_audits = False
     read_raw_memory_version_conflict_audits = False
     read_raw_repo_policy_conflict_audits = False
+    read_raw_idempotency_replay_audits = False
+    read_raw_idempotency_conflict_audits = False
     try:
         repo_conflict_summary_payload = shared_server_request(
             config,
@@ -5560,6 +5621,56 @@ def build_shared_server_team_status_payload(
         team["can_read_memory_version_conflicts"] = True
         team["memory_version_conflicts_source"] = "summary"
         team.update(summarize_shared_server_memory_version_conflict_summary(memory_version_conflict_summary_payload))
+    try:
+        idempotency_replay_summary_payload = shared_server_request(
+            config,
+            shared_server_audit_summary_path(
+                graph_slug,
+                repo or "*",
+                limit=50,
+                actions=["idempotency_replay"],
+                metadata_fields=["mode"],
+                since=audit_since,
+                until=audit_until,
+            ),
+            timeout=10,
+        )
+    except urllib.error.HTTPError as exc:
+        if exc.code in {404, 405}:
+            read_raw_idempotency_replay_audits = True
+        else:
+            team["idempotency_replays_error"] = shared_server_http_error_message(exc)
+    except Exception as exc:
+        team["idempotency_replays_error"] = str(exc)
+    else:
+        team["can_read_idempotency_replays"] = True
+        team["idempotency_replays_source"] = "summary"
+        team.update(summarize_shared_server_idempotency_replay_summary(idempotency_replay_summary_payload))
+    try:
+        idempotency_conflict_summary_payload = shared_server_request(
+            config,
+            shared_server_audit_summary_path(
+                graph_slug,
+                repo or "*",
+                limit=50,
+                actions=["idempotency_key_conflict"],
+                metadata_fields=["mode", "reason"],
+                since=audit_since,
+                until=audit_until,
+            ),
+            timeout=10,
+        )
+    except urllib.error.HTTPError as exc:
+        if exc.code in {404, 405}:
+            read_raw_idempotency_conflict_audits = True
+        else:
+            team["idempotency_conflicts_error"] = shared_server_http_error_message(exc)
+    except Exception as exc:
+        team["idempotency_conflicts_error"] = str(exc)
+    else:
+        team["can_read_idempotency_conflicts"] = True
+        team["idempotency_conflicts_source"] = "summary"
+        team.update(summarize_shared_server_idempotency_conflict_summary(idempotency_conflict_summary_payload))
     try:
         invite_summary_payload = shared_server_request(
             config,
@@ -5737,6 +5848,52 @@ def build_shared_server_team_status_payload(
             team["can_read_memory_version_conflicts"] = True
             team["memory_version_conflicts_source"] = "raw_fallback"
             team.update(summarize_shared_server_memory_version_conflicts(conflicts))
+    if read_raw_idempotency_replay_audits:
+        try:
+            replay_payload = shared_server_request(
+                config,
+                shared_server_audit_path(
+                    graph_slug,
+                    repo or "*",
+                    limit=50,
+                    actions=["idempotency_replay"],
+                    since=audit_since,
+                    until=audit_until,
+                ),
+                timeout=10,
+            )
+        except urllib.error.HTTPError as exc:
+            team["idempotency_replays_error"] = shared_server_http_error_message(exc)
+        except Exception as exc:
+            team["idempotency_replays_error"] = str(exc)
+        else:
+            replays = replay_payload.get("items") if isinstance(replay_payload.get("items"), list) else []
+            team["can_read_idempotency_replays"] = True
+            team["idempotency_replays_source"] = "raw_fallback"
+            team.update(summarize_shared_server_idempotency_replays(replays))
+    if read_raw_idempotency_conflict_audits:
+        try:
+            conflict_payload = shared_server_request(
+                config,
+                shared_server_audit_path(
+                    graph_slug,
+                    repo or "*",
+                    limit=50,
+                    actions=["idempotency_key_conflict"],
+                    since=audit_since,
+                    until=audit_until,
+                ),
+                timeout=10,
+            )
+        except urllib.error.HTTPError as exc:
+            team["idempotency_conflicts_error"] = shared_server_http_error_message(exc)
+        except Exception as exc:
+            team["idempotency_conflicts_error"] = str(exc)
+        else:
+            conflicts = conflict_payload.get("items") if isinstance(conflict_payload.get("items"), list) else []
+            team["can_read_idempotency_conflicts"] = True
+            team["idempotency_conflicts_source"] = "raw_fallback"
+            team.update(summarize_shared_server_idempotency_conflicts(conflicts))
     return payload
 
 

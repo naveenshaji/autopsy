@@ -3508,6 +3508,45 @@ class AutopsyCLIContractTests(unittest.TestCase):
                 }
             if path == (
                 "/v1/audit-events/summary?graph_slug=autopsy&limit=50&repo=repo-a"
+                "&action=idempotency_replay"
+                "&metadata_field=mode"
+            ):
+                return {
+                    "event_count": 3,
+                    "metadata_counts": {
+                        "mode": {"restore_memory": 1, "upsert_memory": 2},
+                    },
+                    "latest_created_at": "2026-07-02T09:45:00Z",
+                    "scope": {
+                        "graph_slug": "autopsy",
+                        "repo": "repo-a",
+                        "actions": ["idempotency_replay"],
+                        "metadata_fields": ["mode"],
+                        "filtered_window": True,
+                    },
+                }
+            if path == (
+                "/v1/audit-events/summary?graph_slug=autopsy&limit=50&repo=repo-a"
+                "&action=idempotency_key_conflict"
+                "&metadata_field=mode&metadata_field=reason"
+            ):
+                return {
+                    "event_count": 1,
+                    "metadata_counts": {
+                        "mode": {"upsert_memory": 1},
+                        "reason": {"request_hash_mismatch": 1},
+                    },
+                    "latest_created_at": "2026-07-02T09:50:00Z",
+                    "scope": {
+                        "graph_slug": "autopsy",
+                        "repo": "repo-a",
+                        "actions": ["idempotency_key_conflict"],
+                        "metadata_fields": ["mode", "reason"],
+                        "filtered_window": True,
+                    },
+                }
+            if path == (
+                "/v1/audit-events/summary?graph_slug=autopsy&limit=50&repo=repo-a"
                 "&action=invite_user&metadata_field=expires_at_defaulted"
             ):
                 return {
@@ -3708,6 +3747,17 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["team"]["memory_version_conflict_kind_counts"], {"decision": 2, "observation": 1, "unknown": 1})
         self.assertEqual(payload["team"]["memory_version_conflict_current_archived_counts"], {"false": 3, "true": 1})
         self.assertEqual(payload["team"]["latest_memory_version_conflict_at"], "2026-07-02T09:30:00Z")
+        self.assertTrue(payload["team"]["can_read_idempotency_replays"])
+        self.assertEqual(payload["team"]["idempotency_replays_source"], "summary")
+        self.assertEqual(payload["team"]["idempotency_replay_count"], 3)
+        self.assertEqual(payload["team"]["idempotency_replay_mode_counts"], {"restore_memory": 1, "upsert_memory": 2})
+        self.assertEqual(payload["team"]["latest_idempotency_replay_at"], "2026-07-02T09:45:00Z")
+        self.assertTrue(payload["team"]["can_read_idempotency_conflicts"])
+        self.assertEqual(payload["team"]["idempotency_conflicts_source"], "summary")
+        self.assertEqual(payload["team"]["idempotency_conflict_count"], 1)
+        self.assertEqual(payload["team"]["idempotency_conflict_mode_counts"], {"upsert_memory": 1})
+        self.assertEqual(payload["team"]["idempotency_conflict_reason_counts"], {"request_hash_mismatch": 1})
+        self.assertEqual(payload["team"]["latest_idempotency_conflict_at"], "2026-07-02T09:50:00Z")
         self.assertTrue(payload["team"]["can_read_invite_expiration_summary"])
         self.assertEqual(payload["team"]["invite_expiration_summary_source"], "summary")
         self.assertEqual(payload["team"]["invite_expiration_audit_count"], 5)

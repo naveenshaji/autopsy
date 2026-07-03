@@ -102,6 +102,8 @@ struct SharedServerTeamPayload: Decodable {
     var canReadRelationPolicyConflicts: Bool?
     var canReadMemoryPolicyConflicts: Bool?
     var canReadMemoryVersionConflicts: Bool?
+    var canReadIdempotencyReplays: Bool?
+    var canReadIdempotencyConflicts: Bool?
     var canReadInviteExpirationSummary: Bool?
     var canReadAuditReaderSummary: Bool?
     var canReadSharedReadSummary: Bool?
@@ -167,6 +169,13 @@ struct SharedServerTeamPayload: Decodable {
     var memoryVersionConflictKindCounts: [String: Int]?
     var memoryVersionConflictCurrentArchivedCounts: [String: Int]?
     var latestMemoryVersionConflictAt: String?
+    var idempotencyReplayCount: Int?
+    var idempotencyReplayModeCounts: [String: Int]?
+    var latestIdempotencyReplayAt: String?
+    var idempotencyConflictCount: Int?
+    var idempotencyConflictModeCounts: [String: Int]?
+    var idempotencyConflictReasonCounts: [String: Int]?
+    var latestIdempotencyConflictAt: String?
     var inviteExpirationAuditCount: Int?
     var inviteExpirationDefaultedCount: Int?
     var inviteExpirationExplicitCount: Int?
@@ -228,6 +237,8 @@ struct SharedServerTeamPayload: Decodable {
     var relationPolicyConflictsError: String?
     var memoryPolicyConflictsError: String?
     var memoryVersionConflictsError: String?
+    var idempotencyReplaysError: String?
+    var idempotencyConflictsError: String?
     var inviteExpirationSummaryError: String?
     var auditReaderSummaryError: String?
     var sharedReadSummaryError: String?
@@ -247,6 +258,8 @@ struct SharedServerTeamPayload: Decodable {
         case canReadRelationPolicyConflicts = "can_read_relation_policy_conflicts"
         case canReadMemoryPolicyConflicts = "can_read_memory_policy_conflicts"
         case canReadMemoryVersionConflicts = "can_read_memory_version_conflicts"
+        case canReadIdempotencyReplays = "can_read_idempotency_replays"
+        case canReadIdempotencyConflicts = "can_read_idempotency_conflicts"
         case canReadInviteExpirationSummary = "can_read_invite_expiration_summary"
         case canReadAuditReaderSummary = "can_read_audit_reader_summary"
         case canReadSharedReadSummary = "can_read_shared_read_summary"
@@ -312,6 +325,13 @@ struct SharedServerTeamPayload: Decodable {
         case memoryVersionConflictKindCounts = "memory_version_conflict_kind_counts"
         case memoryVersionConflictCurrentArchivedCounts = "memory_version_conflict_current_archived_counts"
         case latestMemoryVersionConflictAt = "latest_memory_version_conflict_at"
+        case idempotencyReplayCount = "idempotency_replay_count"
+        case idempotencyReplayModeCounts = "idempotency_replay_mode_counts"
+        case latestIdempotencyReplayAt = "latest_idempotency_replay_at"
+        case idempotencyConflictCount = "idempotency_conflict_count"
+        case idempotencyConflictModeCounts = "idempotency_conflict_mode_counts"
+        case idempotencyConflictReasonCounts = "idempotency_conflict_reason_counts"
+        case latestIdempotencyConflictAt = "latest_idempotency_conflict_at"
         case inviteExpirationAuditCount = "invite_expiration_audit_count"
         case inviteExpirationDefaultedCount = "invite_expiration_defaulted_count"
         case inviteExpirationExplicitCount = "invite_expiration_explicit_count"
@@ -373,6 +393,8 @@ struct SharedServerTeamPayload: Decodable {
         case relationPolicyConflictsError = "relation_policy_conflicts_error"
         case memoryPolicyConflictsError = "memory_policy_conflicts_error"
         case memoryVersionConflictsError = "memory_version_conflicts_error"
+        case idempotencyReplaysError = "idempotency_replays_error"
+        case idempotencyConflictsError = "idempotency_conflicts_error"
         case inviteExpirationSummaryError = "invite_expiration_summary_error"
         case auditReaderSummaryError = "audit_reader_summary_error"
         case sharedReadSummaryError = "shared_read_summary_error"

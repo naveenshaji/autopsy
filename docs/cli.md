@@ -154,13 +154,15 @@ connectivity and supported server features. `shared-server team-status`
 summarizes active and disabled users, repo grants, scoped-token counts, and a
 compact audit integrity report for menu bar
 clients without echoing token material or raw audit events. It also summarizes
-repo-policy, relation-policy, memory-policy, and shared-memory version conflict counts with
-compact reason/mode breakdowns from audit summaries when available. Add `--last-hours`, `--since`, or
+repo-policy, relation-policy, memory-policy, shared-memory version conflict,
+idempotency replay, and idempotency-key conflict counts with compact
+reason/mode breakdowns from audit summaries when available. Add `--last-hours`, `--since`, or
 `--until` to scope those audit-derived team-status summaries to a real time
 window. Scoped-token counts
 include active, never-used, non-expiring, stale, expired, revoked, and disabled
 token totals. Team-status also reports when the server supports idempotency keys
-for retry-safe shared-memory mutations. Graph owners
+for retry-safe shared-memory mutations and whether retries are replaying cleanly
+or conflicting because a key was reused for a different request. Graph owners
 can use `shared-server invite --email <email> --role reader|writer|owner
 --repo-scope <repo>` to create or reuse a user, grant repo access, and issue a
 one-time token in one audited operation. Successful shared mutation responses

@@ -253,6 +253,12 @@ private struct SharedSettingsTab: View {
                 if !store.sharedServerMemoryVersionConflictsText.isEmpty {
                     LabeledContent("Memory Version Conflicts", value: store.sharedServerMemoryVersionConflictsText)
                 }
+                if !store.sharedServerIdempotencyReplaysText.isEmpty {
+                    LabeledContent("Idempotency Replays", value: store.sharedServerIdempotencyReplaysText)
+                }
+                if !store.sharedServerIdempotencyConflictsText.isEmpty {
+                    LabeledContent("Idempotency Conflicts", value: store.sharedServerIdempotencyConflictsText)
+                }
                 HStack {
                     Button("Use Owner Config") {
                         store.configureSharedServerFromOwnerConfig()

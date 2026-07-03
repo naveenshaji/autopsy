@@ -86,6 +86,8 @@ final class ActivityStore: ObservableObject {
         "memory_version_conflict",
         "memory_policy_version_conflict",
         "relation_policy_version_conflict",
+        "idempotency_replay",
+        "idempotency_key_conflict",
         "upsert_memory",
         "archive_memory",
         "restore_memory",
@@ -789,6 +791,55 @@ final class ActivityStore: ObservableObject {
             return text.clippedForMenuBar(limit: 110)
         }
         if let error = team.memoryVersionConflictsError, !error.isEmpty {
+            return error.clippedForMenuBar(limit: 28)
+        }
+        return ""
+    }
+
+    var sharedServerIdempotencyReplaysText: String {
+        guard let team = currentSharedServer?.team else { return "" }
+        if let count = team.idempotencyReplayCount {
+            var parts: [String] = []
+            if let modeCounts = team.idempotencyReplayModeCounts, !modeCounts.isEmpty {
+                parts.append(contentsOf: modeCounts
+                    .sorted { $0.key < $1.key }
+                    .map { "\($0.key): \($0.value)" })
+            }
+            if let latest = team.latestIdempotencyReplayAt, !latest.isEmpty {
+                parts.append("latest \(compactSharedServerDate(latest))")
+            }
+            let text = parts.isEmpty ? "\(count)" : "\(count) (\(parts.joined(separator: ", ")))"
+            return text.clippedForMenuBar(limit: 100)
+        }
+        if let error = team.idempotencyReplaysError, !error.isEmpty {
+            return error.clippedForMenuBar(limit: 28)
+        }
+        return ""
+    }
+
+    var sharedServerIdempotencyConflictsText: String {
+        guard let team = currentSharedServer?.team else { return "" }
+        if let count = team.idempotencyConflictCount {
+            var parts: [String] = []
+            if let modeCounts = team.idempotencyConflictModeCounts, !modeCounts.isEmpty {
+                parts.append(contentsOf: modeCounts
+                    .sorted { $0.key < $1.key }
+                    .map { "\($0.key): \($0.value)" })
+            }
+            if let reasonCounts = team.idempotencyConflictReasonCounts, !reasonCounts.isEmpty {
+                let reasons = reasonCounts
+                    .sorted { $0.key < $1.key }
+                    .map { "\($0.key): \($0.value)" }
+                    .joined(separator: ", ")
+                parts.append("reasons \(reasons)")
+            }
+            if let latest = team.latestIdempotencyConflictAt, !latest.isEmpty {
+                parts.append("latest \(compactSharedServerDate(latest))")
+            }
+            let text = parts.isEmpty ? "\(count)" : "\(count) (\(parts.joined(separator: ", ")))"
+            return text.clippedForMenuBar(limit: 110)
+        }
+        if let error = team.idempotencyConflictsError, !error.isEmpty {
             return error.clippedForMenuBar(limit: 28)
         }
         return ""
