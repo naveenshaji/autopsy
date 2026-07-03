@@ -126,6 +126,10 @@ Run checks:
   toggle from the same Shared settings tab. Policy copy, inventory, access-check,
   and access-change reports include short policy fingerprint prefixes when the
   configured server supports them.
+  Shared-memory controls include a memory-kind field, direct memory policy
+  checks that copy a dry-run report, and checked restore-version writes that
+  send the policy fingerprint/version returned by the server before mutating
+  shared memory.
   Security-audit summaries request global `auth_failure`,
   `authorization_denied`, `disable_user`, and `enable_user` events, copy auth
   reason counts, denial reason and mode counts, throttle counts, keyed client

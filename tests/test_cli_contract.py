@@ -336,7 +336,27 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "--created-at",
             "2026-07-02T00:00:00Z",
         ])
-        publish_args = parser.parse_args(["shared-server", "publish", "graph-note:1", "--repo-scope", "repo-a", "--expected-version-ns", "123"])
+        publish_args = parser.parse_args([
+            "shared-server",
+            "publish",
+            "graph-note:1",
+            "--repo-scope",
+            "repo-a",
+            "--expected-version-ns",
+            "123",
+            "--expected-policy-fingerprint",
+            "sha256:pub",
+            "--expected-policy-version-ns",
+            "321",
+        ])
+        checked_publish_args = parser.parse_args([
+            "shared-server",
+            "publish",
+            "graph-note:1",
+            "--repo-scope",
+            "repo-a",
+            "--check-policy",
+        ])
         list_args = parser.parse_args(["shared-server", "list", "--repo-scope", "repo-a", "--include-archived", "--limit", "10"])
         history_args = parser.parse_args(["shared-server", "memory-history", "shared:1", "--repo-scope", "repo-a", "--limit", "10"])
         context_args = parser.parse_args([
@@ -365,8 +385,32 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "ver_1",
             "--expected-version-ns",
             "456",
+            "--expected-policy-fingerprint",
+            "sha256:restore",
+            "--expected-policy-version-ns",
+            "654",
             "--reason",
             "bad publish",
+        ])
+        checked_restore_version_args = parser.parse_args([
+            "shared-server",
+            "restore-version",
+            "shared:1",
+            "--repo-scope",
+            "repo-a",
+            "--version-id",
+            "ver_1",
+            "--kind",
+            "observation",
+            "--check-policy",
+        ])
+        check_memory_args = parser.parse_args([
+            "shared-server",
+            "check-memory",
+            "--repo-scope",
+            "repo-a",
+            "--kind",
+            "decision",
         ])
         check_relation_args = parser.parse_args([
             "shared-server",
@@ -560,6 +604,9 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(publish_args.shared_server_action, "publish")
         self.assertEqual(publish_args.stable_key, "graph-note:1")
         self.assertEqual(publish_args.expected_version_ns, 123)
+        self.assertEqual(publish_args.expected_policy_fingerprint, "sha256:pub")
+        self.assertEqual(publish_args.expected_policy_version_ns, 321)
+        self.assertTrue(checked_publish_args.check_policy)
         self.assertEqual(list_args.shared_server_action, "list")
         self.assertTrue(list_args.include_archived)
         self.assertEqual(list_args.limit, 10)
@@ -581,7 +628,13 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(restore_version_args.stable_key, "shared:1")
         self.assertEqual(restore_version_args.version_id, "ver_1")
         self.assertEqual(restore_version_args.expected_version_ns, 456)
+        self.assertEqual(restore_version_args.expected_policy_fingerprint, "sha256:restore")
+        self.assertEqual(restore_version_args.expected_policy_version_ns, 654)
         self.assertEqual(restore_version_args.reason, "bad publish")
+        self.assertEqual(checked_restore_version_args.kind, "observation")
+        self.assertTrue(checked_restore_version_args.check_policy)
+        self.assertEqual(check_memory_args.shared_server_action, "check-memory")
+        self.assertEqual(check_memory_args.kind, "decision")
         self.assertEqual(check_relation_args.shared_server_action, "check-relation")
         self.assertEqual(check_relation_args.relation, "supports")
         self.assertEqual(check_relation_args.relation_scope, "personal")
@@ -765,6 +818,10 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(
             cli.shared_server_memory_restore_version_path("autopsy"),
             "/v1/shared-graphs/autopsy/memories/restore-version",
+        )
+        self.assertEqual(
+            cli.shared_server_memory_policy_check_path("autopsy"),
+            "/v1/shared-graphs/autopsy/memories/check",
         )
         self.assertEqual(
             cli.shared_server_context_path(
@@ -1361,6 +1418,137 @@ class AutopsyCLIContractTests(unittest.TestCase):
             ],
         )
 
+    def test_shared_server_publish_check_policy_preflights_and_posts_expected_policy(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "shared-server",
+            "publish",
+            "graph-note:one",
+            "--repo-scope",
+            "repo-a",
+            "--check-policy",
+        ])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        calls: list[tuple[str, str, dict[str, object] | None]] = []
+        item = {
+            "entity_id": 42,
+            "stable_key": "graph-note:one",
+            "kind": "decision",
+            "title": "One",
+            "content": "Shared decision.",
+            "source_kind": "graph_note",
+            "updated_at": "2026-07-01T00:00:00Z",
+            "metadata": {},
+        }
+
+        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
+            calls.append((path, method, payload))
+            if path.endswith("/memories/check"):
+                return {
+                    "allowed": True,
+                    "reason": "allowed",
+                    "kind": "decision",
+                    "policy_fingerprint": "sha256:checked-memory",
+                    "policy_version_ns": 42,
+                    "dry_run": True,
+                }
+            return {"stable_key": "graph-note:one", "kind": "decision", "audit": {"id": "aud_1"}}
+
+        stream = io.StringIO()
+        tool = types.SimpleNamespace(workspace_payload=lambda workspace: {"title": "Workspace"})
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            mock.patch.object(cli, "open_workspace_graph", return_value=(tool, {"root_path": "/repo"}, {}, object())),
+            mock.patch.object(cli, "lookup_node_by_stable_key", return_value={"stable_key": "graph-note:one"}),
+            mock.patch.object(cli, "fetch_item", return_value=item),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        payload = json.loads(stream.getvalue())
+        self.assertEqual(payload["published"]["stable_key"], "graph-note:one")
+        self.assertEqual(payload["policy_check"]["policy_version_ns"], 42)
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "/v1/shared-graphs/autopsy/memories/check",
+                    "POST",
+                    {"repo": "repo-a", "kind": "decision"},
+                ),
+                (
+                    "/v1/shared-graphs/autopsy/memories",
+                    "PUT",
+                    {
+                        "stable_key": "graph-note:one",
+                        "kind": "decision",
+                        "title": "One",
+                        "content": "Shared decision.",
+                        "repo": "repo-a",
+                        "metadata": {
+                            "autopsy_local_entity_id": 42,
+                            "autopsy_source_kind": "graph_note",
+                            "autopsy_updated_at": "2026-07-01T00:00:00Z",
+                        },
+                        "expected_policy_fingerprint": "sha256:checked-memory",
+                        "expected_policy_version_ns": 42,
+                    },
+                ),
+            ],
+        )
+
+    def test_shared_server_publish_check_policy_denial_fails_before_write(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "shared-server",
+            "publish",
+            "graph-note:one",
+            "--repo-scope",
+            "repo-a",
+            "--check-policy",
+        ])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        calls: list[tuple[str, str, dict[str, object] | None]] = []
+        item = {
+            "entity_id": 42,
+            "stable_key": "graph-note:one",
+            "kind": "decision",
+            "title": "One",
+            "content": "Shared decision.",
+            "source_kind": "graph_note",
+            "updated_at": "2026-07-01T00:00:00Z",
+            "metadata": {},
+        }
+
+        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
+            calls.append((path, method, payload))
+            return {
+                "allowed": False,
+                "reason": "memory_kind_not_allowed",
+                "kind": "decision",
+                "policy_fingerprint": "sha256:checked-memory",
+                "policy_version_ns": 42,
+            }
+
+        err = io.StringIO()
+        tool = types.SimpleNamespace(workspace_payload=lambda workspace: {"title": "Workspace"})
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            mock.patch.object(cli, "open_workspace_graph", return_value=(tool, {"root_path": "/repo"}, {}, object())),
+            mock.patch.object(cli, "lookup_node_by_stable_key", return_value={"stable_key": "graph-note:one"}),
+            mock.patch.object(cli, "fetch_item", return_value=item),
+            contextlib.redirect_stderr(err),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            args.func(args)
+
+        self.assertEqual(raised.exception.code, 1)
+        self.assertIn("reason=memory_kind_not_allowed", err.getvalue())
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], "/v1/shared-graphs/autopsy/memories/check")
+
     def test_shared_server_memory_history_fetches_versions(self):
         parser = cli.build_parser()
         args = parser.parse_args(["shared-server", "memory-history", "shared:1", "--repo-scope", "repo-a", "--limit", "10"])
@@ -1403,6 +1591,10 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "ver_1",
             "--expected-version-ns",
             "456",
+            "--expected-policy-fingerprint",
+            "sha256:restore",
+            "--expected-policy-version-ns",
+            "654",
             "--reason",
             "bad publish",
         ])
@@ -1434,7 +1626,144 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "reason": "bad publish",
                         "version_id": "ver_1",
                         "expected_version_ns": 456,
+                        "expected_policy_fingerprint": "sha256:restore",
+                        "expected_policy_version_ns": 654,
                     },
+                )
+            ],
+        )
+
+    def test_shared_server_restore_version_check_policy_preflights_and_posts_expected_policy(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "shared-server",
+            "restore-version",
+            "shared:1",
+            "--repo-scope",
+            "repo-a",
+            "--version-id",
+            "ver_1",
+            "--kind",
+            "observation",
+            "--check-policy",
+        ])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
+            calls.append((path, method, payload))
+            if path.endswith("/memories/check"):
+                return {
+                    "allowed": True,
+                    "reason": "allowed",
+                    "kind": "observation",
+                    "policy_fingerprint": "sha256:checked-memory",
+                    "policy_version_ns": 42,
+                    "dry_run": True,
+                }
+            return {"stable_key": "shared:1", "title": "Restored", "audit": {"id": "aud_1"}}
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        payload = json.loads(stream.getvalue())
+        self.assertEqual(payload["restored"]["title"], "Restored")
+        self.assertEqual(payload["policy_check"]["policy_version_ns"], 42)
+        self.assertEqual(payload["audit"]["id"], "aud_1")
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "/v1/shared-graphs/autopsy/memories/check",
+                    "POST",
+                    {"repo": "repo-a", "kind": "observation"},
+                ),
+                (
+                    "/v1/shared-graphs/autopsy/memories/restore-version",
+                    "POST",
+                    {
+                        "stable_key": "shared:1",
+                        "repo": "repo-a",
+                        "reason": "",
+                        "version_id": "ver_1",
+                        "expected_policy_fingerprint": "sha256:checked-memory",
+                        "expected_policy_version_ns": 42,
+                    },
+                ),
+            ],
+        )
+
+    def test_shared_server_restore_version_check_policy_requires_kind(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "shared-server",
+            "restore-version",
+            "shared:1",
+            "--repo-scope",
+            "repo-a",
+            "--version-id",
+            "ver_1",
+            "--check-policy",
+        ])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+
+        err = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            contextlib.redirect_stderr(err),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            args.func(args)
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("--kind", err.getvalue())
+
+    def test_shared_server_check_memory_posts_policy_preflight_payload(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "shared-server",
+            "check-memory",
+            "--repo-scope",
+            "repo-a",
+            "--kind",
+            "decision",
+        ])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
+            calls.append((path, method, payload))
+            return {
+                "allowed": True,
+                "reason": "allowed",
+                "kind": "decision",
+                "policy_fingerprint": "sha256:abc",
+                "dry_run": True,
+            }
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        payload = json.loads(stream.getvalue())
+        self.assertTrue(payload["dry_run"])
+        self.assertEqual(payload["policy_fingerprint"], "sha256:abc")
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "/v1/shared-graphs/autopsy/memories/check",
+                    "POST",
+                    {"repo": "repo-a", "kind": "decision"},
                 )
             ],
         )
@@ -2699,6 +3028,34 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(
             cli.shared_server_http_error_message(error),
             "HTTP 409: relation policy version conflict; graph=autopsy; repo=repo-a; expected_policy_version=10; current_policy_version=11; relation=supports; relation_scope=shared; current_reason=relation_label_not_allowed",
+        )
+
+    def test_shared_server_http_error_formats_memory_policy_version_conflict(self):
+        error = urllib.error.HTTPError(
+            "/v1/shared-graphs/autopsy/memories",
+            409,
+            "Conflict",
+            {},
+            io.BytesIO(
+                json.dumps(
+                    {
+                        "detail": {
+                            "error": "memory policy version conflict",
+                            "graph_slug": "autopsy",
+                            "repo": "repo-a",
+                            "kind": "decision",
+                            "expected_policy_version_ns": 10,
+                            "current_policy_version_ns": 11,
+                            "current": {"policy_version_ns": 11, "reason": "memory_kind_not_allowed"},
+                        }
+                    }
+                ).encode()
+            ),
+        )
+
+        self.assertEqual(
+            cli.shared_server_http_error_message(error),
+            "HTTP 409: memory policy version conflict; graph=autopsy; repo=repo-a; expected_policy_version=10; current_policy_version=11; kind=decision; current_reason=memory_kind_not_allowed",
         )
 
     def test_shared_server_publish_payload_carries_local_memory_metadata(self):

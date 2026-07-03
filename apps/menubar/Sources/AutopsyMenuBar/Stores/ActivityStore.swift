@@ -80,7 +80,9 @@ final class ActivityStore: ObservableObject {
         "read_access_check",
         "read_repo_policy",
         "read_repo_policies",
+        "check_memory_policy",
         "check_relation_policy",
+        "memory_policy_version_conflict",
         "relation_policy_version_conflict",
         "upsert_memory",
         "archive_memory",
@@ -1107,15 +1109,22 @@ final class ActivityStore: ObservableObject {
         }
     }
 
-    func restoreSharedServerMemoryVersion(stableKey: String, versionID: String, expectedVersionNS: String, repoScope: String, reason: String) {
+    func restoreSharedServerMemoryVersion(stableKey: String, versionID: String, expectedVersionNS: String, repoScope: String, kind: String, reason: String) {
         Task {
             await restoreSharedMemoryVersion(
                 stableKey: stableKey,
                 versionID: versionID,
                 expectedVersionNS: expectedVersionNS,
                 repoScope: repoScope,
+                kind: kind,
                 reason: reason
             )
+        }
+    }
+
+    func checkSharedServerMemoryPolicy(repoScope: String, kind: String) {
+        Task {
+            await checkSharedMemoryPolicy(repoScope: repoScope, kind: kind)
         }
     }
 
@@ -2026,15 +2035,20 @@ final class ActivityStore: ObservableObject {
         )
     }
 
-    private func restoreSharedMemoryVersion(stableKey: String, versionID: String, expectedVersionNS: String, repoScope: String, reason: String) async {
+    private func restoreSharedMemoryVersion(stableKey: String, versionID: String, expectedVersionNS: String, repoScope: String, kind: String, reason: String) async {
         let trimmedStableKey = stableKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedVersionID = versionID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedKind = kind.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedStableKey.isEmpty else {
             sharedServerError = "Stable key required"
             return
         }
         guard !trimmedVersionID.isEmpty else {
             sharedServerError = "Version ID required"
+            return
+        }
+        guard !trimmedKind.isEmpty else {
+            sharedServerError = "Memory kind required"
             return
         }
         var arguments = [
@@ -2045,6 +2059,9 @@ final class ActivityStore: ObservableObject {
             normalizedRepoScope(repoScope),
             "--version-id",
             trimmedVersionID,
+            "--kind",
+            trimmedKind,
+            "--check-policy",
             "--reason",
             reason.trimmingCharacters(in: .whitespacesAndNewlines),
         ]
@@ -2053,6 +2070,39 @@ final class ActivityStore: ObservableObject {
             arguments += ["--expected-version-ns", trimmedExpected]
         }
         await runSharedAccessCommand(arguments, successMessage: "Shared version restored")
+    }
+
+    private func checkSharedMemoryPolicy(repoScope: String, kind: String) async {
+        guard !isManagingSharedAccess else { return }
+        let trimmedKind = kind.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedKind.isEmpty else {
+            sharedServerError = "Memory kind required"
+            return
+        }
+        isManagingSharedAccess = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingSharedAccess = false
+        }
+
+        do {
+            let normalizedRepo = normalizedRepoScope(repoScope)
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 20).run([
+                "shared-server",
+                "check-memory",
+                "--repo-scope",
+                normalizedRepo,
+                "--kind",
+                trimmedKind,
+            ])
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(sharedMemoryPolicyCheckReport(from: output, repoScope: normalizedRepo), forType: .string)
+            lastActionMessage = "Memory policy copied"
+            clearLastActionMessageAfterDelay(expected: "Memory policy copied")
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
     }
 
     private func copySharedMemories(repoScope: String, includeArchived: Bool) async {
@@ -3786,6 +3836,44 @@ final class ActivityStore: ObservableObject {
         }
         if activityEvents.count > 16 {
             lines.append("- \(activityEvents.count - 16) more activity events omitted")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func sharedMemoryPolicyCheckReport(from output: String, repoScope: String) -> String {
+        guard let payload = jsonObject(from: output) else {
+            return output.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let requestedRepo = auditString(payload["repo"]) ?? repoScope
+        let kind = auditString(payload["kind"]) ?? "unknown"
+        let reason = auditString(payload["reason"]) ?? "unknown"
+        let allowed = auditBool(payload["allowed"]) == true
+        let allowedKinds = (payload["allowed_memory_kinds"] as? [Any] ?? [])
+            .compactMap { auditString($0) }
+        let allowedKindCount = auditInt(payload["allowed_memory_kind_count"]) ?? allowedKinds.count
+        let policyRepo = auditString(payload["policy_repo"]) ?? requestedRepo
+        let inheritedFrom = auditString(payload["policy_inherited_from"]) ?? ""
+        let policyScope = inheritedFrom.isEmpty ? policyRepo : "\(policyRepo) inherited from \(inheritedFrom)"
+        let allowMemory = auditBool(payload["allow_memory_writes"]) != false
+
+        var lines = [
+            "Autopsy Memory Policy Check",
+            "Result: \(allowed ? "allowed" : "blocked")",
+            "Repo: \(requestedRepo)",
+            "Kind: \(kind)",
+            "Reason: \(reason)",
+            "Allowed memory kinds: \(allowedKinds.isEmpty ? "any" : allowedKinds.joined(separator: ", "))",
+            "Allowed kind count: \(allowedKindCount)",
+            "Repo policy: \(policyScope)",
+            "Memory writes: \(allowMemory ? "allowed" : "disabled")",
+            "Dry run: \(auditBool(payload["dry_run"]) == true ? "yes" : "no")",
+        ]
+        if let version = auditString(payload["policy_version_ns"]), !version.isEmpty {
+            lines.append("Policy version: \(version)")
+        }
+        if let fingerprint = auditString(payload["policy_fingerprint"]) {
+            lines.append("Policy fingerprint: \(shortAuditHash(fingerprint))")
         }
         return lines.joined(separator: "\n")
     }

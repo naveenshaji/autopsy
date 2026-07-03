@@ -138,6 +138,7 @@ private struct SharedSettingsTab: View {
     @State private var handoffSourceRoleAfter = "writer"
     @State private var sharedMemoryStableKey = ""
     @State private var sharedMemoryRepoScope = ""
+    @State private var sharedMemoryKind = "observation"
     @State private var sharedMemoryReason = ""
     @State private var sharedMemoryVersionID = ""
     @State private var sharedMemoryExpectedVersionNS = ""
@@ -353,6 +354,8 @@ private struct SharedSettingsTab: View {
                     .textFieldStyle(.roundedBorder)
                 TextField("Repo Scope", text: $sharedMemoryRepoScope)
                     .textFieldStyle(.roundedBorder)
+                TextField("Memory Kind", text: $sharedMemoryKind)
+                    .textFieldStyle(.roundedBorder)
                 TextField("Reason", text: $sharedMemoryReason)
                     .textFieldStyle(.roundedBorder)
                 TextField("Version ID", text: $sharedMemoryVersionID)
@@ -384,6 +387,7 @@ private struct SharedSettingsTab: View {
                             versionID: sharedMemoryVersionID,
                             expectedVersionNS: sharedMemoryExpectedVersionNS,
                             repoScope: sharedMemoryRepoScope,
+                            kind: sharedMemoryKind,
                             reason: sharedMemoryReason
                         )
                     }
@@ -391,6 +395,18 @@ private struct SharedSettingsTab: View {
                         sharedActionDisabled
                             || sharedMemoryStableKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                             || sharedMemoryVersionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            || sharedMemoryKind.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    )
+
+                    Button("Check Policy") {
+                        store.checkSharedServerMemoryPolicy(
+                            repoScope: sharedMemoryRepoScope,
+                            kind: sharedMemoryKind
+                        )
+                    }
+                    .disabled(
+                        sharedActionDisabled
+                            || sharedMemoryKind.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     )
                 }
                 HStack {

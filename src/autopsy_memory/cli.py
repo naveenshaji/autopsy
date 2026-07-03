@@ -4418,6 +4418,7 @@ def format_shared_server_error_detail(value: Any) -> str:
                 ("expected_version_ns", "expected_version"),
                 ("expected_policy_version_ns", "expected_policy_version"),
                 ("current_policy_version_ns", "current_policy_version"),
+                ("kind", "kind"),
                 ("relation", "relation"),
                 ("relation_scope", "relation_scope"),
                 ("active_owner_count", "active_owners"),
@@ -4796,6 +4797,10 @@ def shared_server_memory_lifecycle_path(graph_slug: str, action: str) -> str:
 
 def shared_server_memory_restore_version_path(graph_slug: str) -> str:
     return shared_server_path(graph_slug, "/memories/restore-version")
+
+
+def shared_server_memory_policy_check_path(graph_slug: str) -> str:
+    return shared_server_path(graph_slug, "/memories/check")
 
 
 def shared_server_relations_path(
@@ -5459,6 +5464,33 @@ def checked_relation_policy_expectation(
         reason = str(check_result.get("reason") or "denied").strip()
         fail(
             f"shared-server --check-policy denied relation write: reason={reason}; repo={repo}; relation={relation}; relation_scope={relation_scope}",
+            1,
+        )
+    policy_fingerprint = str(check_result.get("policy_fingerprint") or "").strip()
+    policy_version_ns = check_result.get("policy_version_ns")
+    if not policy_fingerprint or policy_version_ns is None:
+        fail("shared-server --check-policy response did not include policy_fingerprint and policy_version_ns", 1)
+    return policy_fingerprint, int(policy_version_ns), check_result
+
+
+def checked_memory_policy_expectation(
+    config: dict[str, Any],
+    graph_slug: str,
+    *,
+    repo: str,
+    kind: str,
+) -> tuple[str, int, dict[str, Any]]:
+    check_result = shared_server_request_or_fail(
+        config,
+        shared_server_memory_policy_check_path(graph_slug),
+        method="POST",
+        payload={"repo": repo, "kind": kind},
+        timeout=15,
+    )
+    if not bool(check_result.get("allowed")):
+        reason = str(check_result.get("reason") or "denied").strip()
+        fail(
+            f"shared-server --check-policy denied memory write: reason={reason}; repo={repo}; kind={kind}",
             1,
         )
     policy_fingerprint = str(check_result.get("policy_fingerprint") or "").strip()
@@ -6266,6 +6298,19 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         )
         print(json.dumps(payload, indent=2))
         return
+    if action == "check-memory":
+        kind = str(getattr(args, "kind", "") or "").strip()
+        if not kind:
+            fail("shared-server check-memory requires --kind", 2)
+        payload = shared_server_request_or_fail(
+            config,
+            shared_server_memory_policy_check_path(graph_slug),
+            method="POST",
+            payload={"repo": repo, "kind": kind},
+            timeout=10,
+        )
+        print(json.dumps(payload, indent=2))
+        return
     if action == "invite":
         email = str(getattr(args, "email", "") or "").strip()
         role = str(getattr(args, "role", "") or "reader").strip()
@@ -6519,6 +6564,26 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         expected_version_ns = getattr(args, "expected_version_ns", None)
         if expected_version_ns is not None:
             restore_payload["expected_version_ns"] = int(expected_version_ns)
+        expected_policy_fingerprint = str(getattr(args, "expected_policy_fingerprint", "") or "").strip()
+        expected_policy_version_ns = getattr(args, "expected_policy_version_ns", None)
+        check_policy = bool(getattr(args, "check_policy", False))
+        policy_check: dict[str, Any] | None = None
+        if check_policy:
+            if expected_policy_fingerprint or expected_policy_version_ns is not None:
+                fail("shared-server restore-version cannot combine --check-policy with --expected-policy-fingerprint or --expected-policy-version-ns", 2)
+            kind = str(getattr(args, "kind", "") or "").strip()
+            if not kind:
+                fail("shared-server restore-version --check-policy requires --kind", 2)
+            expected_policy_fingerprint, expected_policy_version_ns, policy_check = checked_memory_policy_expectation(
+                config,
+                graph_slug,
+                repo=repo,
+                kind=kind,
+            )
+        if expected_policy_fingerprint:
+            restore_payload["expected_policy_fingerprint"] = expected_policy_fingerprint
+        if expected_policy_version_ns is not None:
+            restore_payload["expected_policy_version_ns"] = int(expected_policy_version_ns)
         payload = shared_server_request_or_fail(
             config,
             shared_server_memory_restore_version_path(graph_slug),
@@ -6526,6 +6591,15 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
             payload=restore_payload,
             timeout=15,
         )
+        if policy_check is not None:
+            print(json.dumps({
+                "shared_server": redacted_shared_server_config(config, path=config_path),
+                "repo": repo,
+                "restored": payload,
+                "policy_check": policy_check,
+                "audit": payload.get("audit") if isinstance(payload, dict) else None,
+            }, indent=2))
+            return
         print(json.dumps(payload, indent=2))
         return
     if action == "publish":
@@ -6537,11 +6611,29 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
             print(json.dumps(blocked_missing_memory_item_payload_for_graph(graph, stable_key=stable_key, operation="shared-server publish"), indent=2))
             return
         item = fetch_item(graph, stable_key)
+        expected_policy_fingerprint = str(getattr(args, "expected_policy_fingerprint", "") or "").strip()
+        expected_policy_version_ns = getattr(args, "expected_policy_version_ns", None)
+        check_policy = bool(getattr(args, "check_policy", False))
+        policy_check: dict[str, Any] | None = None
+        if check_policy:
+            if expected_policy_fingerprint or expected_policy_version_ns is not None:
+                fail("shared-server publish cannot combine --check-policy with --expected-policy-fingerprint or --expected-policy-version-ns", 2)
+            memory_kind = str(item.get("kind") or "memory_note").strip() or "memory_note"
+            expected_policy_fingerprint, expected_policy_version_ns, policy_check = checked_memory_policy_expectation(
+                config,
+                graph_slug,
+                repo=repo,
+                kind=memory_kind,
+            )
         remote_payload = build_shared_server_publish_payload(
             item,
             repo=repo,
             expected_version_ns=getattr(args, "expected_version_ns", None),
         )
+        if expected_policy_fingerprint:
+            remote_payload["expected_policy_fingerprint"] = expected_policy_fingerprint
+        if expected_policy_version_ns is not None:
+            remote_payload["expected_policy_version_ns"] = int(expected_policy_version_ns)
         published = shared_server_request_or_fail(
             config,
             shared_server_path(graph_slug, "/memories"),
@@ -6554,6 +6646,7 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
             "shared_server": redacted_shared_server_config(config, path=config_path),
             "repo": repo,
             "published": published,
+            **({"policy_check": policy_check} if policy_check is not None else {}),
         }, indent=2))
         return
     if action == "relate":

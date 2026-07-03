@@ -98,7 +98,8 @@ autopsy shared-server revoke-token tok_123 --repo-scope /path/to/repo
 autopsy shared-server archive shared:key --repo-scope /path/to/repo --reason duplicate
 autopsy shared-server list --repo-scope /path/to/repo --include-archived
 autopsy shared-server memory-history shared:key --repo-scope /path/to/repo
-autopsy shared-server restore-version shared:key --repo-scope /path/to/repo --version-id ver_123
+autopsy shared-server check-memory --repo-scope /path/to/repo --kind decision
+autopsy shared-server restore-version shared:key --repo-scope /path/to/repo --version-id ver_123 --kind decision --check-policy
 autopsy shared-server context --repo-scope /path/to/repo --query "current task" --min-fact-rating 0.8
 autopsy shared-server restore shared:key --repo-scope /path/to/repo --reason needed
 autopsy shared-server relate shared:source shared:target --repo-scope /path/to/repo --relation depends_on --fact-rating 0.9 --check-policy
@@ -246,6 +247,11 @@ server's repo-policy relation checks without writing an edge. It returns
 `allowed`, `reason`, effective policy source, label-count, minimum rating,
 relation toggles, and `policy_fingerprint` so clients can explain a planned
 shared or personal relation before mutating the graph.
+`shared-server check-memory --repo-scope <repo> --kind <memory-kind>` dry-runs
+the repo policy for shared memory writes. It returns `allowed`, `reason`,
+effective policy source, allowed memory-kind counts, memory-write status, and
+policy fingerprint/version so clients can explain a planned publish or
+restore-version before mutating the graph.
 `--repo` resolves to a team-stable Git scope such as
 `git:github.com/owner/repo` from `origin` when available, and falls back to the
 local absolute path for non-Git repos. `--repo-scope` passes an exact
@@ -253,14 +259,21 @@ shared-server scope such as a repo URL, stable repo id, or `*`. `shared-server p
 <stable-key> --repo <repo>` copies a local memory item into the configured shared
 graph; add `--expected-version-ns <value>` from a prior `list` or
 `memory-history` read to reject stale shared writes instead of overwriting a
-newer publish. `shared-server list --repo <repo>` lists repo-scoped shared memories, and
+newer publish. Add `--check-policy` to dry-run the repo memory policy immediately
+before publishing and send the returned policy fingerprint/version as a stale
+policy guard. Use manual `--expected-policy-fingerprint` and
+`--expected-policy-version-ns` from `shared-server check-memory` only when
+reusing a previously reviewed dry-run. `shared-server list --repo <repo>` lists repo-scoped shared memories, and
 `shared-server memory-history <shared-key> --repo-scope <repo>` lists immutable
 versions created by each shared-memory publish or upsert, newest first.
 `shared-server restore-version <shared-key> --repo-scope <repo> --version-id
 <history-item-id>` restores a prior version as a new current version; use the
 `id` field from `memory-history` as the version id, and add
 `--expected-version-ns <current-version>` to reject the restore if the current
-memory changed since review.
+memory changed since review. Add `--kind <memory-kind> --check-policy` to
+protect the restore with a fresh repo memory-policy preflight; manual expected
+policy fingerprint/version values are accepted when replaying a previously
+reviewed dry-run.
 `shared-server context --repo-scope <repo> --query <text>` fetches
 source-attributed shared memories plus adjacent shared graph relations as a
 ready-to-insert context block without importing them into the personal graph.
