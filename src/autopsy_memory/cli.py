@@ -5479,19 +5479,21 @@ def build_shared_server_team_status_payload(
     capabilities_payload = payload.get("capabilities") if isinstance(payload.get("capabilities"), dict) else {}
     server_capabilities = capabilities_payload.get("capabilities") if isinstance(capabilities_payload.get("capabilities"), dict) else {}
     server_security = capabilities_payload.get("security") if isinstance(capabilities_payload.get("security"), dict) else {}
+    me = payload.get("me") if isinstance(payload.get("me"), dict) else {}
+    is_admin = bool(me.get("is_admin"))
     team["can_use_idempotency_keys"] = bool(server_capabilities.get("idempotency_keys"))
     team["can_use_idempotency_record_retention"] = bool(server_capabilities.get("idempotency_record_retention"))
-    team["can_use_admin_export_snapshot"] = bool(server_capabilities.get("admin_export_snapshot"))
-    team["can_use_admin_export_snapshot_validation"] = bool(server_capabilities.get("admin_export_snapshot_validation"))
-    team["can_use_admin_export_snapshot_restore_plan"] = bool(server_capabilities.get("admin_export_snapshot_restore_plan"))
-    team["can_use_admin_export_snapshot_restore_plan_digest"] = bool(
+    team["can_use_admin_export_snapshot"] = is_admin and bool(server_capabilities.get("admin_export_snapshot"))
+    team["can_use_admin_export_snapshot_validation"] = is_admin and bool(server_capabilities.get("admin_export_snapshot_validation"))
+    team["can_use_admin_export_snapshot_restore_plan"] = is_admin and bool(server_capabilities.get("admin_export_snapshot_restore_plan"))
+    team["can_use_admin_export_snapshot_restore_plan_digest"] = is_admin and bool(
         server_capabilities.get("admin_export_snapshot_restore_plan_digest")
     )
-    team["can_use_admin_export_snapshot_restore_apply"] = bool(server_capabilities.get("admin_export_snapshot_restore_apply"))
-    team["can_use_admin_export_snapshot_restore_apply_idempotency"] = bool(
+    team["can_use_admin_export_snapshot_restore_apply"] = is_admin and bool(server_capabilities.get("admin_export_snapshot_restore_apply"))
+    team["can_use_admin_export_snapshot_restore_apply_idempotency"] = is_admin and bool(
         server_capabilities.get("admin_export_snapshot_restore_apply_idempotency")
     )
-    team["can_use_admin_export_snapshot_manifest"] = bool(server_capabilities.get("admin_export_snapshot_manifest"))
+    team["can_use_admin_export_snapshot_manifest"] = is_admin and bool(server_capabilities.get("admin_export_snapshot_manifest"))
     team["can_use_token_inventory_fingerprints"] = bool(server_capabilities.get("token_inventory_fingerprints"))
     team["idempotency_record_retention_days"] = _safe_int(server_security.get("idempotency_record_retention_days"))
     team["idempotency_pending_timeout_seconds"] = _safe_int(server_security.get("idempotency_pending_timeout_seconds"))
@@ -5502,8 +5504,7 @@ def build_shared_server_team_status_payload(
     if not payload.get("configured") or not config:
         return payload
     graph_slug = shared_server_graph_slug_from_args(argparse.Namespace(graph_slug=None), config)
-    me = payload.get("me") if isinstance(payload.get("me"), dict) else {}
-    if bool(me.get("is_admin")):
+    if is_admin:
         try:
             storage_payload = shared_server_request(config, shared_server_storage_status_path(), timeout=10)
         except urllib.error.HTTPError as exc:

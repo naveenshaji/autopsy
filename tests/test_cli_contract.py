@@ -3647,6 +3647,93 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["metadata"]["topic"], "shared")
         self.assertEqual(payload["metadata"]["autopsy_local_entity_id"], 42)
 
+    def test_shared_server_team_status_admin_features_require_admin_identity(self):
+        config = {
+            "base_url": "https://autopsy-server.fly.dev",
+            "graph_slug": "autopsy",
+            "user_id": "usr_1",
+            "token": "secret-token",
+        }
+
+        def fake_request(_config, path, **_kwargs):
+            if path == "/v1/capabilities":
+                return {
+                    "service": "autopsy-server",
+                    "api_version": 1,
+                    "capabilities": {
+                        "admin_export_snapshot": True,
+                        "admin_export_snapshot_validation": True,
+                        "admin_export_snapshot_restore_plan": True,
+                        "admin_export_snapshot_restore_plan_digest": True,
+                        "admin_export_snapshot_restore_apply": True,
+                        "admin_export_snapshot_restore_apply_idempotency": True,
+                        "admin_export_snapshot_manifest": True,
+                        "idempotency_keys": True,
+                        "idempotency_record_retention": True,
+                    },
+                    "security": {
+                        "idempotency_record_retention_days": 7,
+                        "idempotency_pending_timeout_seconds": 3600,
+                    },
+                }
+            if path == "/health":
+                return {"ok": True}
+            if path == "/v1/me":
+                return {"id": "usr_1", "email": "reader@example.com", "name": "Reader", "is_admin": False}
+            if path in {"/v1/admin/storage-status", "/v1/users"}:
+                raise AssertionError(f"non-admin team-status must not call {path}")
+            if "/grants" in path or "/tokens" in path:
+                return {"items": []}
+            if "/policies" in path:
+                return {"repo_filter_present": True, "items": []}
+            if "/policy" in path:
+                return {
+                    "repo": "repo-a",
+                    "inherited_from": "",
+                    "allowed_relation_labels": [],
+                    "allowed_memory_kinds": [],
+                    "min_fact_rating": 0.0,
+                    "allow_shared_relations": True,
+                    "allow_personal_relations": True,
+                    "allow_memory_writes": True,
+                    "version_ns": 0,
+                    "policy_fingerprint": "sha256:policy",
+                    "notes": "",
+                }
+            if path.startswith("/v1/audit-events/integrity?"):
+                return {
+                    "status": "verified",
+                    "event_count": 0,
+                    "integrity_counts": {"verified": 0, "missing": 0, "mismatch": 0, "unknown": 0},
+                    "chain": {
+                        "status": "empty",
+                        "checked_pairs": 0,
+                        "linked_pairs": 0,
+                        "uncheckable_pairs": 0,
+                        "chain_break_count": 0,
+                        "external_gap_count": 0,
+                    },
+                    "items": [],
+                }
+            if path.startswith("/v1/audit-events/summary?"):
+                return {"event_count": 0, "metadata_counts": {}, "latest_created_at": "", "scope": {}}
+            raise AssertionError(path)
+
+        with mock.patch.object(cli, "load_shared_server_config", return_value=config), mock.patch.object(cli, "shared_server_request", side_effect=fake_request):
+            payload = cli.build_shared_server_team_status_payload(repo="repo-a")
+
+        self.assertFalse(payload["me"]["is_admin"])
+        self.assertFalse(payload["team"]["can_use_admin_export_snapshot"])
+        self.assertFalse(payload["team"]["can_use_admin_export_snapshot_validation"])
+        self.assertFalse(payload["team"]["can_use_admin_export_snapshot_restore_plan"])
+        self.assertFalse(payload["team"]["can_use_admin_export_snapshot_restore_plan_digest"])
+        self.assertFalse(payload["team"]["can_use_admin_export_snapshot_restore_apply"])
+        self.assertFalse(payload["team"]["can_use_admin_export_snapshot_restore_apply_idempotency"])
+        self.assertFalse(payload["team"]["can_use_admin_export_snapshot_manifest"])
+        self.assertFalse(payload["team"]["can_read_storage_status"])
+        self.assertTrue(payload["team"]["can_use_idempotency_keys"])
+        self.assertTrue(payload["team"]["can_use_idempotency_record_retention"])
+
     def test_shared_server_team_status_summarizes_remote_access_and_scoped_tokens(self):
         config = {
             "base_url": "https://autopsy-server.fly.dev",
