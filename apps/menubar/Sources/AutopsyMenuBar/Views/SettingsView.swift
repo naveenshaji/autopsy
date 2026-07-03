@@ -290,9 +290,16 @@ private struct SharedSettingsTab: View {
                         store.copySharedServerExportSnapshot()
                     }
                     .disabled(sharedActionDisabled)
+                }
 
+                HStack {
                     Button("Validate Export") {
                         store.validateSharedServerExportSnapshotClipboard()
+                    }
+                    .disabled(sharedActionDisabled)
+
+                    Button("Plan Restore") {
+                        store.planSharedServerExportSnapshotRestoreClipboard()
                     }
                     .disabled(sharedActionDisabled)
                 }

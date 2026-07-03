@@ -80,6 +80,7 @@ final class ActivityStore: ObservableObject {
         "read_access_check",
         "export_snapshot",
         "validate_export_snapshot",
+        "plan_export_snapshot_restore",
         "read_repo_policy",
         "read_repo_policies",
         "check_memory_policy",
@@ -329,6 +330,7 @@ final class ActivityStore: ObservableObject {
                 ("admin_storage_status", "storage status"),
                 ("admin_export_snapshot", "export snapshots"),
                 ("admin_export_snapshot_validation", "export validation"),
+                ("admin_export_snapshot_restore_plan", "restore planning"),
                 ("admin_storage_token_hygiene", "token hygiene"),
                 ("admin_token_inventory", "token inventory"),
                 ("repo_policies", "repo policies"),
@@ -1195,6 +1197,12 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    func planSharedServerExportSnapshotRestoreClipboard() {
+        Task {
+            await planSharedExportSnapshotRestoreClipboard()
+        }
+    }
+
     func copySharedServerAccessCheck(repoScope: String, mode: String) {
         Task {
             await copySharedAccessCheck(repoScope: repoScope, mode: mode)
@@ -1779,6 +1787,45 @@ final class ActivityStore: ObservableObject {
             NSPasteboard.general.setString(sharedExportSnapshotValidationReport(from: output), forType: .string)
             lastActionMessage = "Export validation copied"
             clearLastActionMessageAfterDelay(expected: "Export validation copied")
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
+    }
+
+    private func planSharedExportSnapshotRestoreClipboard() async {
+        guard !isManagingSharedAccess else { return }
+        isManagingSharedAccess = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingSharedAccess = false
+        }
+
+        let snapshotText = NSPasteboard.general.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !snapshotText.isEmpty else {
+            sharedServerError = "Clipboard does not contain export snapshot JSON."
+            return
+        }
+
+        let snapshotURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("autopsy-export-snapshot-\(UUID().uuidString).json")
+        do {
+            try snapshotText.write(to: snapshotURL, atomically: true, encoding: .utf8)
+            defer {
+                try? FileManager.default.removeItem(at: snapshotURL)
+            }
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 45).run([
+                "shared-server",
+                "restore-plan-snapshot",
+                "--snapshot-file",
+                snapshotURL.path,
+                "--sample-limit",
+                "25",
+            ])
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(sharedExportSnapshotRestorePlanReport(from: output), forType: .string)
+            lastActionMessage = "Restore plan copied"
+            clearLastActionMessageAfterDelay(expected: "Restore plan copied")
         } catch {
             sharedServerError = error.localizedDescription
         }
@@ -3501,6 +3548,67 @@ final class ActivityStore: ObservableObject {
         ]
         if !mismatches.isEmpty {
             lines.append("Count mismatches: \(mismatches.keys.sorted().joined(separator: ", "))")
+        }
+        if let auditID = auditString(audit["id"]) {
+            lines.append("Audit receipt: \(auditID)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func sharedExportSnapshotRestorePlanReport(from output: String) -> String {
+        guard let payload = jsonObject(from: output) else {
+            return output.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let totals = payload["totals"] as? [String: Any] ?? [:]
+        let sections = payload["sections"] as? [String: Any] ?? [:]
+        let restoreReadiness = payload["restore_readiness"] as? [String: Any] ?? [:]
+        let audit = payload["audit"] as? [String: Any] ?? [:]
+        let status = auditBool(payload["ok"]) == true ? "ready" : "blocked"
+        let safeToApply = auditBool(restoreReadiness["safe_to_apply"]) == true ? "yes" : "no"
+        var lines = [
+            "Shared Export Snapshot Restore Plan",
+            "Status: \(status)",
+            "Safe to apply: \(safeToApply)",
+            "Creates: \(auditInt(totals["would_create"]) ?? 0)",
+            "Updates: \(auditInt(totals["would_update"]) ?? 0)",
+            "Unchanged: \(auditInt(totals["unchanged"]) ?? 0)",
+            "Live only: \(auditInt(totals["live_only"]) ?? 0)",
+            "Invalid identities: \(auditInt(totals["invalid_identities"]) ?? 0)",
+        ]
+        let currentInvalid = auditInt(totals["current_invalid_identities"]) ?? 0
+        if currentInvalid > 0 {
+            lines.append("Current invalid identities: \(currentInvalid)")
+        }
+
+        let sectionLabels = [
+            ("users", "Users"),
+            ("shared_graphs", "Shared graphs"),
+            ("grants", "Grants"),
+            ("repo_policies", "Repo policies"),
+            ("shared_memories", "Shared memories"),
+            ("memory_versions", "Memory versions"),
+            ("shared_relations", "Shared relations"),
+            ("personal_relations", "Personal relations"),
+        ]
+        for (sectionKey, label) in sectionLabels {
+            guard let section = sections[sectionKey] as? [String: Any] else { continue }
+            let creates = auditInt(section["would_create_count"]) ?? 0
+            let updates = auditInt(section["would_update_count"]) ?? 0
+            let liveOnly = auditInt(section["live_only_count"]) ?? 0
+            let invalid = auditInt(section["invalid_identity_count"]) ?? 0
+            if creates == 0 && updates == 0 && liveOnly == 0 && invalid == 0 {
+                continue
+            }
+            lines.append("\(label): create \(creates), update \(updates), live-only \(liveOnly), invalid \(invalid)")
+            let samples = section["samples"] as? [String: Any] ?? [:]
+            for (sampleKey, sampleLabel) in [("would_create", "create"), ("would_update", "update"), ("live_only", "live-only")] {
+                guard let rawItems = samples[sampleKey] as? [Any] else { continue }
+                let sampleItems = rawItems.compactMap { auditString($0) }.prefix(5)
+                if !sampleItems.isEmpty {
+                    lines.append("  \(sampleLabel): \(sampleItems.joined(separator: ", ").clippedForMenuBar(limit: 180))")
+                }
+            }
         }
         if let auditID = auditString(audit["id"]) {
             lines.append("Audit receipt: \(auditID)")
