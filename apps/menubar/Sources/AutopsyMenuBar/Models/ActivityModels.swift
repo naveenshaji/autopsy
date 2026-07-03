@@ -112,6 +112,29 @@ struct SharedServerTeamPayload: Decodable {
     var canReadAuditReaderSummary: Bool?
     var canReadSharedReadSummary: Bool?
     var canReadStorageStatus: Bool?
+    var canReadRepo: Bool?
+    var canWriteRepo: Bool?
+    var canAdminRepo: Bool?
+    var repoAccessReason: String?
+    var repoEffectiveRole: String?
+    var repoAccessTokenScoped: Bool?
+    var repoAccessTokenScopeMatches: Bool?
+    var repoAccessTokenScopeRole: String?
+    var canCreateUsers: Bool?
+    var canDisableUsers: Bool?
+    var canEnableUsers: Bool?
+    var canCreateUserTokens: Bool?
+    var canListUserTokens: Bool?
+    var canRevokeGlobalTokens: Bool?
+    var canInviteUsers: Bool?
+    var canGrantAccess: Bool?
+    var canRevokeGrants: Bool?
+    var canHandoffOwner: Bool?
+    var canReadScopedTokens: Bool?
+    var canRevokeScopedTokens: Bool?
+    var canBulkRevokeScopedTokens: Bool?
+    var canUpdateRepoPolicy: Bool?
+    var canResetRepoPolicy: Bool?
     var canUseAdminExportSnapshot: Bool?
     var canUseAdminExportSnapshotValidation: Bool?
     var canUseAdminExportSnapshotRestorePlan: Bool?
@@ -289,6 +312,29 @@ struct SharedServerTeamPayload: Decodable {
         case canReadAuditReaderSummary = "can_read_audit_reader_summary"
         case canReadSharedReadSummary = "can_read_shared_read_summary"
         case canReadStorageStatus = "can_read_storage_status"
+        case canReadRepo = "can_read_repo"
+        case canWriteRepo = "can_write_repo"
+        case canAdminRepo = "can_admin_repo"
+        case repoAccessReason = "repo_access_reason"
+        case repoEffectiveRole = "repo_effective_role"
+        case repoAccessTokenScoped = "repo_access_token_scoped"
+        case repoAccessTokenScopeMatches = "repo_access_token_scope_matches"
+        case repoAccessTokenScopeRole = "repo_access_token_scope_role"
+        case canCreateUsers = "can_create_users"
+        case canDisableUsers = "can_disable_users"
+        case canEnableUsers = "can_enable_users"
+        case canCreateUserTokens = "can_create_user_tokens"
+        case canListUserTokens = "can_list_user_tokens"
+        case canRevokeGlobalTokens = "can_revoke_global_tokens"
+        case canInviteUsers = "can_invite_users"
+        case canGrantAccess = "can_grant_access"
+        case canRevokeGrants = "can_revoke_grants"
+        case canHandoffOwner = "can_handoff_owner"
+        case canReadScopedTokens = "can_read_scoped_tokens"
+        case canRevokeScopedTokens = "can_revoke_scoped_tokens"
+        case canBulkRevokeScopedTokens = "can_bulk_revoke_scoped_tokens"
+        case canUpdateRepoPolicy = "can_update_repo_policy"
+        case canResetRepoPolicy = "can_reset_repo_policy"
         case canUseAdminExportSnapshot = "can_use_admin_export_snapshot"
         case canUseAdminExportSnapshotValidation = "can_use_admin_export_snapshot_validation"
         case canUseAdminExportSnapshotRestorePlan = "can_use_admin_export_snapshot_restore_plan"

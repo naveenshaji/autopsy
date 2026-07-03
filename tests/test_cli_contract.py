@@ -3670,6 +3670,13 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "admin_export_snapshot_manifest": True,
                         "admin_token_inventory": True,
                         "admin_token_bulk_revoke": True,
+                        "disabled_user_lifecycle": True,
+                        "repo_scoped_grants": True,
+                        "scoped_invitation_tokens": True,
+                        "owner_handoff": True,
+                        "scoped_token_bulk_revoke": True,
+                        "repo_policies": True,
+                        "repo_policy_reset": True,
                         "idempotency_keys": True,
                         "idempotency_record_retention": True,
                     },
@@ -3684,10 +3691,18 @@ class AutopsyCLIContractTests(unittest.TestCase):
                 return {"id": "usr_1", "email": "reader@example.com", "name": "Reader", "is_admin": False}
             if path in {"/v1/admin/storage-status", "/v1/users"}:
                 raise AssertionError(f"non-admin team-status must not call {path}")
+            if path == "/v1/shared-graphs/autopsy/access-check?repo=repo-a&mode=admin":
+                return {
+                    "allowed": False,
+                    "reason": "insufficient_role",
+                    "effective_role": "reader",
+                    "capabilities": {"can_read": True, "can_write": False, "can_admin": False},
+                    "token_scope": {"scoped": False, "matches": True},
+                }
             if "/grants" in path or "/tokens" in path:
-                return {"items": []}
+                raise AssertionError(f"non-admin team-status must not call repo-admin route {path}")
             if "/policies" in path:
-                return {"repo_filter_present": True, "items": []}
+                raise AssertionError(f"non-admin team-status must not call repo-admin route {path}")
             if "/policy" in path:
                 return {
                     "repo": "repo-a",
@@ -3735,6 +3750,26 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertFalse(payload["team"]["can_use_admin_token_inventory"])
         self.assertFalse(payload["team"]["can_use_admin_token_bulk_revoke"])
         self.assertFalse(payload["team"]["can_read_storage_status"])
+        self.assertTrue(payload["team"]["can_read_repo"])
+        self.assertFalse(payload["team"]["can_write_repo"])
+        self.assertFalse(payload["team"]["can_admin_repo"])
+        self.assertFalse(payload["team"]["can_create_users"])
+        self.assertFalse(payload["team"]["can_disable_users"])
+        self.assertFalse(payload["team"]["can_enable_users"])
+        self.assertFalse(payload["team"]["can_create_user_tokens"])
+        self.assertFalse(payload["team"]["can_list_user_tokens"])
+        self.assertFalse(payload["team"]["can_revoke_global_tokens"])
+        self.assertFalse(payload["team"]["can_invite_users"])
+        self.assertFalse(payload["team"]["can_grant_access"])
+        self.assertFalse(payload["team"]["can_revoke_grants"])
+        self.assertFalse(payload["team"]["can_handoff_owner"])
+        self.assertFalse(payload["team"]["can_read_scoped_tokens"])
+        self.assertFalse(payload["team"]["can_revoke_scoped_tokens"])
+        self.assertFalse(payload["team"]["can_bulk_revoke_scoped_tokens"])
+        self.assertFalse(payload["team"]["can_update_repo_policy"])
+        self.assertFalse(payload["team"]["can_reset_repo_policy"])
+        self.assertEqual(payload["team"]["repo_access_reason"], "insufficient_role")
+        self.assertEqual(payload["team"]["repo_effective_role"], "reader")
         self.assertTrue(payload["team"]["can_use_idempotency_keys"])
         self.assertTrue(payload["team"]["can_use_idempotency_record_retention"])
 
@@ -3762,6 +3797,13 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "admin_token_inventory": True,
                         "admin_token_bulk_revoke": True,
                         "token_inventory_fingerprints": True,
+                        "disabled_user_lifecycle": True,
+                        "repo_scoped_grants": True,
+                        "scoped_invitation_tokens": True,
+                        "owner_handoff": True,
+                        "scoped_token_bulk_revoke": True,
+                        "repo_policies": True,
+                        "repo_policy_reset": True,
                         "idempotency_keys": True,
                         "idempotency_record_retention": True,
                     },
@@ -3774,6 +3816,14 @@ class AutopsyCLIContractTests(unittest.TestCase):
                 return {"ok": True}
             if path == "/v1/me":
                 return {"id": "usr_1", "email": "owner@example.com", "name": "Owner", "is_admin": True}
+            if path == "/v1/shared-graphs/autopsy/access-check?repo=repo-a&mode=admin":
+                return {
+                    "allowed": True,
+                    "reason": "global_admin",
+                    "effective_role": "admin",
+                    "capabilities": {"can_read": True, "can_write": True, "can_admin": True},
+                    "token_scope": {"scoped": False, "matches": True},
+                }
             if path == "/v1/admin/storage-status":
                 return {
                     "ok": True,
@@ -4162,6 +4212,29 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertTrue(payload["team"]["can_use_admin_token_inventory"])
         self.assertTrue(payload["team"]["can_use_admin_token_bulk_revoke"])
         self.assertTrue(payload["team"]["can_use_token_inventory_fingerprints"])
+        self.assertTrue(payload["team"]["can_read_repo"])
+        self.assertTrue(payload["team"]["can_write_repo"])
+        self.assertTrue(payload["team"]["can_admin_repo"])
+        self.assertEqual(payload["team"]["repo_access_reason"], "global_admin")
+        self.assertEqual(payload["team"]["repo_effective_role"], "admin")
+        self.assertFalse(payload["team"]["repo_access_token_scoped"])
+        self.assertTrue(payload["team"]["repo_access_token_scope_matches"])
+        self.assertEqual(payload["team"]["repo_access_token_scope_role"], "")
+        self.assertTrue(payload["team"]["can_create_users"])
+        self.assertTrue(payload["team"]["can_disable_users"])
+        self.assertTrue(payload["team"]["can_enable_users"])
+        self.assertTrue(payload["team"]["can_create_user_tokens"])
+        self.assertTrue(payload["team"]["can_list_user_tokens"])
+        self.assertTrue(payload["team"]["can_revoke_global_tokens"])
+        self.assertTrue(payload["team"]["can_invite_users"])
+        self.assertTrue(payload["team"]["can_grant_access"])
+        self.assertTrue(payload["team"]["can_revoke_grants"])
+        self.assertTrue(payload["team"]["can_handoff_owner"])
+        self.assertTrue(payload["team"]["can_read_scoped_tokens"])
+        self.assertTrue(payload["team"]["can_revoke_scoped_tokens"])
+        self.assertTrue(payload["team"]["can_bulk_revoke_scoped_tokens"])
+        self.assertTrue(payload["team"]["can_update_repo_policy"])
+        self.assertTrue(payload["team"]["can_reset_repo_policy"])
         self.assertTrue(payload["team"]["can_use_idempotency_keys"])
         self.assertTrue(payload["team"]["can_use_idempotency_record_retention"])
         self.assertEqual(payload["team"]["idempotency_record_retention_days"], 7)
@@ -4314,6 +4387,14 @@ class AutopsyCLIContractTests(unittest.TestCase):
                 return {"ok": True}
             if path == "/v1/me":
                 return {"id": "usr_1", "email": "owner@example.com", "name": "Owner", "is_admin": False}
+            if path == "/v1/shared-graphs/autopsy/access-check?repo=repo-a&mode=admin":
+                return {
+                    "allowed": True,
+                    "reason": "grant_allows",
+                    "effective_role": "owner",
+                    "capabilities": {"can_read": True, "can_write": True, "can_admin": True},
+                    "token_scope": {"scoped": False, "matches": True},
+                }
             if path.startswith("/v1/shared-graphs/autopsy/grants"):
                 return {"items": []}
             if path.startswith("/v1/shared-graphs/autopsy/tokens"):

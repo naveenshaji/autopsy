@@ -209,6 +209,9 @@ private struct SharedSettingsTab: View {
                 if !store.sharedServerUserText.isEmpty {
                     LabeledContent("User", value: store.sharedServerUserText)
                 }
+                if !store.sharedServerRepoAccessText.isEmpty {
+                    LabeledContent("Repo Access", value: store.sharedServerRepoAccessText)
+                }
                 if !store.sharedServerFeaturesText.isEmpty {
                     LabeledContent("Features", value: store.sharedServerFeaturesText)
                 }
@@ -362,12 +365,12 @@ private struct SharedSettingsTab: View {
                     Button("Copy Policy") {
                         store.copySharedServerRepoPolicy(repoScope: policyRepoScope)
                     }
-                    .disabled(sharedActionDisabled)
+                    .disabled(repoPolicyReadDisabled)
 
                     Button("Copy Inventory") {
                         store.copySharedServerRepoPolicyInventory(repoScope: policyRepoScope)
                     }
-                    .disabled(sharedActionDisabled)
+                    .disabled(repoPolicyInventoryDisabled)
 
                     Button("Save Policy") {
                         store.updateSharedServerRepoPolicy(
@@ -381,12 +384,12 @@ private struct SharedSettingsTab: View {
                             notes: policyNotes
                         )
                     }
-                    .disabled(sharedActionDisabled)
+                    .disabled(repoPolicyUpdateDisabled)
 
                     Button("Reset Policy") {
                         store.resetSharedServerRepoPolicy(repoScope: policyRepoScope)
                     }
-                    .disabled(sharedActionDisabled)
+                    .disabled(repoPolicyResetDisabled)
                 }
             }
 
@@ -417,7 +420,7 @@ private struct SharedSettingsTab: View {
                         expiresAt: inviteTokenExpiresAt
                     )
                 }
-                .disabled(sharedActionDisabled || newUserEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(inviteUserDisabled || newUserEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
 
             Section("Shared Memories") {
@@ -692,24 +695,24 @@ private struct SharedSettingsTab: View {
                     Button("Grant") {
                         store.grantSharedServerAccess(userID: grantUserID, repoScope: grantRepoScope, role: grantRole)
                     }
-                    .disabled(sharedActionDisabled || grantUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(grantAccessDisabled || grantUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
                     Button("Revoke") {
                         store.revokeSharedServerAccess(userID: grantUserID, repoScope: grantRepoScope)
                     }
-                    .disabled(sharedActionDisabled || grantUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(revokeGrantDisabled || grantUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
 
                 HStack {
                     Button("Copy Users") {
                         store.copySharedServerUsers()
                     }
-                    .disabled(sharedActionDisabled)
+                    .disabled(userListDisabled)
 
                     Button("Copy Grants") {
                         store.copySharedServerGrants(repoScope: grantRepoScope)
                     }
-                    .disabled(sharedActionDisabled)
+                    .disabled(grantListDisabled)
                 }
 
                 Divider()
@@ -733,7 +736,7 @@ private struct SharedSettingsTab: View {
                     )
                 }
                 .disabled(
-                    sharedActionDisabled ||
+                    handoffOwnerDisabled ||
                     handoffSourceUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
                     handoffTargetUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 )
@@ -744,12 +747,12 @@ private struct SharedSettingsTab: View {
                     Button("Disable User") {
                         store.disableSharedServerUser(userID: grantUserID)
                     }
-                    .disabled(sharedActionDisabled || grantUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(userDisableDisabled || grantUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
                     Button("Enable User") {
                         store.enableSharedServerUser(userID: grantUserID)
                     }
-                    .disabled(sharedActionDisabled || grantUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(userEnableDisabled || grantUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
 
@@ -763,7 +766,7 @@ private struct SharedSettingsTab: View {
                 Button("Issue Token") {
                     store.issueSharedServerToken(userID: tokenUserID, label: tokenLabel, expiresAt: tokenExpiresAt)
                 }
-                .disabled(sharedActionDisabled || tokenUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(userTokenCreateDisabled || tokenUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
                 Divider()
 
@@ -815,12 +818,12 @@ private struct SharedSettingsTab: View {
                             hygieneFilter: tokenInventoryHygiene
                         )
                     }
-                    .disabled(sharedActionDisabled)
+                    .disabled(scopedTokenReadDisabled)
 
                     Button("Revoke Token") {
                         store.revokeSharedServerToken(tokenID: revokeTokenID, repoScope: revokeTokenRepoScope)
                     }
-                    .disabled(sharedActionDisabled || revokeTokenID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(tokenRevokeDisabled || revokeTokenID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
                 Toggle("Confirm Matching Revoke", isOn: $confirmTokenInventoryRevoke)
                     .disabled(adminTokenBulkRevokeDisabled || !tokenInventoryHasBulkFilter)
@@ -842,7 +845,7 @@ private struct SharedSettingsTab: View {
                             hygieneFilter: tokenInventoryHygiene
                         )
                     }
-                    .disabled(sharedActionDisabled || !scopedTokenHasBulkFilter)
+                    .disabled(scopedTokenBulkRevokeDisabled || !scopedTokenHasBulkFilter)
 
                     Button("Revoke Scoped Tokens") {
                         store.revokeSharedServerMatchingScopedTokens(
@@ -852,10 +855,10 @@ private struct SharedSettingsTab: View {
                         )
                         confirmScopedTokenRevoke = false
                     }
-                    .disabled(sharedActionDisabled || !scopedTokenHasBulkFilter || !confirmScopedTokenRevoke)
+                    .disabled(scopedTokenBulkRevokeDisabled || !scopedTokenHasBulkFilter || !confirmScopedTokenRevoke)
                 }
                 Toggle("Confirm Scoped Revoke", isOn: $confirmScopedTokenRevoke)
-                    .disabled(sharedActionDisabled || !scopedTokenHasBulkFilter)
+                    .disabled(scopedTokenBulkRevokeDisabled || !scopedTokenHasBulkFilter)
 
                 Divider()
 
@@ -873,36 +876,36 @@ private struct SharedSettingsTab: View {
                     Button("Copy Audit") {
                         store.copySharedServerAudit(repoScope: auditRepoScope, lastHours: auditLastHours, since: auditSince, until: auditUntil)
                     }
-                    .disabled(sharedActionDisabled)
+                    .disabled(repoAuditReadDisabled)
 
                     Button("Copy Activity") {
                         store.copySharedServerActivityAudit(repoScope: auditRepoScope, lastHours: auditLastHours, since: auditSince, until: auditUntil)
                     }
-                    .disabled(sharedActionDisabled)
+                    .disabled(repoAuditReadDisabled)
                 }
 
                 HStack {
                     Button("Copy Access Changes") {
                         store.copySharedServerAccessChangeAudit(repoScope: auditRepoScope, lastHours: auditLastHours, since: auditSince, until: auditUntil)
                     }
-                    .disabled(sharedActionDisabled)
+                    .disabled(repoAuditReadDisabled)
 
                     Button("Copy Context Audit") {
                         store.copySharedServerContextAudit(repoScope: auditRepoScope, lastHours: auditLastHours, since: auditSince, until: auditUntil)
                     }
-                    .disabled(sharedActionDisabled)
+                    .disabled(repoAuditReadDisabled)
 
                     Button("Copy Integrity") {
                         store.copySharedServerAuditIntegrity(repoScope: auditRepoScope, lastHours: auditLastHours, since: auditSince, until: auditUntil)
                     }
-                    .disabled(sharedActionDisabled)
+                    .disabled(repoAuditReadDisabled)
                 }
 
                 HStack {
                     Button("Copy Security") {
                         store.copySharedServerSecurityAudit(lastHours: auditLastHours, since: auditSince, until: auditUntil)
                     }
-                    .disabled(sharedActionDisabled)
+                    .disabled(globalAuditReadDisabled)
                 }
 
                 Divider()
@@ -929,7 +932,7 @@ private struct SharedSettingsTab: View {
                     )
                 }
                 .disabled(
-                    sharedActionDisabled ||
+                    auditReceiptVerifyDisabled ||
                     auditReceiptID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
                     auditReceiptHash.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 )
@@ -987,6 +990,83 @@ private struct SharedSettingsTab: View {
 
     private var sharedActionDisabled: Bool {
         store.isCheckingSharedServer || store.isManagingSharedAccess
+    }
+
+    private var repoPolicyReadDisabled: Bool {
+        sharedActionDisabled || store.currentSharedServer?.team?.canReadPolicy != true
+    }
+
+    private var repoPolicyInventoryDisabled: Bool {
+        sharedActionDisabled || store.currentSharedServer?.team?.canListPolicies != true
+    }
+
+    private var repoPolicyUpdateDisabled: Bool {
+        sharedActionDisabled || store.currentSharedServer?.team?.canUpdateRepoPolicy != true
+    }
+
+    private var repoPolicyResetDisabled: Bool {
+        sharedActionDisabled || store.currentSharedServer?.team?.canResetRepoPolicy != true
+    }
+
+    private var inviteUserDisabled: Bool {
+        sharedActionDisabled || store.currentSharedServer?.team?.canInviteUsers != true
+    }
+
+    private var grantAccessDisabled: Bool {
+        sharedActionDisabled || store.currentSharedServer?.team?.canGrantAccess != true
+    }
+
+    private var revokeGrantDisabled: Bool {
+        sharedActionDisabled || store.currentSharedServer?.team?.canRevokeGrants != true
+    }
+
+    private var handoffOwnerDisabled: Bool {
+        sharedActionDisabled || store.currentSharedServer?.team?.canHandoffOwner != true
+    }
+
+    private var userListDisabled: Bool {
+        sharedActionDisabled || store.currentSharedServer?.team?.canListUsers != true
+    }
+
+    private var grantListDisabled: Bool {
+        sharedActionDisabled || store.currentSharedServer?.team?.canListGrants != true
+    }
+
+    private var userDisableDisabled: Bool {
+        sharedActionDisabled || store.currentSharedServer?.team?.canDisableUsers != true
+    }
+
+    private var userEnableDisabled: Bool {
+        sharedActionDisabled || store.currentSharedServer?.team?.canEnableUsers != true
+    }
+
+    private var userTokenCreateDisabled: Bool {
+        sharedActionDisabled || store.currentSharedServer?.team?.canCreateUserTokens != true
+    }
+
+    private var scopedTokenReadDisabled: Bool {
+        sharedActionDisabled || store.currentSharedServer?.team?.canReadScopedTokens != true
+    }
+
+    private var tokenRevokeDisabled: Bool {
+        let team = store.currentSharedServer?.team
+        return sharedActionDisabled || (team?.canRevokeGlobalTokens != true && team?.canRevokeScopedTokens != true)
+    }
+
+    private var scopedTokenBulkRevokeDisabled: Bool {
+        sharedActionDisabled || store.currentSharedServer?.team?.canBulkRevokeScopedTokens != true
+    }
+
+    private var repoAuditReadDisabled: Bool {
+        sharedActionDisabled || store.currentSharedServer?.team?.canAdminRepo != true
+    }
+
+    private var globalAuditReadDisabled: Bool {
+        sharedActionDisabled || store.currentSharedServer?.me?.isAdmin != true
+    }
+
+    private var auditReceiptVerifyDisabled: Bool {
+        repoAuditReadDisabled
     }
 
     private var storageStatusDisabled: Bool {

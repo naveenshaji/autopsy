@@ -5465,6 +5465,29 @@ def build_shared_server_team_status_payload(
         "can_read_audit_reader_summary": False,
         "can_read_shared_read_summary": False,
         "can_read_storage_status": False,
+        "can_read_repo": False,
+        "can_write_repo": False,
+        "can_admin_repo": False,
+        "repo_access_reason": "",
+        "repo_effective_role": "",
+        "repo_access_token_scoped": False,
+        "repo_access_token_scope_matches": False,
+        "repo_access_token_scope_role": "",
+        "can_create_users": False,
+        "can_disable_users": False,
+        "can_enable_users": False,
+        "can_create_user_tokens": False,
+        "can_list_user_tokens": False,
+        "can_revoke_global_tokens": False,
+        "can_invite_users": False,
+        "can_grant_access": False,
+        "can_revoke_grants": False,
+        "can_handoff_owner": False,
+        "can_read_scoped_tokens": False,
+        "can_revoke_scoped_tokens": False,
+        "can_bulk_revoke_scoped_tokens": False,
+        "can_update_repo_policy": False,
+        "can_reset_repo_policy": False,
         "can_use_admin_export_snapshot": False,
         "can_use_admin_export_snapshot_validation": False,
         "can_use_admin_export_snapshot_restore_plan": False,
@@ -5483,6 +5506,12 @@ def build_shared_server_team_status_payload(
     server_security = capabilities_payload.get("security") if isinstance(capabilities_payload.get("security"), dict) else {}
     me = payload.get("me") if isinstance(payload.get("me"), dict) else {}
     is_admin = bool(me.get("is_admin"))
+    team["can_create_users"] = is_admin
+    team["can_disable_users"] = is_admin and bool(server_capabilities.get("disabled_user_lifecycle"))
+    team["can_enable_users"] = is_admin and bool(server_capabilities.get("disabled_user_lifecycle"))
+    team["can_create_user_tokens"] = is_admin
+    team["can_list_user_tokens"] = is_admin
+    team["can_revoke_global_tokens"] = is_admin
     team["can_use_idempotency_keys"] = bool(server_capabilities.get("idempotency_keys"))
     team["can_use_idempotency_record_retention"] = bool(server_capabilities.get("idempotency_record_retention"))
     team["can_use_admin_export_snapshot"] = is_admin and bool(server_capabilities.get("admin_export_snapshot"))
@@ -5508,6 +5537,43 @@ def build_shared_server_team_status_payload(
     if not payload.get("configured") or not config:
         return payload
     graph_slug = shared_server_graph_slug_from_args(argparse.Namespace(graph_slug=None), config)
+    repo_scope = repo or "*"
+
+    def refresh_repo_admin_action_flags() -> None:
+        repo_admin = bool(team.get("can_admin_repo"))
+        team["can_invite_users"] = repo_admin and bool(server_capabilities.get("scoped_invitation_tokens"))
+        team["can_grant_access"] = repo_admin and bool(server_capabilities.get("repo_scoped_grants"))
+        team["can_revoke_grants"] = repo_admin and bool(server_capabilities.get("repo_scoped_grants"))
+        team["can_handoff_owner"] = repo_admin and bool(server_capabilities.get("owner_handoff"))
+        team["can_read_scoped_tokens"] = repo_admin
+        team["can_revoke_scoped_tokens"] = repo_admin
+        team["can_bulk_revoke_scoped_tokens"] = repo_admin and bool(server_capabilities.get("scoped_token_bulk_revoke"))
+        team["can_update_repo_policy"] = repo_admin and bool(server_capabilities.get("repo_policies"))
+        team["can_reset_repo_policy"] = repo_admin and bool(server_capabilities.get("repo_policy_reset"))
+
+    try:
+        access_payload = shared_server_request(
+            config,
+            shared_server_access_check_path(graph_slug, repo_scope, mode="admin"),
+            timeout=10,
+        )
+    except urllib.error.HTTPError as exc:
+        team["repo_access_error"] = shared_server_http_error_message(exc)
+    except Exception as exc:
+        team["repo_access_error"] = str(exc)
+    else:
+        access_capabilities = access_payload.get("capabilities") if isinstance(access_payload.get("capabilities"), dict) else {}
+        token_scope = access_payload.get("token_scope") if isinstance(access_payload.get("token_scope"), dict) else {}
+        team["can_read_repo"] = bool(access_capabilities.get("can_read"))
+        team["can_write_repo"] = bool(access_capabilities.get("can_write"))
+        team["can_admin_repo"] = bool(access_capabilities.get("can_admin") or access_payload.get("allowed"))
+        team["repo_access_reason"] = str(access_payload.get("reason") or "")
+        team["repo_effective_role"] = str(access_payload.get("effective_role") or "")
+        team["repo_access_token_scoped"] = bool(token_scope.get("scoped"))
+        team["repo_access_token_scope_matches"] = bool(token_scope.get("matches"))
+        team["repo_access_token_scope_role"] = str(token_scope.get("role") or "")
+        refresh_repo_admin_action_flags()
+
     if is_admin:
         try:
             storage_payload = shared_server_request(config, shared_server_storage_status_path(), timeout=10)
@@ -5528,58 +5594,62 @@ def build_shared_server_team_status_payload(
             users = users_payload.get("items") if isinstance(users_payload.get("items"), list) else []
             team["can_list_users"] = True
             team.update(summarize_shared_server_users(users))
-    try:
-        grants_payload = shared_server_request(config, shared_server_grants_path(graph_slug, repo), timeout=10)
-    except urllib.error.HTTPError as exc:
-        team["grants_error"] = shared_server_http_error_message(exc)
-    except Exception as exc:
-        team["grants_error"] = str(exc)
-    else:
-        grants = grants_payload.get("items") if isinstance(grants_payload.get("items"), list) else []
-        team["can_list_grants"] = True
-        team.update(summarize_shared_server_grants(grants))
-    try:
-        tokens_payload = shared_server_request(config, shared_server_scoped_tokens_path(graph_slug, repo or "*"), timeout=10)
-    except urllib.error.HTTPError as exc:
-        team["tokens_error"] = shared_server_http_error_message(exc)
-    except Exception as exc:
-        team["tokens_error"] = str(exc)
-    else:
-        tokens = tokens_payload.get("items") if isinstance(tokens_payload.get("items"), list) else []
-        team["can_list_tokens"] = True
-        team.update(summarize_shared_server_tokens(tokens))
-    try:
-        policies_payload = shared_server_request(
-            config,
-            shared_server_policies_path(graph_slug, repo, limit=50),
-            timeout=10,
-        )
-    except urllib.error.HTTPError as exc:
-        team["policies_error"] = shared_server_http_error_message(exc)
-    except Exception as exc:
-        team["policies_error"] = str(exc)
-    else:
-        policies = policies_payload.get("items") if isinstance(policies_payload.get("items"), list) else []
-        team["can_list_policies"] = True
-        team["policy_inventory_repo_filter_present"] = bool(policies_payload.get("repo_filter_present"))
-        team.update(summarize_shared_server_policies(policies))
-    try:
-        policy_payload = shared_server_request(
-            config,
-            shared_server_policy_path(graph_slug, repo or "*"),
-            timeout=10,
-        )
-    except urllib.error.HTTPError as exc:
-        team["policy_error"] = shared_server_http_error_message(exc)
-    except Exception as exc:
-        team["policy_error"] = str(exc)
-    else:
-        team["can_read_policy"] = True
-        team.update(summarize_shared_server_effective_policy(policy_payload))
+    if bool(team.get("can_admin_repo")):
+        try:
+            grants_payload = shared_server_request(config, shared_server_grants_path(graph_slug, repo), timeout=10)
+        except urllib.error.HTTPError as exc:
+            team["grants_error"] = shared_server_http_error_message(exc)
+        except Exception as exc:
+            team["grants_error"] = str(exc)
+        else:
+            grants = grants_payload.get("items") if isinstance(grants_payload.get("items"), list) else []
+            team["can_list_grants"] = True
+            team.update(summarize_shared_server_grants(grants))
+        try:
+            tokens_payload = shared_server_request(config, shared_server_scoped_tokens_path(graph_slug, repo_scope), timeout=10)
+        except urllib.error.HTTPError as exc:
+            team["tokens_error"] = shared_server_http_error_message(exc)
+        except Exception as exc:
+            team["tokens_error"] = str(exc)
+        else:
+            tokens = tokens_payload.get("items") if isinstance(tokens_payload.get("items"), list) else []
+            team["can_list_tokens"] = True
+            team.update(summarize_shared_server_tokens(tokens))
+        try:
+            policies_payload = shared_server_request(
+                config,
+                shared_server_policies_path(graph_slug, repo, limit=50),
+                timeout=10,
+            )
+        except urllib.error.HTTPError as exc:
+            team["policies_error"] = shared_server_http_error_message(exc)
+        except Exception as exc:
+            team["policies_error"] = str(exc)
+        else:
+            policies = policies_payload.get("items") if isinstance(policies_payload.get("items"), list) else []
+            team["can_list_policies"] = True
+            team["policy_inventory_repo_filter_present"] = bool(policies_payload.get("repo_filter_present"))
+            team.update(summarize_shared_server_policies(policies))
+    if bool(team.get("can_read_repo")):
+        try:
+            policy_payload = shared_server_request(
+                config,
+                shared_server_policy_path(graph_slug, repo_scope),
+                timeout=10,
+            )
+        except urllib.error.HTTPError as exc:
+            team["policy_error"] = shared_server_http_error_message(exc)
+        except Exception as exc:
+            team["policy_error"] = str(exc)
+        else:
+            team["can_read_policy"] = True
+            team.update(summarize_shared_server_effective_policy(policy_payload))
+    if not bool(team.get("can_admin_repo")):
+        return payload
     try:
         integrity_payload = shared_server_request(
             config,
-            shared_server_audit_integrity_path(graph_slug, repo or "*", limit=50, since=audit_since, until=audit_until),
+            shared_server_audit_integrity_path(graph_slug, repo_scope, limit=50, since=audit_since, until=audit_until),
             timeout=10,
         )
     except urllib.error.HTTPError as exc:

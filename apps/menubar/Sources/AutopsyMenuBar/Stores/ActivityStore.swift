@@ -300,6 +300,29 @@ final class ActivityStore: ObservableObject {
         return me.id ?? ""
     }
 
+    var sharedServerRepoAccessText: String {
+        guard let team = currentSharedServer?.team else { return "" }
+        let capabilities = [
+            team.canReadRepo == true ? "read" : nil,
+            team.canWriteRepo == true ? "write" : nil,
+            team.canAdminRepo == true ? "admin" : nil,
+        ].compactMap { $0 }
+        let capabilityText = capabilities.isEmpty ? "none" : capabilities.joined(separator: "/")
+        let role = team.repoEffectiveRole?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let reason = team.repoAccessReason?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        var parts = [capabilityText]
+        if !role.isEmpty {
+            parts.append("role \(role)")
+        } else if !reason.isEmpty {
+            parts.append(reason)
+        }
+        if team.repoAccessTokenScoped == true {
+            let scope = team.repoAccessTokenScopeRole?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            parts.append(scope.isEmpty ? "scoped token" : "scoped token \(scope)")
+        }
+        return parts.joined(separator: ", ").clippedForMenuBar(limit: 80)
+    }
+
     var sharedServerAuditWindowText: String {
         guard let team = currentSharedServer?.team else { return "" }
         let since = team.auditWindowSince?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
