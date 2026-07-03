@@ -147,6 +147,7 @@ struct SharedServerTeamPayload: Decodable {
     var canUseTokenInventoryFingerprints: Bool?
     var canUseIdempotencyKeys: Bool?
     var canUseIdempotencyRecordRetention: Bool?
+    var canUseAccessMutationIdempotency: Bool?
     var idempotencyRecordRetentionDays: Int?
     var idempotencyPendingTimeoutSeconds: Int?
     var usersCount: Int?
@@ -347,6 +348,7 @@ struct SharedServerTeamPayload: Decodable {
         case canUseTokenInventoryFingerprints = "can_use_token_inventory_fingerprints"
         case canUseIdempotencyKeys = "can_use_idempotency_keys"
         case canUseIdempotencyRecordRetention = "can_use_idempotency_record_retention"
+        case canUseAccessMutationIdempotency = "can_use_access_mutation_idempotency"
         case idempotencyRecordRetentionDays = "idempotency_record_retention_days"
         case idempotencyPendingTimeoutSeconds = "idempotency_pending_timeout_seconds"
         case usersCount = "users_count"

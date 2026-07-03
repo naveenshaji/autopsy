@@ -4368,6 +4368,36 @@ def shared_server_idempotency_headers(args: argparse.Namespace, *, action: str) 
     return {"Idempotency-Key": key}
 
 
+def shared_server_request_with_retry(
+    config: dict[str, Any],
+    path: str,
+    *,
+    method: str = "GET",
+    payload: dict[str, Any] | None = None,
+    timeout: float = 5.0,
+    extra_headers: dict[str, str] | None = None,
+    retry_transient: bool = False,
+) -> dict[str, Any]:
+    attempts = 2 if retry_transient else 1
+    for attempt in range(attempts):
+        try:
+            request_kwargs: dict[str, Any] = {"method": method, "payload": payload, "timeout": timeout}
+            if extra_headers:
+                request_kwargs["extra_headers"] = extra_headers
+            return shared_server_request(config, path, **request_kwargs)
+        except urllib.error.HTTPError as exc:
+            if retry_transient and attempt + 1 < attempts and exc.code in SHARED_SERVER_TRANSIENT_HTTP_STATUS_CODES:
+                time.sleep(0.25 * (attempt + 1))
+                continue
+            raise
+        except Exception:
+            if retry_transient and attempt + 1 < attempts:
+                time.sleep(0.25 * (attempt + 1))
+                continue
+            raise
+    raise AssertionError("unreachable")
+
+
 def format_shared_server_error_detail(value: Any) -> str:
     if isinstance(value, dict):
         access = value.get("access") if isinstance(value.get("access"), dict) else {}
@@ -4492,23 +4522,20 @@ def shared_server_request_or_fail(
     extra_headers: dict[str, str] | None = None,
     retry_transient: bool = False,
 ) -> dict[str, Any]:
-    attempts = 2 if retry_transient else 1
-    for attempt in range(attempts):
-        try:
-            request_kwargs: dict[str, Any] = {"method": method, "payload": payload, "timeout": timeout}
-            if extra_headers:
-                request_kwargs["extra_headers"] = extra_headers
-            return shared_server_request(config, path, **request_kwargs)
-        except urllib.error.HTTPError as exc:
-            if retry_transient and attempt + 1 < attempts and exc.code in SHARED_SERVER_TRANSIENT_HTTP_STATUS_CODES:
-                time.sleep(0.25 * (attempt + 1))
-                continue
-            fail(f"shared server request failed: {shared_server_http_error_message(exc)}")
-        except Exception as exc:
-            if retry_transient and attempt + 1 < attempts:
-                time.sleep(0.25 * (attempt + 1))
-                continue
-            fail(f"shared server request failed: {exc}")
+    try:
+        return shared_server_request_with_retry(
+            config,
+            path,
+            method=method,
+            payload=payload,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            retry_transient=retry_transient,
+        )
+    except urllib.error.HTTPError as exc:
+        fail(f"shared server request failed: {shared_server_http_error_message(exc)}")
+    except Exception as exc:
+        fail(f"shared server request failed: {exc}")
     raise AssertionError("unreachable")
 
 
@@ -5500,6 +5527,7 @@ def build_shared_server_team_status_payload(
         "can_use_token_inventory_fingerprints": False,
         "can_use_idempotency_keys": False,
         "can_use_idempotency_record_retention": False,
+        "can_use_access_mutation_idempotency": False,
     }
     capabilities_payload = payload.get("capabilities") if isinstance(payload.get("capabilities"), dict) else {}
     server_capabilities = capabilities_payload.get("capabilities") if isinstance(capabilities_payload.get("capabilities"), dict) else {}
@@ -5514,6 +5542,7 @@ def build_shared_server_team_status_payload(
     team["can_revoke_global_tokens"] = is_admin
     team["can_use_idempotency_keys"] = bool(server_capabilities.get("idempotency_keys"))
     team["can_use_idempotency_record_retention"] = bool(server_capabilities.get("idempotency_record_retention"))
+    team["can_use_access_mutation_idempotency"] = bool(server_capabilities.get("access_mutation_idempotency"))
     team["can_use_admin_export_snapshot"] = is_admin and bool(server_capabilities.get("admin_export_snapshot"))
     team["can_use_admin_export_snapshot_validation"] = is_admin and bool(server_capabilities.get("admin_export_snapshot_validation"))
     team["can_use_admin_export_snapshot_restore_plan"] = is_admin and bool(server_capabilities.get("admin_export_snapshot_restore_plan"))
@@ -6740,6 +6769,8 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
                 "reason": str(getattr(args, "reason", "") or ""),
             },
             timeout=20,
+            extra_headers=shared_server_idempotency_headers(args, action=action),
+            retry_transient=True,
         )
         print(json.dumps(payload, indent=2))
         return
@@ -6767,6 +6798,8 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
                 "reason": str(getattr(args, "reason", "") or ""),
             },
             timeout=20,
+            extra_headers=shared_server_idempotency_headers(args, action=action),
+            retry_transient=True,
         )
         print(json.dumps(payload, indent=2))
         return
@@ -6784,6 +6817,8 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
             method="POST",
             payload={"email": email, "name": str(getattr(args, "name", "") or "")},
             timeout=10,
+            extra_headers=shared_server_idempotency_headers(args, action=action),
+            retry_transient=True,
         )
         print(json.dumps(payload, indent=2))
         return
@@ -6797,6 +6832,8 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
             f"/v1/users/{urllib.parse.quote(user_id, safe='')}/{lifecycle}",
             method="POST",
             timeout=10,
+            extra_headers=shared_server_idempotency_headers(args, action=action),
+            retry_transient=True,
         )
         print(json.dumps(payload, indent=2))
         return
@@ -6943,6 +6980,8 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
             method="PUT",
             payload=policy_payload,
             timeout=10,
+            extra_headers=shared_server_idempotency_headers(args, action=action),
+            retry_transient=True,
         )
         print(json.dumps(payload, indent=2))
         return
@@ -6953,6 +6992,8 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
             shared_server_policy_reset_path(graph_slug, repo, expected_version_ns=int(existing.get("version_ns") or 0)),
             method="DELETE",
             timeout=10,
+            extra_headers=shared_server_idempotency_headers(args, action=action),
+            retry_transient=True,
         )
         print(json.dumps(payload, indent=2))
         return
@@ -7088,6 +7129,8 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
             method="POST",
             payload={"user_id": user_id, "graph_slug": graph_slug, "repo": repo, "role": role},
             timeout=10,
+            extra_headers=shared_server_idempotency_headers(args, action=action),
+            retry_transient=True,
         )
         print(json.dumps(payload, indent=2))
         return
@@ -7095,12 +7138,15 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         token_id = str(getattr(args, "stable_key", "") or "").strip()
         if not token_id:
             fail("shared-server revoke-token requires a token id", 2)
+        idempotency_headers = shared_server_idempotency_headers(args, action=action)
         try:
-            payload = shared_server_request(
+            payload = shared_server_request_with_retry(
                 config,
                 f"/v1/tokens/{urllib.parse.quote(token_id, safe='')}/revoke",
                 method="POST",
                 timeout=10,
+                extra_headers=idempotency_headers,
+                retry_transient=True,
             )
         except urllib.error.HTTPError as exc:
             if exc.code != 403:
@@ -7111,6 +7157,8 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
                 method="POST",
                 payload={"repo": repo},
                 timeout=10,
+                extra_headers=idempotency_headers,
+                retry_transient=True,
             )
         except Exception as exc:
             fail(f"shared server request failed: {exc}")
@@ -7126,6 +7174,8 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
             method="POST",
             payload={"user_id": user_id, "graph_slug": graph_slug, "repo": repo},
             timeout=10,
+            extra_headers=shared_server_idempotency_headers(args, action=action),
+            retry_transient=True,
         )
         print(json.dumps(payload, indent=2))
         return
@@ -7147,6 +7197,8 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
                 "source_role_after": source_role_after,
             },
             timeout=10,
+            extra_headers=shared_server_idempotency_headers(args, action=action),
+            retry_transient=True,
         )
         print(json.dumps(payload, indent=2))
         return

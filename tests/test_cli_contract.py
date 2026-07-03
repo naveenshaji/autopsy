@@ -9,6 +9,7 @@ import types
 import unittest
 import urllib.error
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -1078,10 +1079,10 @@ class AutopsyCLIContractTests(unittest.TestCase):
         parser = cli.build_parser()
         args = parser.parse_args(["shared-server", "revoke-token", "tok/1", "--repo-scope", "repo-a"])
         config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
-        calls: list[tuple[str, str, dict[str, str] | None]] = []
+        calls: list[tuple[str, str, dict[str, str] | None, dict[str, str] | None]] = []
 
-        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
-            calls.append((path, method, payload))
+        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0, extra_headers=None):
+            calls.append((path, method, payload, extra_headers))
             if path == "/v1/tokens/tok%2F1/revoke":
                 raise urllib.error.HTTPError(path, 403, "Forbidden", {}, io.BytesIO(b'{"detail":"admin access required"}'))
             return {"id": "tok/1", "revoked": True}
@@ -1097,12 +1098,14 @@ class AutopsyCLIContractTests(unittest.TestCase):
         payload = json.loads(stream.getvalue())
         self.assertEqual(payload["id"], "tok/1")
         self.assertEqual(
-            calls,
             [
                 ("/v1/tokens/tok%2F1/revoke", "POST", None),
                 ("/v1/shared-graphs/autopsy/tokens/tok%2F1/revoke", "POST", {"repo": "repo-a"}),
             ],
+            [(path, method, payload) for path, method, payload, _headers in calls],
         )
+        self.assertEqual(calls[0][3], calls[1][3])
+        self.assertRegex(calls[0][3]["Idempotency-Key"], r"^autopsy-revoke-token-[a-f0-9]{32}$")
 
     def test_shared_server_access_check_fetches_effective_access(self):
         parser = cli.build_parser()
@@ -1334,10 +1337,10 @@ class AutopsyCLIContractTests(unittest.TestCase):
         disable_args = parser.parse_args(["shared-server", "disable-user", "usr_1"])
         enable_args = parser.parse_args(["shared-server", "enable-user", "--user-id", "usr_1"])
         config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
-        calls: list[tuple[str, str, dict[str, str] | None]] = []
+        calls: list[tuple[str, str, dict[str, str] | None, dict[str, str] | None]] = []
 
-        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
-            calls.append((path, method, payload))
+        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0, extra_headers=None):
+            calls.append((path, method, payload, extra_headers))
             return {"id": "usr_1", "disabled": path.endswith("/disable")}
 
         with (
@@ -1349,12 +1352,14 @@ class AutopsyCLIContractTests(unittest.TestCase):
             enable_args.func(enable_args)
 
         self.assertEqual(
-            calls,
             [
                 ("/v1/users/usr_1/disable", "POST", None),
                 ("/v1/users/usr_1/enable", "POST", None),
             ],
+            [(path, method, payload) for path, method, payload, _headers in calls],
         )
+        self.assertRegex(calls[0][3]["Idempotency-Key"], r"^autopsy-disable-user-[a-f0-9]{32}$")
+        self.assertRegex(calls[1][3]["Idempotency-Key"], r"^autopsy-enable-user-[a-f0-9]{32}$")
 
     def test_shared_server_invite_posts_expiration_payload(self):
         parser = cli.build_parser()
@@ -1542,12 +1547,14 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "repo-a",
             "--source-role-after",
             "reader",
+            "--idempotency-key",
+            "manual-handoff-key-1",
         ])
         config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
-        calls: list[tuple[str, str, dict[str, str] | None]] = []
+        calls: list[tuple[str, str, dict[str, str] | None, dict[str, str] | None]] = []
 
-        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
-            calls.append((path, method, payload))
+        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0, extra_headers=None):
+            calls.append((path, method, payload, extra_headers))
             return {"from_user_id": "usr_owner", "to_user_id": "usr_peer", "source_role_after": "reader"}
 
         stream = io.StringIO()
@@ -1560,7 +1567,6 @@ class AutopsyCLIContractTests(unittest.TestCase):
 
         self.assertEqual(json.loads(stream.getvalue())["source_role_after"], "reader")
         self.assertEqual(
-            calls,
             [
                 (
                     "/v1/grants/handoff-owner",
@@ -1574,7 +1580,9 @@ class AutopsyCLIContractTests(unittest.TestCase):
                     },
                 )
             ],
+            [(path, method, payload) for path, method, payload, _headers in calls],
         )
+        self.assertEqual(calls[0][3], {"Idempotency-Key": "manual-handoff-key-1"})
 
     def test_shared_server_archive_posts_lifecycle_payload(self):
         parser = cli.build_parser()
@@ -3015,6 +3023,45 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(calls[0]["extra_headers"], calls[1]["extra_headers"])
         self.assertRegex(calls[0]["extra_headers"]["Idempotency-Key"], r"^autopsy-restore-apply-snapshot-[a-f0-9]{32}$")
 
+    def test_shared_server_grant_auto_idempotency_retries_transient(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "shared-server",
+            "grant",
+            "--user-id",
+            "usr_1",
+            "--role",
+            "writer",
+            "--repo-scope",
+            "repo-a",
+        ])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        calls: list[dict[str, Any]] = []
+
+        def fake_request(_config, path, **kwargs):
+            calls.append({"path": path, **kwargs})
+            if len(calls) == 1:
+                raise urllib.error.URLError("timed out")
+            return {"user_id": "usr_1", "graph_slug": "autopsy", "repo": "repo-a", "role": "writer"}
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            mock.patch.object(cli.time, "sleep", return_value=None),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        payload = json.loads(stream.getvalue())
+        self.assertEqual(payload["role"], "writer")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0]["path"], "/v1/grants")
+        self.assertEqual(calls[0]["method"], "POST")
+        self.assertEqual(calls[0]["payload"], calls[1]["payload"])
+        self.assertEqual(calls[0]["extra_headers"], calls[1]["extra_headers"])
+        self.assertRegex(calls[0]["extra_headers"]["Idempotency-Key"], r"^autopsy-grant-[a-f0-9]{32}$")
+
     def test_shared_server_admin_tokens_action_prints_remote_payload(self):
         parser = cli.build_parser()
         args = parser.parse_args([
@@ -3679,6 +3726,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "repo_policy_reset": True,
                         "idempotency_keys": True,
                         "idempotency_record_retention": True,
+                        "access_mutation_idempotency": True,
                     },
                     "security": {
                         "idempotency_record_retention_days": 7,
@@ -3772,6 +3820,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["team"]["repo_effective_role"], "reader")
         self.assertTrue(payload["team"]["can_use_idempotency_keys"])
         self.assertTrue(payload["team"]["can_use_idempotency_record_retention"])
+        self.assertTrue(payload["team"]["can_use_access_mutation_idempotency"])
 
     def test_shared_server_team_status_summarizes_remote_access_and_scoped_tokens(self):
         config = {
@@ -3806,6 +3855,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "repo_policy_reset": True,
                         "idempotency_keys": True,
                         "idempotency_record_retention": True,
+                        "access_mutation_idempotency": True,
                     },
                     "security": {
                         "idempotency_record_retention_days": 7,
@@ -4237,6 +4287,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertTrue(payload["team"]["can_reset_repo_policy"])
         self.assertTrue(payload["team"]["can_use_idempotency_keys"])
         self.assertTrue(payload["team"]["can_use_idempotency_record_retention"])
+        self.assertTrue(payload["team"]["can_use_access_mutation_idempotency"])
         self.assertEqual(payload["team"]["idempotency_record_retention_days"], 7)
         self.assertEqual(payload["team"]["idempotency_pending_timeout_seconds"], 3600)
         self.assertEqual(payload["team"]["users_count"], 2)
