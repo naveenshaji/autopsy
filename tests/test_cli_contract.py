@@ -3727,11 +3727,13 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "idempotency_keys": True,
                         "idempotency_record_retention": True,
                         "idempotency_response_secret_guard": True,
+                        "idempotency_response_size_guard": True,
                         "access_mutation_idempotency": True,
                     },
                     "security": {
                         "idempotency_record_retention_days": 7,
                         "idempotency_pending_timeout_seconds": 3600,
+                        "idempotency_response_max_bytes": 262144,
                     },
                 }
             if path == "/health":
@@ -3822,7 +3824,9 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertTrue(payload["team"]["can_use_idempotency_keys"])
         self.assertTrue(payload["team"]["can_use_idempotency_record_retention"])
         self.assertTrue(payload["team"]["can_use_idempotency_response_secret_guard"])
+        self.assertTrue(payload["team"]["can_use_idempotency_response_size_guard"])
         self.assertTrue(payload["team"]["can_use_access_mutation_idempotency"])
+        self.assertEqual(payload["team"]["idempotency_response_max_bytes"], 262144)
 
     def test_shared_server_team_status_summarizes_remote_access_and_scoped_tokens(self):
         config = {
@@ -3858,11 +3862,13 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "idempotency_keys": True,
                         "idempotency_record_retention": True,
                         "idempotency_response_secret_guard": True,
+                        "idempotency_response_size_guard": True,
                         "access_mutation_idempotency": True,
                     },
                     "security": {
                         "idempotency_record_retention_days": 7,
                         "idempotency_pending_timeout_seconds": 3600,
+                        "idempotency_response_max_bytes": 262144,
                     },
                 }
             if path == "/health":
@@ -4311,9 +4317,11 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertTrue(payload["team"]["can_use_idempotency_keys"])
         self.assertTrue(payload["team"]["can_use_idempotency_record_retention"])
         self.assertTrue(payload["team"]["can_use_idempotency_response_secret_guard"])
+        self.assertTrue(payload["team"]["can_use_idempotency_response_size_guard"])
         self.assertTrue(payload["team"]["can_use_access_mutation_idempotency"])
         self.assertEqual(payload["team"]["idempotency_record_retention_days"], 7)
         self.assertEqual(payload["team"]["idempotency_pending_timeout_seconds"], 3600)
+        self.assertEqual(payload["team"]["idempotency_response_max_bytes"], 262144)
         self.assertEqual(payload["team"]["users_count"], 2)
         self.assertEqual(payload["team"]["active_users_count"], 1)
         self.assertEqual(payload["team"]["disabled_users_count"], 1)

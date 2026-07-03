@@ -369,6 +369,7 @@ final class ActivityStore: ObservableObject {
                 ("idempotency_keys", "retry-safe memory writes"),
                 ("access_mutation_idempotency", "retry-safe access actions"),
                 ("idempotency_response_secret_guard", "secret-safe retry storage"),
+                ("idempotency_response_size_guard", idempotencyResponseSizeLimitLabel(capabilities)),
                 ("idempotency_record_retention", idempotencyRetentionLabel(capabilities)),
                 ("relation_policy_preflight", "relation checks"),
                 ("relation_policy_write_cas", "stale-safe relation writes"),
@@ -407,6 +408,14 @@ final class ActivityStore: ObservableObject {
             return "idempotency retention"
         }
         return "idempotency retention \(days)d"
+    }
+
+    private func idempotencyResponseSizeLimitLabel(_ capabilities: SharedServerCapabilitiesPayload) -> String {
+        guard let bytes = capabilities.security?.idempotencyResponseMaxBytes, bytes > 0 else {
+            return "retry body limit"
+        }
+        let formatted = ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+        return "retry body limit \(formatted)"
     }
 
     var sharedServerUsersText: String {

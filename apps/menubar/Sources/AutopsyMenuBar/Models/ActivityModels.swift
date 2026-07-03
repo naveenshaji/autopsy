@@ -70,11 +70,13 @@ struct SharedServerSecurityPayload: Decodable {
     var defaultInviteTokenExpirationDays: Int?
     var idempotencyRecordRetentionDays: Int?
     var idempotencyPendingTimeoutSeconds: Int?
+    var idempotencyResponseMaxBytes: Int?
 
     enum CodingKeys: String, CodingKey {
         case defaultInviteTokenExpirationDays = "default_invite_token_expiration_days"
         case idempotencyRecordRetentionDays = "idempotency_record_retention_days"
         case idempotencyPendingTimeoutSeconds = "idempotency_pending_timeout_seconds"
+        case idempotencyResponseMaxBytes = "idempotency_response_max_bytes"
     }
 }
 
@@ -149,9 +151,11 @@ struct SharedServerTeamPayload: Decodable {
     var canUseIdempotencyKeys: Bool?
     var canUseIdempotencyRecordRetention: Bool?
     var canUseIdempotencyResponseSecretGuard: Bool?
+    var canUseIdempotencyResponseSizeGuard: Bool?
     var canUseAccessMutationIdempotency: Bool?
     var idempotencyRecordRetentionDays: Int?
     var idempotencyPendingTimeoutSeconds: Int?
+    var idempotencyResponseMaxBytes: Int?
     var usersCount: Int?
     var activeUsersCount: Int?
     var disabledUsersCount: Int?
@@ -357,9 +361,11 @@ struct SharedServerTeamPayload: Decodable {
         case canUseIdempotencyKeys = "can_use_idempotency_keys"
         case canUseIdempotencyRecordRetention = "can_use_idempotency_record_retention"
         case canUseIdempotencyResponseSecretGuard = "can_use_idempotency_response_secret_guard"
+        case canUseIdempotencyResponseSizeGuard = "can_use_idempotency_response_size_guard"
         case canUseAccessMutationIdempotency = "can_use_access_mutation_idempotency"
         case idempotencyRecordRetentionDays = "idempotency_record_retention_days"
         case idempotencyPendingTimeoutSeconds = "idempotency_pending_timeout_seconds"
+        case idempotencyResponseMaxBytes = "idempotency_response_max_bytes"
         case usersCount = "users_count"
         case activeUsersCount = "active_users_count"
         case disabledUsersCount = "disabled_users_count"

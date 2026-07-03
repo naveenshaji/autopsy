@@ -5560,6 +5560,7 @@ def build_shared_server_team_status_payload(
         "can_use_idempotency_keys": False,
         "can_use_idempotency_record_retention": False,
         "can_use_idempotency_response_secret_guard": False,
+        "can_use_idempotency_response_size_guard": False,
         "can_use_access_mutation_idempotency": False,
     }
     capabilities_payload = payload.get("capabilities") if isinstance(payload.get("capabilities"), dict) else {}
@@ -5576,6 +5577,7 @@ def build_shared_server_team_status_payload(
     team["can_use_idempotency_keys"] = bool(server_capabilities.get("idempotency_keys"))
     team["can_use_idempotency_record_retention"] = bool(server_capabilities.get("idempotency_record_retention"))
     team["can_use_idempotency_response_secret_guard"] = bool(server_capabilities.get("idempotency_response_secret_guard"))
+    team["can_use_idempotency_response_size_guard"] = bool(server_capabilities.get("idempotency_response_size_guard"))
     team["can_use_access_mutation_idempotency"] = bool(server_capabilities.get("access_mutation_idempotency"))
     team["can_use_admin_export_snapshot"] = is_admin and bool(server_capabilities.get("admin_export_snapshot"))
     team["can_use_admin_export_snapshot_validation"] = is_admin and bool(server_capabilities.get("admin_export_snapshot_validation"))
@@ -5593,6 +5595,7 @@ def build_shared_server_team_status_payload(
     team["can_use_token_inventory_fingerprints"] = bool(server_capabilities.get("token_inventory_fingerprints"))
     team["idempotency_record_retention_days"] = _safe_int(server_security.get("idempotency_record_retention_days"))
     team["idempotency_pending_timeout_seconds"] = _safe_int(server_security.get("idempotency_pending_timeout_seconds"))
+    team["idempotency_response_max_bytes"] = _safe_int(server_security.get("idempotency_response_max_bytes"))
     if audit_since or audit_until:
         team["audit_window_since"] = audit_since
         team["audit_window_until"] = audit_until
