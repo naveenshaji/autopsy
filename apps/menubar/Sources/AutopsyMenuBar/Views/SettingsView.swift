@@ -285,24 +285,24 @@ private struct SharedSettingsTab: View {
                     Button("Copy Storage") {
                         store.copySharedServerStorageStatus()
                     }
-                    .disabled(sharedActionDisabled)
+                    .disabled(storageStatusDisabled)
 
                     Button("Copy Export") {
                         store.copySharedServerExportSnapshot()
                     }
-                    .disabled(sharedActionDisabled)
+                    .disabled(exportSnapshotDisabled)
                 }
 
                 HStack {
                     Button("Validate Export") {
                         store.validateSharedServerExportSnapshotClipboard()
                     }
-                    .disabled(sharedActionDisabled)
+                    .disabled(validateExportSnapshotDisabled)
 
                     Button("Plan Restore") {
                         store.planSharedServerExportSnapshotRestoreClipboard()
                     }
-                    .disabled(sharedActionDisabled)
+                    .disabled(planRestoreSnapshotDisabled)
                 }
 
                 HStack {
@@ -313,7 +313,10 @@ private struct SharedSettingsTab: View {
                             expectedPlanDigest: restoreApplyExpectedDigest
                         )
                     }
-                    .disabled(sharedActionDisabled || restoreApplyExpectedDigest.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(
+                        applyRestoreSnapshotDisabled
+                            || restoreApplyExpectedDigest.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    )
                 }
 
                 TextField("Team Audit Hours", text: $teamStatusAuditLastHours)
@@ -984,6 +987,26 @@ private struct SharedSettingsTab: View {
 
     private var sharedActionDisabled: Bool {
         store.isCheckingSharedServer || store.isManagingSharedAccess
+    }
+
+    private var storageStatusDisabled: Bool {
+        sharedActionDisabled || store.currentSharedServer?.team?.canReadStorageStatus != true
+    }
+
+    private var exportSnapshotDisabled: Bool {
+        sharedActionDisabled || store.currentSharedServer?.team?.canUseAdminExportSnapshot != true
+    }
+
+    private var validateExportSnapshotDisabled: Bool {
+        sharedActionDisabled || store.currentSharedServer?.team?.canUseAdminExportSnapshotValidation != true
+    }
+
+    private var planRestoreSnapshotDisabled: Bool {
+        sharedActionDisabled || store.currentSharedServer?.team?.canUseAdminExportSnapshotRestorePlan != true
+    }
+
+    private var applyRestoreSnapshotDisabled: Bool {
+        sharedActionDisabled || store.currentSharedServer?.team?.canUseAdminExportSnapshotRestoreApply != true
     }
 
     private var tokenInventoryHasBulkFilter: Bool {
