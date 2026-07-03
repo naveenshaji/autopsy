@@ -293,6 +293,22 @@ final class ActivityStore: ObservableObject {
         return me.id ?? ""
     }
 
+    var sharedServerAuditWindowText: String {
+        guard let team = currentSharedServer?.team else { return "" }
+        let since = team.auditWindowSince?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let until = team.auditWindowUntil?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if since.isEmpty && until.isEmpty {
+            return ""
+        }
+        if !since.isEmpty && !until.isEmpty {
+            return "\(since) to \(until)".clippedForMenuBar(limit: 90)
+        }
+        if !since.isEmpty {
+            return "since \(since)".clippedForMenuBar(limit: 90)
+        }
+        return "until \(until)".clippedForMenuBar(limit: 90)
+    }
+
     var sharedServerFeaturesText: String {
         guard let sharedServer = currentSharedServer else { return "" }
         if let capabilities = sharedServer.capabilities {
@@ -314,6 +330,7 @@ final class ActivityStore: ObservableObject {
                 ("relation_policy_write_cas", "stale-safe relation writes"),
                 ("mutation_audit_receipts", "audit receipts"),
                 ("audit_receipt_verification", "audit verification"),
+                ("audit_event_time_windows", "audit windows"),
                 ("personal_shared_relations", "personal links"),
                 ("unsafe_shared_write_guard", "write guard"),
             ].compactMap { key, label in
@@ -1006,9 +1023,9 @@ final class ActivityStore: ObservableObject {
         }
     }
 
-    func refreshSharedServerTeam() {
+    func refreshSharedServerTeam(lastHours: String = "", since: String = "", until: String = "") {
         Task {
-            await loadSharedServerTeamStatus()
+            await loadSharedServerTeamStatus(lastHours: lastHours, since: since, until: until)
         }
     }
 
@@ -1483,7 +1500,7 @@ final class ActivityStore: ObservableObject {
         }
     }
 
-    private func loadSharedServerTeamStatus() async {
+    private func loadSharedServerTeamStatus(lastHours: String = "", since: String = "", until: String = "") async {
         guard !isCheckingSharedServer else { return }
         isCheckingSharedServer = true
         sharedServerError = nil
@@ -1493,12 +1510,14 @@ final class ActivityStore: ObservableObject {
 
         do {
             let repoScope = sharedServerDefaultRepoScope
-            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 25).run([
+            var arguments = [
                 "shared-server",
                 "team-status",
                 "--repo-scope",
                 repoScope,
-            ])
+            ]
+            arguments += auditWindowArguments(lastHours: lastHours, since: since, until: until)
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 25).run(arguments)
             sharedServerStatus = try JSONDecoder().decode(SharedServerPayload.self, from: Data(output.utf8))
         } catch {
             sharedServerError = error.localizedDescription

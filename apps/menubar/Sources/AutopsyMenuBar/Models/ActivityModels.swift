@@ -90,6 +90,8 @@ struct SharedServerUserPayload: Decodable {
 
 struct SharedServerTeamPayload: Decodable {
     var repo: String?
+    var auditWindowSince: String?
+    var auditWindowUntil: String?
     var canListUsers: Bool?
     var canListGrants: Bool?
     var canListTokens: Bool?
@@ -218,6 +220,8 @@ struct SharedServerTeamPayload: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case repo
+        case auditWindowSince = "audit_window_since"
+        case auditWindowUntil = "audit_window_until"
         case canListUsers = "can_list_users"
         case canListGrants = "can_list_grants"
         case canListTokens = "can_list_tokens"

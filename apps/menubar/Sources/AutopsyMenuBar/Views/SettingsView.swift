@@ -118,6 +118,9 @@ private struct SharedSettingsTab: View {
     @State private var newUserName = ""
     @State private var accessCheckRepoScope = ""
     @State private var accessCheckMode = "read"
+    @State private var teamStatusAuditLastHours = ""
+    @State private var teamStatusAuditSince = ""
+    @State private var teamStatusAuditUntil = ""
     @State private var policyRepoScope = ""
     @State private var policyRelationLabels = ""
     @State private var policyMemoryKinds = ""
@@ -208,6 +211,9 @@ private struct SharedSettingsTab: View {
                 if !store.sharedServerFeaturesText.isEmpty {
                     LabeledContent("Features", value: store.sharedServerFeaturesText)
                 }
+                if !store.sharedServerAuditWindowText.isEmpty {
+                    LabeledContent("Audit Window", value: store.sharedServerAuditWindowText)
+                }
                 if !store.sharedServerStorageText.isEmpty {
                     LabeledContent("Storage", value: store.sharedServerStorageText)
                 }
@@ -253,7 +259,11 @@ private struct SharedSettingsTab: View {
                     .disabled(sharedActionDisabled)
 
                     Button("Refresh Team") {
-                        store.refreshSharedServerTeam()
+                        store.refreshSharedServerTeam(
+                            lastHours: teamStatusAuditLastHours,
+                            since: teamStatusAuditSince,
+                            until: teamStatusAuditUntil
+                        )
                     }
                     .disabled(sharedActionDisabled)
 
@@ -261,6 +271,15 @@ private struct SharedSettingsTab: View {
                         store.copySharedServerStorageStatus()
                     }
                     .disabled(sharedActionDisabled)
+                }
+
+                TextField("Team Audit Hours", text: $teamStatusAuditLastHours)
+                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    TextField("Team Audit Since", text: $teamStatusAuditSince)
+                        .textFieldStyle(.roundedBorder)
+                    TextField("Team Audit Until", text: $teamStatusAuditUntil)
+                        .textFieldStyle(.roundedBorder)
                 }
             }
 

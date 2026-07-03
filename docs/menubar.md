@@ -131,7 +131,9 @@ Run checks:
   send the policy fingerprint/version returned by the server before mutating
   shared memory.
   Team status surfaces relation-policy and memory-policy conflict counts with
-  compact reason breakdowns when the server audit summary endpoint is available.
+  compact reason breakdowns when the server audit summary endpoint is available,
+  and its refresh controls accept optional relative-hour or since/until audit
+  windows when the server supports audit-event time windows.
   Audit copy controls accept optional relative-hour or since/until ISO-8601
   windows and pass them through to audit, activity, access-change, context,
   integrity, and security reports when supported by the server.
