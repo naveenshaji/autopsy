@@ -496,6 +496,7 @@ def build_parser(
     shared_server_parser.add_argument("--query", default="", help="Query text for shared-server context retrieval.")
     shared_server_parser.add_argument("--limit", type=int, default=50, help="Maximum shared records to list or retrieve.")
     shared_server_parser.add_argument("--action", action="append", help="With shared-server audit or audit-integrity, restrict to one or more audit event actions. Repeat or comma-separate values.")
+    shared_server_parser.add_argument("--last-hours", type=float, help="With shared-server audit or audit-integrity, request events from the last N hours.")
     shared_server_parser.add_argument("--since", default="", help="With shared-server audit or audit-integrity, include audit events at or after this ISO-8601 timestamp.")
     shared_server_parser.add_argument("--until", default="", help="With shared-server audit or audit-integrity, include audit events at or before this ISO-8601 timestamp.")
     shared_server_parser.add_argument("--global-audit", action="store_true", help="With shared-server audit or audit-integrity, read the global audit stream instead of one shared graph/repo window.")

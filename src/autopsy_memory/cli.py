@@ -4650,6 +4650,25 @@ def shared_server_audit_integrity_path(
     return f"/v1/audit-events/integrity?{query}"
 
 
+def shared_server_audit_window_from_args(args: argparse.Namespace, *, now: datetime | None = None) -> tuple[str, str]:
+    since = str(getattr(args, "since", "") or "").strip()
+    until = str(getattr(args, "until", "") or "").strip()
+    last_hours = getattr(args, "last_hours", None)
+    if last_hours is None:
+        return since, until
+    try:
+        hours = float(last_hours)
+    except (TypeError, ValueError):
+        fail("shared-server audit --last-hours must be a number", 2)
+    if hours <= 0:
+        fail("shared-server audit --last-hours must be greater than 0", 2)
+    if since or until:
+        fail("shared-server audit --last-hours cannot be combined with --since or --until", 2)
+    end = now or datetime.now(timezone.utc)
+    start = end - timedelta(hours=hours)
+    return start.strftime("%Y-%m-%dT%H:%M:%SZ"), end.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def shared_server_audit_receipt_path(
     audit_event_id: str,
     *,
@@ -6318,6 +6337,7 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
     if action == "audit":
         audit_graph_slug = "" if bool(getattr(args, "global_audit", False)) else graph_slug
         audit_repo = "*" if bool(getattr(args, "global_audit", False)) else repo
+        audit_since, audit_until = shared_server_audit_window_from_args(args)
         payload = shared_server_request_or_fail(
             config,
             shared_server_audit_path(
@@ -6325,8 +6345,8 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
                 audit_repo,
                 limit=int(getattr(args, "limit", 100) or 100),
                 actions=split_cli_csv_values(getattr(args, "action", None)),
-                since=str(getattr(args, "since", "") or ""),
-                until=str(getattr(args, "until", "") or ""),
+                since=audit_since,
+                until=audit_until,
             ),
             timeout=10,
         )
@@ -6335,6 +6355,7 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
     if action == "audit-integrity":
         audit_graph_slug = "" if bool(getattr(args, "global_audit", False)) else graph_slug
         audit_repo = "*" if bool(getattr(args, "global_audit", False)) else repo
+        audit_since, audit_until = shared_server_audit_window_from_args(args)
         payload = shared_server_request_or_fail(
             config,
             shared_server_audit_integrity_path(
@@ -6342,8 +6363,8 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
                 audit_repo,
                 limit=int(getattr(args, "limit", 100) or 100),
                 actions=split_cli_csv_values(getattr(args, "action", None)),
-                since=str(getattr(args, "since", "") or ""),
-                until=str(getattr(args, "until", "") or ""),
+                since=audit_since,
+                until=audit_until,
             ),
             timeout=10,
         )

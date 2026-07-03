@@ -175,6 +175,7 @@ private struct SharedSettingsTab: View {
     @State private var confirmTokenInventoryRevoke = false
     @State private var confirmScopedTokenRevoke = false
     @State private var auditRepoScope = ""
+    @State private var auditLastHours = ""
     @State private var auditSince = ""
     @State private var auditUntil = ""
     @State private var auditReceiptID = ""
@@ -792,6 +793,8 @@ private struct SharedSettingsTab: View {
 
                 TextField("Audit Repo Scope", text: $auditRepoScope)
                     .textFieldStyle(.roundedBorder)
+                TextField("Audit Hours", text: $auditLastHours)
+                    .textFieldStyle(.roundedBorder)
                 HStack {
                     TextField("Audit Since", text: $auditSince)
                         .textFieldStyle(.roundedBorder)
@@ -800,36 +803,36 @@ private struct SharedSettingsTab: View {
                 }
                 HStack {
                     Button("Copy Audit") {
-                        store.copySharedServerAudit(repoScope: auditRepoScope, since: auditSince, until: auditUntil)
+                        store.copySharedServerAudit(repoScope: auditRepoScope, lastHours: auditLastHours, since: auditSince, until: auditUntil)
                     }
                     .disabled(sharedActionDisabled)
 
                     Button("Copy Activity") {
-                        store.copySharedServerActivityAudit(repoScope: auditRepoScope, since: auditSince, until: auditUntil)
+                        store.copySharedServerActivityAudit(repoScope: auditRepoScope, lastHours: auditLastHours, since: auditSince, until: auditUntil)
                     }
                     .disabled(sharedActionDisabled)
                 }
 
                 HStack {
                     Button("Copy Access Changes") {
-                        store.copySharedServerAccessChangeAudit(repoScope: auditRepoScope, since: auditSince, until: auditUntil)
+                        store.copySharedServerAccessChangeAudit(repoScope: auditRepoScope, lastHours: auditLastHours, since: auditSince, until: auditUntil)
                     }
                     .disabled(sharedActionDisabled)
 
                     Button("Copy Context Audit") {
-                        store.copySharedServerContextAudit(repoScope: auditRepoScope, since: auditSince, until: auditUntil)
+                        store.copySharedServerContextAudit(repoScope: auditRepoScope, lastHours: auditLastHours, since: auditSince, until: auditUntil)
                     }
                     .disabled(sharedActionDisabled)
 
                     Button("Copy Integrity") {
-                        store.copySharedServerAuditIntegrity(repoScope: auditRepoScope, since: auditSince, until: auditUntil)
+                        store.copySharedServerAuditIntegrity(repoScope: auditRepoScope, lastHours: auditLastHours, since: auditSince, until: auditUntil)
                     }
                     .disabled(sharedActionDisabled)
                 }
 
                 HStack {
                     Button("Copy Security") {
-                        store.copySharedServerSecurityAudit(since: auditSince, until: auditUntil)
+                        store.copySharedServerSecurityAudit(lastHours: auditLastHours, since: auditSince, until: auditUntil)
                     }
                     .disabled(sharedActionDisabled)
                 }

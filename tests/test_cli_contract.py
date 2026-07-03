@@ -313,6 +313,14 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "--action",
             "auth_failure",
         ])
+        last_hours_audit_args = parser.parse_args([
+            "shared-server",
+            "audit-integrity",
+            "--repo-scope",
+            "repo-a",
+            "--last-hours",
+            "24",
+        ])
         audit_integrity_args = parser.parse_args([
             "shared-server",
             "audit-integrity",
@@ -596,6 +604,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(audit_args.until, "2026-07-03T01:00:00Z")
         self.assertTrue(global_audit_args.global_audit)
         self.assertEqual(global_audit_args.action, ["auth_failure"])
+        self.assertEqual(last_hours_audit_args.shared_server_action, "audit-integrity")
+        self.assertEqual(last_hours_audit_args.last_hours, 24.0)
         self.assertEqual(audit_integrity_args.shared_server_action, "audit-integrity")
         self.assertEqual(audit_integrity_args.repo_scope, "repo-a")
         self.assertEqual(audit_integrity_args.limit, 25)
@@ -744,6 +754,22 @@ class AutopsyCLIContractTests(unittest.TestCase):
             windowed_summary_path,
             "/v1/audit-events/summary?graph_slug=autopsy&limit=25&repo=repo-a&since=2026-07-03T00%3A00%3A00Z&until=2026-07-03T01%3A00%3A00Z&action=read_audit_events&metadata_field=actor_token_scoped",
         )
+
+    def test_shared_server_audit_last_hours_computes_utc_window(self):
+        args = types.SimpleNamespace(last_hours=2, since="", until="")
+        since, until = cli.shared_server_audit_window_from_args(
+            args,
+            now=cli.datetime(2026, 7, 3, 12, 30, tzinfo=cli.timezone.utc),
+        )
+
+        self.assertEqual(since, "2026-07-03T10:30:00Z")
+        self.assertEqual(until, "2026-07-03T12:30:00Z")
+
+    def test_shared_server_audit_last_hours_rejects_ambiguous_window(self):
+        args = types.SimpleNamespace(last_hours=2, since="2026-07-03T00:00:00Z", until="")
+
+        with self.assertRaises(SystemExit):
+            cli.shared_server_audit_window_from_args(args, now=cli.datetime(2026, 7, 3, tzinfo=cli.timezone.utc))
 
     def test_shared_server_access_check_path_is_graph_scoped(self):
         self.assertEqual(

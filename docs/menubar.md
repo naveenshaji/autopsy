@@ -132,9 +132,9 @@ Run checks:
   shared memory.
   Team status surfaces relation-policy and memory-policy conflict counts with
   compact reason breakdowns when the server audit summary endpoint is available.
-  Audit copy controls accept optional since/until ISO-8601 windows and pass them
-  through to audit, activity, access-change, context, integrity, and security
-  reports when supported by the server.
+  Audit copy controls accept optional relative-hour or since/until ISO-8601
+  windows and pass them through to audit, activity, access-change, context,
+  integrity, and security reports when supported by the server.
   Security-audit summaries request global `auth_failure`,
   `authorization_denied`, `disable_user`, and `enable_user` events, copy auth
   reason counts, denial reason and mode counts, throttle counts, keyed client
