@@ -3236,6 +3236,26 @@ class AutopsyCLIContractTests(unittest.TestCase):
                 }
             if path == (
                 "/v1/audit-events/summary?graph_slug=autopsy&limit=50&repo=repo-a"
+                "&action=memory_policy_version_conflict"
+                "&metadata_field=kind&metadata_field=current_reason"
+            ):
+                return {
+                    "event_count": 2,
+                    "metadata_counts": {
+                        "kind": {"decision": 1, "procedure": 1},
+                        "current_reason": {"memory_kind_not_allowed": 1, "memory_writes_disabled": 1},
+                    },
+                    "latest_created_at": "2026-07-02T09:15:00Z",
+                    "scope": {
+                        "graph_slug": "autopsy",
+                        "repo": "repo-a",
+                        "actions": ["memory_policy_version_conflict"],
+                        "metadata_fields": ["kind", "current_reason"],
+                        "filtered_window": True,
+                    },
+                }
+            if path == (
+                "/v1/audit-events/summary?graph_slug=autopsy&limit=50&repo=repo-a"
                 "&action=invite_user&metadata_field=expires_at_defaulted"
             ):
                 return {
@@ -3409,6 +3429,15 @@ class AutopsyCLIContractTests(unittest.TestCase):
             {"fact_rating_too_low": 1, "relation_label_not_allowed": 2},
         )
         self.assertEqual(payload["team"]["latest_relation_policy_conflict_at"], "2026-07-02T09:00:00Z")
+        self.assertTrue(payload["team"]["can_read_memory_policy_conflicts"])
+        self.assertEqual(payload["team"]["memory_policy_conflicts_source"], "summary")
+        self.assertEqual(payload["team"]["memory_policy_conflict_count"], 2)
+        self.assertEqual(payload["team"]["memory_policy_conflict_kind_counts"], {"decision": 1, "procedure": 1})
+        self.assertEqual(
+            payload["team"]["memory_policy_conflict_current_reason_counts"],
+            {"memory_kind_not_allowed": 1, "memory_writes_disabled": 1},
+        )
+        self.assertEqual(payload["team"]["latest_memory_policy_conflict_at"], "2026-07-02T09:15:00Z")
         self.assertTrue(payload["team"]["can_read_invite_expiration_summary"])
         self.assertEqual(payload["team"]["invite_expiration_summary_source"], "summary")
         self.assertEqual(payload["team"]["invite_expiration_audit_count"], 5)

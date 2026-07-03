@@ -130,6 +130,8 @@ Run checks:
   checks that copy a dry-run report, and checked restore-version writes that
   send the policy fingerprint/version returned by the server before mutating
   shared memory.
+  Team status surfaces relation-policy and memory-policy conflict counts with
+  compact reason breakdowns when the server audit summary endpoint is available.
   Security-audit summaries request global `auth_failure`,
   `authorization_denied`, `disable_user`, and `enable_user` events, copy auth
   reason counts, denial reason and mode counts, throttle counts, keyed client

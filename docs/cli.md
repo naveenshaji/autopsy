@@ -153,7 +153,9 @@ feature/security discovery payload directly. The `activity` feed includes redact
 connectivity and supported server features. `shared-server team-status`
 summarizes active and disabled users, repo grants, scoped-token counts, and a
 compact audit integrity report for menu bar
-clients without echoing token material or raw audit events. Scoped-token counts
+clients without echoing token material or raw audit events. It also summarizes
+relation-policy and memory-policy conflict counts and compact reason breakdowns
+from audit summaries when available. Scoped-token counts
 include active, never-used, non-expiring, stale, expired, revoked, and disabled
 token totals. Graph owners
 can use `shared-server invite --email <email> --role reader|writer|owner

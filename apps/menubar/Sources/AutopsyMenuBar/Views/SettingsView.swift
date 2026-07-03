@@ -235,6 +235,9 @@ private struct SharedSettingsTab: View {
                 if !store.sharedServerRelationPolicyConflictsText.isEmpty {
                     LabeledContent("Policy Conflicts", value: store.sharedServerRelationPolicyConflictsText)
                 }
+                if !store.sharedServerMemoryPolicyConflictsText.isEmpty {
+                    LabeledContent("Memory Conflicts", value: store.sharedServerMemoryPolicyConflictsText)
+                }
                 HStack {
                     Button("Use Owner Config") {
                         store.configureSharedServerFromOwnerConfig()
