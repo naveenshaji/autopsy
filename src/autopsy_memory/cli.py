@@ -5460,6 +5460,7 @@ def build_shared_server_team_status_payload(
         "can_use_admin_export_snapshot": False,
         "can_use_admin_export_snapshot_validation": False,
         "can_use_admin_export_snapshot_restore_plan": False,
+        "can_use_admin_export_snapshot_manifest": False,
         "can_use_idempotency_keys": False,
         "can_use_idempotency_record_retention": False,
     }
@@ -5471,6 +5472,7 @@ def build_shared_server_team_status_payload(
     team["can_use_admin_export_snapshot"] = bool(server_capabilities.get("admin_export_snapshot"))
     team["can_use_admin_export_snapshot_validation"] = bool(server_capabilities.get("admin_export_snapshot_validation"))
     team["can_use_admin_export_snapshot_restore_plan"] = bool(server_capabilities.get("admin_export_snapshot_restore_plan"))
+    team["can_use_admin_export_snapshot_manifest"] = bool(server_capabilities.get("admin_export_snapshot_manifest"))
     team["idempotency_record_retention_days"] = _safe_int(server_security.get("idempotency_record_retention_days"))
     team["idempotency_pending_timeout_seconds"] = _safe_int(server_security.get("idempotency_pending_timeout_seconds"))
     if audit_since or audit_until:

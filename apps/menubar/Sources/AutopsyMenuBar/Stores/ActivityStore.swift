@@ -331,6 +331,7 @@ final class ActivityStore: ObservableObject {
                 ("admin_export_snapshot", "export snapshots"),
                 ("admin_export_snapshot_validation", "export validation"),
                 ("admin_export_snapshot_restore_plan", "restore planning"),
+                ("admin_export_snapshot_manifest", "snapshot manifests"),
                 ("admin_storage_token_hygiene", "token hygiene"),
                 ("admin_token_inventory", "token inventory"),
                 ("repo_policies", "repo policies"),
@@ -3525,14 +3526,18 @@ final class ActivityStore: ObservableObject {
         let observed = counts["observed"] as? [String: Any] ?? [:]
         let mismatches = counts["mismatches"] as? [String: Any] ?? [:]
         let redaction = payload["redaction"] as? [String: Any] ?? [:]
+        let manifest = payload["manifest"] as? [String: Any] ?? [:]
         let restoreReadiness = payload["restore_readiness"] as? [String: Any] ?? [:]
         let audit = payload["audit"] as? [String: Any] ?? [:]
         let status = auditBool(payload["ok"]) == true ? "valid" : "invalid"
         let restoreReady = auditBool(restoreReadiness["safe_to_plan_restore"]) == true ? "yes" : "no"
+        let manifestPresent = auditBool(manifest["present"]) == true ? "yes" : "no"
+        let manifestValid = auditBool(manifest["valid"]) == true ? "yes" : "no"
         var lines = [
             "Shared Export Snapshot Validation",
             "Status: \(status)",
             "Restore plan ready: \(restoreReady)",
+            "Manifest: present \(manifestPresent), valid \(manifestValid)",
         ]
         if let schemaVersion = auditInt(payload["schema_version"]) {
             lines.append("Schema: \(schemaVersion)")
@@ -3546,6 +3551,13 @@ final class ActivityStore: ObservableObject {
             "Exported audit events: \(auditInt(observed["audit_events"]) ?? 0)",
             "Secret-key leaks: \(auditInt(redaction["secret_leak_count"]) ?? 0)",
         ]
+        if let digest = auditString(manifest["snapshot_digest"]), !digest.isEmpty {
+            lines.append("Snapshot digest: \(digest.clippedForMenuBar(limit: 80))")
+        }
+        let manifestMismatches = manifest["mismatches"] as? [String: Any] ?? [:]
+        if !manifestMismatches.isEmpty {
+            lines.append("Manifest mismatches: \(manifestMismatches.keys.sorted().joined(separator: ", "))")
+        }
         if !mismatches.isEmpty {
             lines.append("Count mismatches: \(mismatches.keys.sorted().joined(separator: ", "))")
         }
