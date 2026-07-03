@@ -159,7 +159,8 @@ compact reason/mode breakdowns from audit summaries when available. Add `--last-
 `--until` to scope those audit-derived team-status summaries to a real time
 window. Scoped-token counts
 include active, never-used, non-expiring, stale, expired, revoked, and disabled
-token totals. Graph owners
+token totals. Team-status also reports when the server supports idempotency keys
+for retry-safe shared-memory mutations. Graph owners
 can use `shared-server invite --email <email> --role reader|writer|owner
 --repo-scope <repo>` to create or reuse a user, grant repo access, and issue a
 one-time token in one audited operation. Successful shared mutation responses
@@ -274,7 +275,12 @@ newer publish. Add `--check-policy` to dry-run the repo memory policy immediatel
 before publishing and send the returned policy fingerprint/version as a stale
 policy guard. Use manual `--expected-policy-fingerprint` and
 `--expected-policy-version-ns` from `shared-server check-memory` only when
-reusing a previously reviewed dry-run. `shared-server list --repo <repo>` lists repo-scoped shared memories, and
+reusing a previously reviewed dry-run. Publish, archive, restore, and
+restore-version automatically send a fresh `Idempotency-Key` and retry one
+transient request failure with the same key. When manually replaying an
+uncertain request, pass your own `--idempotency-key <key>` so the server can
+return the original response instead of adding duplicate audit/history entries.
+`shared-server list --repo <repo>` lists repo-scoped shared memories, and
 `shared-server memory-history <shared-key> --repo-scope <repo>` lists immutable
 versions created by each shared-memory publish or upsert, newest first.
 `shared-server restore-version <shared-key> --repo-scope <repo> --version-id

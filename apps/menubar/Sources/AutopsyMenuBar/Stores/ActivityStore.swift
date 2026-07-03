@@ -329,6 +329,7 @@ final class ActivityStore: ObservableObject {
                 ("repo_policy_inventory", "policy inventory"),
                 ("repo_policy_fingerprints", "policy fingerprints"),
                 ("repo_policy_version_conflict_audits", "policy conflict audits"),
+                ("idempotency_keys", "retry-safe memory writes"),
                 ("relation_policy_preflight", "relation checks"),
                 ("relation_policy_write_cas", "stale-safe relation writes"),
                 ("memory_lifecycle_cas", "memory CAS"),

@@ -45,6 +45,8 @@ SHARED_SERVER_OWNER_CONFIG_DEFAULT = Path.home() / ".config" / "autopsy-server" 
 MODEL_WARMUP_STATUS_PATH_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "ML" / "model-warmup.json"
 STATUS_WINDOW_DAYS_DEFAULT = 21
 SHARED_SERVER_STALE_TOKEN_DAYS_DEFAULT = 30
+SHARED_SERVER_IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._~:-]{8,200}$")
+SHARED_SERVER_TRANSIENT_HTTP_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 MENUBAR_RELATIVE_DIR = Path("apps") / "menubar"
 MENUBAR_INSTALLED_DIR_NAME = "menubar"
 MENUBAR_PRODUCT_NAME = "AutopsyMenuBar"
@@ -4329,6 +4331,7 @@ def shared_server_request(
     method: str = "GET",
     payload: dict[str, Any] | None = None,
     timeout: float = 5.0,
+    extra_headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     base_url = str(config.get("base_url") or "").rstrip("/")
     token = str(config.get("token") or "")
@@ -4337,10 +4340,32 @@ def shared_server_request(
     headers = {"accept": "application/json", "content-type": "application/json"}
     if token:
         headers["authorization"] = f"Bearer {token}"
+    if extra_headers:
+        headers.update({str(key): str(value) for key, value in extra_headers.items() if str(key) and str(value)})
     data = None if payload is None else json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(f"{base_url}{path}", data=data, headers=headers, method=method)
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def normalize_shared_server_idempotency_key(value: str | None) -> str:
+    key = str(value or "").strip()
+    if not key:
+        return ""
+    if not SHARED_SERVER_IDEMPOTENCY_KEY_PATTERN.fullmatch(key):
+        raise ValueError("must be 8-200 characters using letters, numbers, '.', '_', '~', ':', or '-'")
+    return key
+
+
+def shared_server_idempotency_headers(args: argparse.Namespace, *, action: str) -> dict[str, str]:
+    raw_key = getattr(args, "idempotency_key", None)
+    try:
+        key = normalize_shared_server_idempotency_key(raw_key)
+    except ValueError as error:
+        fail(f"shared-server {action} --idempotency-key {error}", 2)
+    if not key:
+        key = f"autopsy-{action}-{uuid.uuid4().hex}"
+    return {"Idempotency-Key": key}
 
 
 def format_shared_server_error_detail(value: Any) -> str:
@@ -4464,13 +4489,26 @@ def shared_server_request_or_fail(
     method: str = "GET",
     payload: dict[str, Any] | None = None,
     timeout: float = 5.0,
+    extra_headers: dict[str, str] | None = None,
+    retry_transient: bool = False,
 ) -> dict[str, Any]:
-    try:
-        return shared_server_request(config, path, method=method, payload=payload, timeout=timeout)
-    except urllib.error.HTTPError as exc:
-        fail(f"shared server request failed: {shared_server_http_error_message(exc)}")
-    except Exception as exc:
-        fail(f"shared server request failed: {exc}")
+    attempts = 2 if retry_transient else 1
+    for attempt in range(attempts):
+        try:
+            request_kwargs: dict[str, Any] = {"method": method, "payload": payload, "timeout": timeout}
+            if extra_headers:
+                request_kwargs["extra_headers"] = extra_headers
+            return shared_server_request(config, path, **request_kwargs)
+        except urllib.error.HTTPError as exc:
+            if retry_transient and attempt + 1 < attempts and exc.code in SHARED_SERVER_TRANSIENT_HTTP_STATUS_CODES:
+                time.sleep(0.25 * (attempt + 1))
+                continue
+            fail(f"shared server request failed: {shared_server_http_error_message(exc)}")
+        except Exception as exc:
+            if retry_transient and attempt + 1 < attempts:
+                time.sleep(0.25 * (attempt + 1))
+                continue
+            fail(f"shared server request failed: {exc}")
     raise AssertionError("unreachable")
 
 
@@ -5310,7 +5348,11 @@ def build_shared_server_team_status_payload(
         "can_read_audit_reader_summary": False,
         "can_read_shared_read_summary": False,
         "can_read_storage_status": False,
+        "can_use_idempotency_keys": False,
     }
+    capabilities_payload = payload.get("capabilities") if isinstance(payload.get("capabilities"), dict) else {}
+    server_capabilities = capabilities_payload.get("capabilities") if isinstance(capabilities_payload.get("capabilities"), dict) else {}
+    team["can_use_idempotency_keys"] = bool(server_capabilities.get("idempotency_keys"))
     if audit_since or audit_until:
         team["audit_window_since"] = audit_since
         team["audit_window_until"] = audit_until
@@ -6897,6 +6939,8 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
             method="POST",
             payload=lifecycle_payload,
             timeout=10,
+            extra_headers=shared_server_idempotency_headers(args, action=action),
+            retry_transient=True,
         )
         if policy_check is not None:
             print(json.dumps({
@@ -6955,6 +6999,8 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
             method="POST",
             payload=restore_payload,
             timeout=15,
+            extra_headers=shared_server_idempotency_headers(args, action="restore-version"),
+            retry_transient=True,
         )
         if policy_check is not None:
             print(json.dumps({
@@ -7005,6 +7051,8 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
             method="PUT",
             payload=remote_payload,
             timeout=15,
+            extra_headers=shared_server_idempotency_headers(args, action="publish"),
+            retry_transient=True,
         )
         print(json.dumps({
             "workspace": tool.workspace_payload(workspace),

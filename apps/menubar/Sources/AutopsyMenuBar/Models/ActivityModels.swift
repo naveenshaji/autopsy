@@ -106,6 +106,7 @@ struct SharedServerTeamPayload: Decodable {
     var canReadAuditReaderSummary: Bool?
     var canReadSharedReadSummary: Bool?
     var canReadStorageStatus: Bool?
+    var canUseIdempotencyKeys: Bool?
     var usersCount: Int?
     var activeUsersCount: Int?
     var disabledUsersCount: Int?
@@ -250,6 +251,7 @@ struct SharedServerTeamPayload: Decodable {
         case canReadAuditReaderSummary = "can_read_audit_reader_summary"
         case canReadSharedReadSummary = "can_read_shared_read_summary"
         case canReadStorageStatus = "can_read_storage_status"
+        case canUseIdempotencyKeys = "can_use_idempotency_keys"
         case usersCount = "users_count"
         case activeUsersCount = "active_users_count"
         case disabledUsersCount = "disabled_users_count"

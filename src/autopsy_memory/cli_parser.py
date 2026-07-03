@@ -501,6 +501,7 @@ def build_parser(
     shared_server_parser.add_argument("--until", default="", help="With shared-server audit, audit-integrity, or team-status, include audit events at or before this ISO-8601 timestamp.")
     shared_server_parser.add_argument("--global-audit", action="store_true", help="With shared-server audit or audit-integrity, read the global audit stream instead of one shared graph/repo window.")
     shared_server_parser.add_argument("--expected-version-ns", type=int, help="With shared-server publish, archive, restore, or restore-version, reject the write unless the current shared memory version_ns matches this value.")
+    shared_server_parser.add_argument("--idempotency-key", help="With shared-server publish, archive, restore, or restore-version, reuse this client request key for safe manual retry. Generated automatically when omitted.")
     shared_server_parser.add_argument("--include-archived", action="store_true", help="With shared-server list, context, or personal-context, include archived shared memories.")
     shared_server_parser.add_argument("--include-revoked", action="store_true", help="With shared-server token inventory or bulk-revoke actions, include revoked token rows.")
     shared_server_parser.add_argument("--token-status", choices=("all", "active", "revoked", "expired"), default="all", help="With shared-server token inventory or bulk-revoke actions, filter by token lifecycle status.")

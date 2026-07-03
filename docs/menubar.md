@@ -88,7 +88,8 @@ Run checks:
   authorization-denial actor-token scope details for
   global-admin tokens, audit receipt verification report copy, versioned repo policy copy/update/reset,
   repo policy inventory copy,
-  shared memory archive/restore, and
+  retry-safe shared-memory publish/archive/restore requests when the server
+  advertises idempotency keys,
   shared memory history copy/version restore, shared context copy with optional
   relation evidence threshold, shared
   relation policy-check copy plus stale-safe create/list/unlink with evidence

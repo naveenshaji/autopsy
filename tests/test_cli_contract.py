@@ -360,6 +360,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "sha256:pub",
             "--expected-policy-version-ns",
             "321",
+            "--idempotency-key",
+            "manual-publish-key-1",
         ])
         checked_publish_args = parser.parse_args([
             "shared-server",
@@ -645,6 +647,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(publish_args.expected_version_ns, 123)
         self.assertEqual(publish_args.expected_policy_fingerprint, "sha256:pub")
         self.assertEqual(publish_args.expected_policy_version_ns, 321)
+        self.assertEqual(publish_args.idempotency_key, "manual-publish-key-1")
         self.assertTrue(checked_publish_args.check_policy)
         self.assertEqual(list_args.shared_server_action, "list")
         self.assertTrue(list_args.include_archived)
@@ -1492,14 +1495,18 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "repo-a",
             "--expected-version-ns",
             "222",
+            "--idempotency-key",
+            "manual-archive-key-1",
             "--reason",
             "duplicate",
         ])
         config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
         calls: list[tuple[str, str, dict[str, object] | None]] = []
+        headers: list[dict[str, str] | None] = []
 
-        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
+        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0, extra_headers=None):
             calls.append((path, method, payload))
+            headers.append(extra_headers)
             return {"stable_key": "shared:1", "archived": True}
 
         stream = io.StringIO()
@@ -1521,6 +1528,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
                 )
             ],
         )
+        self.assertEqual(headers, [{"Idempotency-Key": "manual-archive-key-1"}])
 
     def test_shared_server_restore_check_policy_preflights_and_posts_lifecycle_payload(self):
         parser = cli.build_parser()
@@ -1541,7 +1549,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
         calls: list[tuple[str, str, dict[str, object] | None]] = []
 
-        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
+        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0, extra_headers=None):
             calls.append((path, method, payload))
             if path.endswith("/memories/check"):
                 return {
@@ -1601,6 +1609,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         ])
         config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
         calls: list[tuple[str, str, dict[str, object] | None]] = []
+        headers: list[dict[str, str] | None] = []
         item = {
             "entity_id": 42,
             "stable_key": "graph-note:one",
@@ -1612,8 +1621,9 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "metadata": {},
         }
 
-        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
+        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0, extra_headers=None):
             calls.append((path, method, payload))
+            headers.append(extra_headers)
             if path.endswith("/memories/check"):
                 return {
                     "allowed": True,
@@ -1668,6 +1678,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
                 ),
             ],
         )
+        self.assertIsNone(headers[0])
+        self.assertRegex(headers[1]["Idempotency-Key"], r"^autopsy-publish-[a-f0-9]{32}$")
 
     def test_shared_server_publish_check_policy_denial_fails_before_write(self):
         parser = cli.build_parser()
@@ -1772,7 +1784,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
         calls: list[tuple[str, str, dict[str, object] | None]] = []
 
-        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
+        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0, extra_headers=None):
             calls.append((path, method, payload))
             return {"stable_key": "shared:1", "title": "Restored"}
 
@@ -1821,7 +1833,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
         calls: list[tuple[str, str, dict[str, object] | None]] = []
 
-        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
+        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0, extra_headers=None):
             calls.append((path, method, payload))
             if path.endswith("/memories/check"):
                 return {
@@ -3229,6 +3241,31 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "HTTP 409: memory policy version conflict; graph=autopsy; repo=repo-a; expected_policy_version=10; current_policy_version=11; kind=decision; current_reason=memory_kind_not_allowed",
         )
 
+    def test_shared_server_request_or_fail_retries_transient_with_same_idempotency_key(self):
+        calls: list[dict[str, Any]] = []
+
+        def fake_request(_config, path, **kwargs):
+            calls.append({"path": path, **kwargs})
+            if len(calls) == 1:
+                raise urllib.error.URLError("timed out")
+            return {"ok": True}
+
+        with mock.patch.object(cli, "shared_server_request", side_effect=fake_request):
+            payload = cli.shared_server_request_or_fail(
+                {"base_url": "https://shared.example", "token": "secret"},
+                "/v1/shared-graphs/autopsy/memories",
+                method="PUT",
+                payload={"stable_key": "shared:1"},
+                timeout=15,
+                extra_headers={"Idempotency-Key": "manual-retry-key-1"},
+                retry_transient=True,
+            )
+
+        self.assertEqual(payload, {"ok": True})
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0]["extra_headers"], {"Idempotency-Key": "manual-retry-key-1"})
+        self.assertEqual(calls[1]["extra_headers"], {"Idempotency-Key": "manual-retry-key-1"})
+
     def test_shared_server_publish_payload_carries_local_memory_metadata(self):
         payload = cli.build_shared_server_publish_payload(
             {
@@ -3260,6 +3297,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
         }
 
         def fake_request(_config, path, **_kwargs):
+            if path == "/v1/capabilities":
+                return {"service": "autopsy-server", "api_version": 1, "capabilities": {"idempotency_keys": True}}
             if path == "/health":
                 return {"ok": True}
             if path == "/v1/me":
@@ -3585,6 +3624,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["team"]["storage_active_scoped_tokens_count"], 0)
         self.assertEqual(payload["team"]["storage_audit_chain_status"], "verified")
         self.assertEqual(payload["team"]["storage_audit_chain_continuity_status"], "verified")
+        self.assertTrue(payload["team"]["can_use_idempotency_keys"])
         self.assertEqual(payload["team"]["users_count"], 2)
         self.assertEqual(payload["team"]["active_users_count"], 1)
         self.assertEqual(payload["team"]["disabled_users_count"], 1)
