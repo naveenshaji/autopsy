@@ -332,6 +332,7 @@ final class ActivityStore: ObservableObject {
                 ("repo_policy_fingerprints", "policy fingerprints"),
                 ("repo_policy_version_conflict_audits", "policy conflict audits"),
                 ("idempotency_keys", "retry-safe memory writes"),
+                ("idempotency_record_retention", idempotencyRetentionLabel(capabilities)),
                 ("relation_policy_preflight", "relation checks"),
                 ("relation_policy_write_cas", "stale-safe relation writes"),
                 ("memory_lifecycle_cas", "memory CAS"),
@@ -362,6 +363,13 @@ final class ActivityStore: ObservableObject {
             return "invite expiry"
         }
         return "invite expiry \(days)d"
+    }
+
+    private func idempotencyRetentionLabel(_ capabilities: SharedServerCapabilitiesPayload) -> String {
+        guard let days = capabilities.security?.idempotencyRecordRetentionDays, days > 0 else {
+            return "idempotency retention"
+        }
+        return "idempotency retention \(days)d"
     }
 
     var sharedServerUsersText: String {
@@ -654,6 +662,15 @@ final class ActivityStore: ObservableObject {
             if let disabledUserTokens = team.storageActiveTokensForDisabledUsersCount, disabledUserTokens > 0 {
                 parts.append("disabled-user tokens: \(disabledUserTokens)")
             }
+            if let idempotencyRecords = team.storageIdempotencyRecordCount, idempotencyRecords > 0 {
+                parts.append("idem: \(idempotencyRecords)")
+            }
+            if let pending = team.storagePendingIdempotencyRecordCount, pending > 0 {
+                parts.append("idem pending: \(pending)")
+            }
+            if let retentionDays = team.storageIdempotencyCompletedRetentionDays ?? team.idempotencyRecordRetentionDays, retentionDays > 0 {
+                parts.append("idem retention: \(retentionDays)d")
+            }
             if let auditEvents = team.storageAuditEventCount {
                 parts.append("audits: \(auditEvents)")
             }
@@ -662,7 +679,7 @@ final class ActivityStore: ObservableObject {
             } else if let status = team.storageAuditChainStatus, !status.isEmpty {
                 parts.append("chain: \(status)")
             }
-            return parts.joined(separator: ", ").clippedForMenuBar(limit: 110)
+            return parts.joined(separator: ", ").clippedForMenuBar(limit: 130)
         }
         if let error = team.storageStatusError, !error.isEmpty {
             return error.clippedForMenuBar(limit: 28)

@@ -68,9 +68,13 @@ struct SharedServerCapabilitiesPayload: Decodable {
 
 struct SharedServerSecurityPayload: Decodable {
     var defaultInviteTokenExpirationDays: Int?
+    var idempotencyRecordRetentionDays: Int?
+    var idempotencyPendingTimeoutSeconds: Int?
 
     enum CodingKeys: String, CodingKey {
         case defaultInviteTokenExpirationDays = "default_invite_token_expiration_days"
+        case idempotencyRecordRetentionDays = "idempotency_record_retention_days"
+        case idempotencyPendingTimeoutSeconds = "idempotency_pending_timeout_seconds"
     }
 }
 
@@ -109,6 +113,9 @@ struct SharedServerTeamPayload: Decodable {
     var canReadSharedReadSummary: Bool?
     var canReadStorageStatus: Bool?
     var canUseIdempotencyKeys: Bool?
+    var canUseIdempotencyRecordRetention: Bool?
+    var idempotencyRecordRetentionDays: Int?
+    var idempotencyPendingTimeoutSeconds: Int?
     var usersCount: Int?
     var activeUsersCount: Int?
     var disabledUsersCount: Int?
@@ -216,7 +223,15 @@ struct SharedServerTeamPayload: Decodable {
     var storageActiveTokenCount: Int?
     var storageRevokedTokenCount: Int?
     var storageExpiredTokenCount: Int?
+    var storageIdempotencyRecordCount: Int?
+    var storagePendingIdempotencyRecordCount: Int?
+    var storageCompletedIdempotencyRecordCount: Int?
     var storageAuditEventCount: Int?
+    var storageOldestIdempotencyRecordCreatedAt: String?
+    var storageOldestPendingIdempotencyRecordCreatedAt: String?
+    var storageOldestCompletedIdempotencyAt: String?
+    var storageIdempotencyCompletedRetentionDays: Int?
+    var storageIdempotencyPendingTimeoutSeconds: Int?
     var storageTokenHygieneStaleAfterDays: Int?
     var storageTokenHygieneStaleCutoffAt: String?
     var storageActiveTokensWithoutExpirationCount: Int?
@@ -265,6 +280,9 @@ struct SharedServerTeamPayload: Decodable {
         case canReadSharedReadSummary = "can_read_shared_read_summary"
         case canReadStorageStatus = "can_read_storage_status"
         case canUseIdempotencyKeys = "can_use_idempotency_keys"
+        case canUseIdempotencyRecordRetention = "can_use_idempotency_record_retention"
+        case idempotencyRecordRetentionDays = "idempotency_record_retention_days"
+        case idempotencyPendingTimeoutSeconds = "idempotency_pending_timeout_seconds"
         case usersCount = "users_count"
         case activeUsersCount = "active_users_count"
         case disabledUsersCount = "disabled_users_count"
@@ -372,7 +390,15 @@ struct SharedServerTeamPayload: Decodable {
         case storageActiveTokenCount = "storage_active_token_count"
         case storageRevokedTokenCount = "storage_revoked_token_count"
         case storageExpiredTokenCount = "storage_expired_token_count"
+        case storageIdempotencyRecordCount = "storage_idempotency_record_count"
+        case storagePendingIdempotencyRecordCount = "storage_pending_idempotency_record_count"
+        case storageCompletedIdempotencyRecordCount = "storage_completed_idempotency_record_count"
         case storageAuditEventCount = "storage_audit_event_count"
+        case storageOldestIdempotencyRecordCreatedAt = "storage_oldest_idempotency_record_created_at"
+        case storageOldestPendingIdempotencyRecordCreatedAt = "storage_oldest_pending_idempotency_record_created_at"
+        case storageOldestCompletedIdempotencyAt = "storage_oldest_completed_idempotency_at"
+        case storageIdempotencyCompletedRetentionDays = "storage_idempotency_completed_retention_days"
+        case storageIdempotencyPendingTimeoutSeconds = "storage_idempotency_pending_timeout_seconds"
         case storageTokenHygieneStaleAfterDays = "storage_token_hygiene_stale_after_days"
         case storageTokenHygieneStaleCutoffAt = "storage_token_hygiene_stale_cutoff_at"
         case storageActiveTokensWithoutExpirationCount = "storage_active_tokens_without_expiration_count"

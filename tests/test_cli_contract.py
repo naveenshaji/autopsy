@@ -3298,7 +3298,18 @@ class AutopsyCLIContractTests(unittest.TestCase):
 
         def fake_request(_config, path, **_kwargs):
             if path == "/v1/capabilities":
-                return {"service": "autopsy-server", "api_version": 1, "capabilities": {"idempotency_keys": True}}
+                return {
+                    "service": "autopsy-server",
+                    "api_version": 1,
+                    "capabilities": {
+                        "idempotency_keys": True,
+                        "idempotency_record_retention": True,
+                    },
+                    "security": {
+                        "idempotency_record_retention_days": 7,
+                        "idempotency_pending_timeout_seconds": 3600,
+                    },
+                }
             if path == "/health":
                 return {"ok": True}
             if path == "/v1/me":
@@ -3321,7 +3332,17 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "active_tokens": 3,
                         "revoked_tokens": 10,
                         "expired_tokens": 0,
+                        "idempotency_records": 6,
+                        "pending_idempotency_records": 1,
+                        "completed_idempotency_records": 5,
                         "audit_events": 329,
+                    },
+                    "idempotency_hygiene": {
+                        "oldest_record_created_at": "2026-07-01T00:00:00Z",
+                        "oldest_pending_created_at": "2026-07-02T00:00:00Z",
+                        "oldest_completed_at": "2026-07-01T00:30:00Z",
+                        "completed_retention_days": 7,
+                        "pending_timeout_seconds": 3600,
                     },
                     "audit_chain": {
                         "status": "verified",
@@ -3652,6 +3673,14 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["team"]["storage_token_count"], 13)
         self.assertEqual(payload["team"]["storage_active_token_count"], 3)
         self.assertEqual(payload["team"]["storage_revoked_token_count"], 10)
+        self.assertEqual(payload["team"]["storage_idempotency_record_count"], 6)
+        self.assertEqual(payload["team"]["storage_pending_idempotency_record_count"], 1)
+        self.assertEqual(payload["team"]["storage_completed_idempotency_record_count"], 5)
+        self.assertEqual(payload["team"]["storage_oldest_idempotency_record_created_at"], "2026-07-01T00:00:00Z")
+        self.assertEqual(payload["team"]["storage_oldest_pending_idempotency_record_created_at"], "2026-07-02T00:00:00Z")
+        self.assertEqual(payload["team"]["storage_oldest_completed_idempotency_at"], "2026-07-01T00:30:00Z")
+        self.assertEqual(payload["team"]["storage_idempotency_completed_retention_days"], 7)
+        self.assertEqual(payload["team"]["storage_idempotency_pending_timeout_seconds"], 3600)
         self.assertEqual(payload["team"]["storage_audit_event_count"], 329)
         self.assertEqual(payload["team"]["storage_token_hygiene_stale_after_days"], 30)
         self.assertEqual(payload["team"]["storage_token_hygiene_stale_cutoff_at"], "2026-06-02T11:46:32Z")
@@ -3664,6 +3693,9 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["team"]["storage_audit_chain_status"], "verified")
         self.assertEqual(payload["team"]["storage_audit_chain_continuity_status"], "verified")
         self.assertTrue(payload["team"]["can_use_idempotency_keys"])
+        self.assertTrue(payload["team"]["can_use_idempotency_record_retention"])
+        self.assertEqual(payload["team"]["idempotency_record_retention_days"], 7)
+        self.assertEqual(payload["team"]["idempotency_pending_timeout_seconds"], 3600)
         self.assertEqual(payload["team"]["users_count"], 2)
         self.assertEqual(payload["team"]["active_users_count"], 1)
         self.assertEqual(payload["team"]["disabled_users_count"], 1)

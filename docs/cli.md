@@ -160,8 +160,11 @@ reason/mode breakdowns from audit summaries when available. Add `--last-hours`, 
 `--until` to scope those audit-derived team-status summaries to a real time
 window. Scoped-token counts
 include active, never-used, non-expiring, stale, expired, revoked, and disabled
-token totals. Team-status also reports when the server supports idempotency keys
-for retry-safe shared-memory mutations and whether retries are replaying cleanly
+token totals. For admins, storage-status fields also include aggregate
+idempotency-record counts and the server's completed-record retention and
+pending-record timeout windows. Team-status also reports when the server
+supports idempotency keys and bounded idempotency-record retention for
+retry-safe shared-memory mutations, plus whether retries are replaying cleanly
 or conflicting because a key was reused for a different request. Graph owners
 can use `shared-server invite --email <email> --role reader|writer|owner
 --repo-scope <repo>` to create or reuse a user, grant repo access, and issue a

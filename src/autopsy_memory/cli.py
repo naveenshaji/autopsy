@@ -5347,6 +5347,7 @@ def summarize_shared_server_shared_read_summary(summary: dict[str, Any]) -> dict
 def summarize_shared_server_storage_status(status: dict[str, Any]) -> dict[str, Any]:
     counts = status.get("counts") if isinstance(status.get("counts"), dict) else {}
     token_hygiene = status.get("token_hygiene") if isinstance(status.get("token_hygiene"), dict) else {}
+    idempotency_hygiene = status.get("idempotency_hygiene") if isinstance(status.get("idempotency_hygiene"), dict) else {}
     audit_chain = status.get("audit_chain") if isinstance(status.get("audit_chain"), dict) else {}
     return {
         "storage_ok": bool(status.get("ok")),
@@ -5364,7 +5365,15 @@ def summarize_shared_server_storage_status(status: dict[str, Any]) -> dict[str, 
         "storage_active_token_count": _safe_int(counts.get("active_tokens")),
         "storage_revoked_token_count": _safe_int(counts.get("revoked_tokens")),
         "storage_expired_token_count": _safe_int(counts.get("expired_tokens")),
+        "storage_idempotency_record_count": _safe_int(counts.get("idempotency_records")),
+        "storage_pending_idempotency_record_count": _safe_int(counts.get("pending_idempotency_records")),
+        "storage_completed_idempotency_record_count": _safe_int(counts.get("completed_idempotency_records")),
         "storage_audit_event_count": _safe_int(counts.get("audit_events")),
+        "storage_oldest_idempotency_record_created_at": str(idempotency_hygiene.get("oldest_record_created_at") or ""),
+        "storage_oldest_pending_idempotency_record_created_at": str(idempotency_hygiene.get("oldest_pending_created_at") or ""),
+        "storage_oldest_completed_idempotency_at": str(idempotency_hygiene.get("oldest_completed_at") or ""),
+        "storage_idempotency_completed_retention_days": _safe_int(idempotency_hygiene.get("completed_retention_days")),
+        "storage_idempotency_pending_timeout_seconds": _safe_int(idempotency_hygiene.get("pending_timeout_seconds")),
         "storage_token_hygiene_stale_after_days": _safe_int(token_hygiene.get("stale_after_days")),
         "storage_token_hygiene_stale_cutoff_at": str(token_hygiene.get("stale_cutoff_at") or ""),
         "storage_active_tokens_without_expiration_count": _safe_int(token_hygiene.get("active_without_expiration_count")),
@@ -5408,10 +5417,15 @@ def build_shared_server_team_status_payload(
         "can_read_shared_read_summary": False,
         "can_read_storage_status": False,
         "can_use_idempotency_keys": False,
+        "can_use_idempotency_record_retention": False,
     }
     capabilities_payload = payload.get("capabilities") if isinstance(payload.get("capabilities"), dict) else {}
     server_capabilities = capabilities_payload.get("capabilities") if isinstance(capabilities_payload.get("capabilities"), dict) else {}
+    server_security = capabilities_payload.get("security") if isinstance(capabilities_payload.get("security"), dict) else {}
     team["can_use_idempotency_keys"] = bool(server_capabilities.get("idempotency_keys"))
+    team["can_use_idempotency_record_retention"] = bool(server_capabilities.get("idempotency_record_retention"))
+    team["idempotency_record_retention_days"] = _safe_int(server_security.get("idempotency_record_retention_days"))
+    team["idempotency_pending_timeout_seconds"] = _safe_int(server_security.get("idempotency_pending_timeout_seconds"))
     if audit_since or audit_until:
         team["audit_window_since"] = audit_since
         team["audit_window_until"] = audit_until
