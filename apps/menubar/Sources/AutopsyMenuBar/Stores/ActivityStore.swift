@@ -370,6 +370,7 @@ final class ActivityStore: ObservableObject {
                 ("access_mutation_idempotency", "retry-safe access actions"),
                 ("idempotency_response_secret_guard", "secret-safe retry storage"),
                 ("idempotency_response_size_guard", idempotencyResponseSizeLimitLabel(capabilities)),
+                ("idempotency_response_storage_failure_guard", "retry storage fallback"),
                 ("idempotency_record_retention", idempotencyRetentionLabel(capabilities)),
                 ("relation_policy_preflight", "relation checks"),
                 ("relation_policy_write_cas", "stale-safe relation writes"),

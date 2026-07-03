@@ -3728,6 +3728,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "idempotency_record_retention": True,
                         "idempotency_response_secret_guard": True,
                         "idempotency_response_size_guard": True,
+                        "idempotency_response_storage_failure_guard": True,
                         "access_mutation_idempotency": True,
                     },
                     "security": {
@@ -3825,6 +3826,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertTrue(payload["team"]["can_use_idempotency_record_retention"])
         self.assertTrue(payload["team"]["can_use_idempotency_response_secret_guard"])
         self.assertTrue(payload["team"]["can_use_idempotency_response_size_guard"])
+        self.assertTrue(payload["team"]["can_use_idempotency_response_storage_failure_guard"])
         self.assertTrue(payload["team"]["can_use_access_mutation_idempotency"])
         self.assertEqual(payload["team"]["idempotency_response_max_bytes"], 262144)
 
@@ -3863,6 +3865,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "idempotency_record_retention": True,
                         "idempotency_response_secret_guard": True,
                         "idempotency_response_size_guard": True,
+                        "idempotency_response_storage_failure_guard": True,
                         "access_mutation_idempotency": True,
                     },
                     "security": {
@@ -4318,6 +4321,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertTrue(payload["team"]["can_use_idempotency_record_retention"])
         self.assertTrue(payload["team"]["can_use_idempotency_response_secret_guard"])
         self.assertTrue(payload["team"]["can_use_idempotency_response_size_guard"])
+        self.assertTrue(payload["team"]["can_use_idempotency_response_storage_failure_guard"])
         self.assertTrue(payload["team"]["can_use_access_mutation_idempotency"])
         self.assertEqual(payload["team"]["idempotency_record_retention_days"], 7)
         self.assertEqual(payload["team"]["idempotency_pending_timeout_seconds"], 3600)
