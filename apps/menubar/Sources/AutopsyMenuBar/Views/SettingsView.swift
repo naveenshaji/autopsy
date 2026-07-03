@@ -120,9 +120,11 @@ private struct SharedSettingsTab: View {
     @State private var accessCheckMode = "read"
     @State private var policyRepoScope = ""
     @State private var policyRelationLabels = ""
+    @State private var policyMemoryKinds = ""
     @State private var policyMinFactRating = "0"
     @State private var policyAllowSharedRelations = true
     @State private var policyAllowPersonalRelations = true
+    @State private var policyAllowMemoryWrites = true
     @State private var policyNotes = ""
     @State private var inviteRepoScope = ""
     @State private var inviteRole = "writer"
@@ -275,10 +277,13 @@ private struct SharedSettingsTab: View {
                     .textFieldStyle(.roundedBorder)
                 TextField("Allowed Relation Labels", text: $policyRelationLabels)
                     .textFieldStyle(.roundedBorder)
+                TextField("Allowed Memory Kinds", text: $policyMemoryKinds)
+                    .textFieldStyle(.roundedBorder)
                 TextField("Minimum Fact Rating", text: $policyMinFactRating)
                     .textFieldStyle(.roundedBorder)
                 Toggle("Allow Shared Relations", isOn: $policyAllowSharedRelations)
                 Toggle("Allow Personal Links", isOn: $policyAllowPersonalRelations)
+                Toggle("Allow Memory Writes", isOn: $policyAllowMemoryWrites)
                 TextField("Policy Notes", text: $policyNotes)
                     .textFieldStyle(.roundedBorder)
                 HStack {
@@ -296,9 +301,11 @@ private struct SharedSettingsTab: View {
                         store.updateSharedServerRepoPolicy(
                             repoScope: policyRepoScope,
                             relationLabels: policyRelationLabels,
+                            memoryKinds: policyMemoryKinds,
                             minFactRating: policyMinFactRating,
                             allowSharedRelations: policyAllowSharedRelations,
                             allowPersonalRelations: policyAllowPersonalRelations,
+                            allowMemoryWrites: policyAllowMemoryWrites,
                             notes: policyNotes
                         )
                     }

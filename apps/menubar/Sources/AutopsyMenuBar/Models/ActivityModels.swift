@@ -127,15 +127,18 @@ struct SharedServerTeamPayload: Decodable {
     var constrainedPoliciesCount: Int?
     var disabledSharedPolicyCount: Int?
     var disabledPersonalPolicyCount: Int?
+    var disabledMemoryPolicyCount: Int?
     var policyInventoryRepoFilterPresent: Bool?
     var effectivePolicyRepo: String?
     var effectivePolicyInheritedFrom: String?
     var effectivePolicyVersionNS: String?
     var effectivePolicyFingerprint: String?
     var effectivePolicyRelationLabelCount: Int?
+    var effectivePolicyMemoryKindCount: Int?
     var effectivePolicyMinFactRating: Double?
     var effectivePolicySharedRelationsAllowed: Bool?
     var effectivePolicyPersonalRelationsAllowed: Bool?
+    var effectivePolicyMemoryWritesAllowed: Bool?
     var effectivePolicyConstrained: Bool?
     var roleCounts: [String: Int]?
     var tokenRoleCounts: [String: Int]?
@@ -246,15 +249,18 @@ struct SharedServerTeamPayload: Decodable {
         case constrainedPoliciesCount = "constrained_policies_count"
         case disabledSharedPolicyCount = "disabled_shared_policy_count"
         case disabledPersonalPolicyCount = "disabled_personal_policy_count"
+        case disabledMemoryPolicyCount = "disabled_memory_policy_count"
         case policyInventoryRepoFilterPresent = "policy_inventory_repo_filter_present"
         case effectivePolicyRepo = "effective_policy_repo"
         case effectivePolicyInheritedFrom = "effective_policy_inherited_from"
         case effectivePolicyVersionNS = "effective_policy_version_ns"
         case effectivePolicyFingerprint = "effective_policy_fingerprint"
         case effectivePolicyRelationLabelCount = "effective_policy_relation_label_count"
+        case effectivePolicyMemoryKindCount = "effective_policy_memory_kind_count"
         case effectivePolicyMinFactRating = "effective_policy_min_fact_rating"
         case effectivePolicySharedRelationsAllowed = "effective_policy_shared_relations_allowed"
         case effectivePolicyPersonalRelationsAllowed = "effective_policy_personal_relations_allowed"
+        case effectivePolicyMemoryWritesAllowed = "effective_policy_memory_writes_allowed"
         case effectivePolicyConstrained = "effective_policy_constrained"
         case roleCounts = "role_counts"
         case tokenRoleCounts = "token_role_counts"

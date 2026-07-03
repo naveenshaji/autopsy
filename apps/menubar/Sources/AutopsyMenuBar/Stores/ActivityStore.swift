@@ -441,6 +441,9 @@ final class ActivityStore: ObservableObject {
             if let disabledPersonal = team.disabledPersonalPolicyCount, disabledPersonal > 0 {
                 parts.append("personal disabled: \(disabledPersonal)")
             }
+            if let disabledMemory = team.disabledMemoryPolicyCount, disabledMemory > 0 {
+                parts.append("memory disabled: \(disabledMemory)")
+            }
             if team.policyInventoryRepoFilterPresent == true {
                 parts.append("repo filtered")
             }
@@ -451,6 +454,12 @@ final class ActivityStore: ObservableObject {
             }
             if team.effectivePolicyConstrained == true {
                 parts.append("effective constrained")
+            }
+            if let memoryKindCount = team.effectivePolicyMemoryKindCount, memoryKindCount > 0 {
+                parts.append("memory kinds: \(memoryKindCount)")
+            }
+            if team.effectivePolicyMemoryWritesAllowed == false {
+                parts.append("memory writes disabled")
             }
             if let fingerprint = team.effectivePolicyFingerprint, !fingerprint.isEmpty {
                 parts.append("fp \(shortAuditHash(fingerprint))")
@@ -1000,18 +1009,22 @@ final class ActivityStore: ObservableObject {
     func updateSharedServerRepoPolicy(
         repoScope: String,
         relationLabels: String,
+        memoryKinds: String,
         minFactRating: String,
         allowSharedRelations: Bool,
         allowPersonalRelations: Bool,
+        allowMemoryWrites: Bool,
         notes: String
     ) {
         Task {
             await updateSharedRepoPolicy(
                 repoScope: repoScope,
                 relationLabels: relationLabels,
+                memoryKinds: memoryKinds,
                 minFactRating: minFactRating,
                 allowSharedRelations: allowSharedRelations,
                 allowPersonalRelations: allowPersonalRelations,
+                allowMemoryWrites: allowMemoryWrites,
                 notes: notes
             )
         }
@@ -1564,9 +1577,11 @@ final class ActivityStore: ObservableObject {
     private func updateSharedRepoPolicy(
         repoScope: String,
         relationLabels: String,
+        memoryKinds: String,
         minFactRating: String,
         allowSharedRelations: Bool,
         allowPersonalRelations: Bool,
+        allowMemoryWrites: Bool,
         notes: String
     ) async {
         let scope = normalizedRepoScope(repoScope)
@@ -1582,12 +1597,19 @@ final class ActivityStore: ObservableObject {
         } else {
             arguments += ["--allowed-relation-label", labels]
         }
+        let kinds = memoryKinds.trimmingCharacters(in: .whitespacesAndNewlines)
+        if kinds.isEmpty {
+            arguments.append("--clear-memory-kinds")
+        } else {
+            arguments += ["--allowed-memory-kind", kinds]
+        }
         let rating = minFactRating.trimmingCharacters(in: .whitespacesAndNewlines)
         if !rating.isEmpty {
             arguments += ["--min-fact-rating", rating]
         }
         arguments.append(allowSharedRelations ? "--allow-shared-relations" : "--disable-shared-relations")
         arguments.append(allowPersonalRelations ? "--allow-personal-relations" : "--disable-personal-relations")
+        arguments.append(allowMemoryWrites ? "--allow-memory-writes" : "--disable-memory-writes")
         arguments += ["--policy-notes", notes.trimmingCharacters(in: .whitespacesAndNewlines)]
         await runSharedAccessCommand(arguments, successMessage: "Policy updated", refreshTeam: false)
     }
@@ -3397,6 +3419,8 @@ final class ActivityStore: ObservableObject {
 
         let labels = (payload["allowed_relation_labels"] as? [Any] ?? [])
             .compactMap { auditString($0) }
+        let memoryKinds = (payload["allowed_memory_kinds"] as? [Any] ?? [])
+            .compactMap { auditString($0) }
         let policyRepo = auditString(payload["repo"]) ?? repoScope
         let requestedRepo = auditString(payload["requested_repo"]) ?? repoScope
         let inheritedFrom = auditString(payload["inherited_from"]) ?? ""
@@ -3404,15 +3428,18 @@ final class ActivityStore: ObservableObject {
         let minFactRating = auditString(payload["min_fact_rating"]) ?? "0"
         let allowShared = auditBool(payload["allow_shared_relations"]) != false
         let allowPersonal = auditBool(payload["allow_personal_relations"]) != false
+        let allowMemory = auditBool(payload["allow_memory_writes"]) != false
         let policyScope = inheritedFrom.isEmpty ? policyRepo : "\(policyRepo) inherited from \(inheritedFrom)"
         var lines = [
             "Shared Repo Policy",
             "Repo: \(requestedRepo)",
             "Policy scope: \(policyScope)",
             "Allowed relation labels: \(labels.isEmpty ? "any" : labels.joined(separator: ", "))",
+            "Allowed memory kinds: \(memoryKinds.isEmpty ? "any" : memoryKinds.joined(separator: ", "))",
             "Minimum fact rating: \(minFactRating)",
             "Shared relations: \(allowShared ? "allowed" : "disabled")",
             "Personal links: \(allowPersonal ? "allowed" : "disabled")",
+            "Memory writes: \(allowMemory ? "allowed" : "disabled")",
         ]
         if let version {
             lines.append("Version: \(version)")
@@ -3457,14 +3484,19 @@ final class ActivityStore: ObservableObject {
             let repo = auditString(item["repo"]) ?? "unknown repo"
             let labels = (item["allowed_relation_labels"] as? [Any] ?? [])
                 .compactMap { auditString($0) }
+            let memoryKinds = (item["allowed_memory_kinds"] as? [Any] ?? [])
+                .compactMap { auditString($0) }
             let minFactRating = auditDecimal(item["min_fact_rating"]) ?? "0.00"
             let allowShared = auditBool(item["allow_shared_relations"]) != false
             let allowPersonal = auditBool(item["allow_personal_relations"]) != false
+            let allowMemory = auditBool(item["allow_memory_writes"]) != false
             var parts = [
                 "labels \(labels.isEmpty ? "any" : labels.joined(separator: ","))",
+                "memory kinds \(memoryKinds.isEmpty ? "any" : memoryKinds.joined(separator: ","))",
                 "min rating \(minFactRating)",
                 "shared \(allowShared ? "allowed" : "disabled")",
                 "personal \(allowPersonal ? "allowed" : "disabled")",
+                "memory \(allowMemory ? "allowed" : "disabled")",
             ]
             if let version = auditString(item["version_ns"]) {
                 parts.append("version \(version)")
@@ -3535,15 +3567,20 @@ final class ActivityStore: ObservableObject {
                 let version = auditString(repoPolicy["version_ns"])
                 let labels = (repoPolicy["allowed_relation_labels"] as? [Any] ?? [])
                     .compactMap { auditString($0) }
+                let memoryKinds = (repoPolicy["allowed_memory_kinds"] as? [Any] ?? [])
+                    .compactMap { auditString($0) }
                 let minFactRating = auditDecimal(repoPolicy["min_fact_rating"]) ?? "0.00"
                 let allowShared = auditBool(repoPolicy["allow_shared_relations"]) != false
                 let allowPersonal = auditBool(repoPolicy["allow_personal_relations"]) != false
+                let allowMemory = auditBool(repoPolicy["allow_memory_writes"]) != false
                 let policyScope = inheritedFrom.isEmpty ? policyRepo : "\(policyRepo) inherited from \(inheritedFrom)"
                 lines.append("Repo policy: \(policyScope)")
                 lines.append("Allowed relation labels: \(labels.isEmpty ? "any" : labels.joined(separator: ", "))")
+                lines.append("Allowed memory kinds: \(memoryKinds.isEmpty ? "any" : memoryKinds.joined(separator: ", "))")
                 lines.append("Minimum fact rating: \(minFactRating)")
                 lines.append("Shared relations: \(allowShared ? "allowed" : "disabled")")
                 lines.append("Personal links: \(allowPersonal ? "allowed" : "disabled")")
+                lines.append("Memory writes: \(allowMemory ? "allowed" : "disabled")")
                 if let version {
                     lines.append("Policy version: \(version)")
                 }
@@ -3833,6 +3870,9 @@ final class ActivityStore: ObservableObject {
         if let labelCount = auditInt(metadata["allowed_relation_label_count"]) {
             parts.append("labels \(labelCount)")
         }
+        if let memoryKindCount = auditInt(metadata["allowed_memory_kind_count"]) {
+            parts.append("memory kinds \(memoryKindCount)")
+        }
         if let minFactRating = auditDecimal(metadata["min_fact_rating"]) {
             parts.append("min rating \(minFactRating)")
         }
@@ -3841,6 +3881,9 @@ final class ActivityStore: ObservableObject {
         }
         if let allowPersonal = auditBool(metadata["allow_personal_relations"]) {
             parts.append("personal \(allowPersonal ? "allowed" : "disabled")")
+        }
+        if let allowMemory = auditBool(metadata["allow_memory_writes"]) {
+            parts.append("memory \(allowMemory ? "allowed" : "disabled")")
         }
         let isRelationPolicyConflict = action == "relation_policy_version_conflict"
         if let policyFingerprint = auditString(metadata["policy_fingerprint"]), !isRelationPolicyConflict {
@@ -4056,6 +4099,9 @@ final class ActivityStore: ObservableObject {
         if let labelCount = auditInt(metadata["allowed_relation_label_count"]) {
             parts.append("labels \(labelCount)")
         }
+        if let memoryKindCount = auditInt(metadata["allowed_memory_kind_count"]) {
+            parts.append("memory kinds \(memoryKindCount)")
+        }
         if let minFactRating = auditDecimal(metadata["min_fact_rating"]) {
             parts.append("min rating \(minFactRating)")
         }
@@ -4064,6 +4110,9 @@ final class ActivityStore: ObservableObject {
         }
         if let allowPersonal = auditBool(metadata["allow_personal_relations"]) {
             parts.append("personal links \(allowPersonal ? "allowed" : "disabled")")
+        }
+        if let allowMemory = auditBool(metadata["allow_memory_writes"]) {
+            parts.append("memory writes \(allowMemory ? "allowed" : "disabled")")
         }
         if let policyFingerprint = auditString(metadata["policy_fingerprint"]) {
             parts.append("fingerprint \(shortAuditHash(policyFingerprint))")

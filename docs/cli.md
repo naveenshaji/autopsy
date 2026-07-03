@@ -223,12 +223,14 @@ including the matching caller-owned grant, capabilities, token scope, and the
 effective repo policy when the caller has read access.
 `shared-server policy --repo-scope <repo>` reads the current repo policy,
 including any inherited wildcard policy. `shared-server update-policy
---repo-scope <repo>` lets owners update allowed relation labels, minimum
-`fact_rating`, shared-relation enablement, personal-link enablement, and policy
-notes. Omitted fields preserve the current server policy. The CLI sends the
-policy `version_ns` it just read as `expected_version_ns`, so stale policy
-updates fail with a server-side version conflict instead of overwriting newer
-rules. Use `--clear-relation-labels` to intentionally allow any relation label.
+--repo-scope <repo>` lets owners update allowed relation labels, allowed shared
+memory kinds, minimum `fact_rating`, shared-relation enablement, personal-link
+enablement, shared-memory write enablement, and policy notes. Omitted fields
+preserve the current server policy. The CLI sends the policy `version_ns` it
+just read as `expected_version_ns`, so stale policy updates fail with a
+server-side version conflict instead of overwriting newer rules. Use
+`--clear-relation-labels` to intentionally allow any relation label and
+`--clear-memory-kinds` to allow any memory kind.
 `shared-server reset-policy --repo-scope <repo>` removes the explicit repo
 policy after reading its `version_ns`, letting the repo inherit wildcard policy
 or the server default without stale reset races. `shared-server policies` lists

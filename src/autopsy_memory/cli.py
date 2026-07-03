@@ -4962,6 +4962,7 @@ def summarize_shared_server_policies(items: list[dict[str, Any]]) -> dict[str, A
     constrained_count = 0
     disabled_shared_count = 0
     disabled_personal_count = 0
+    disabled_memory_count = 0
     repos: set[str] = set()
     for item in items:
         repo = str(item.get("repo") or "")
@@ -4969,23 +4970,29 @@ def summarize_shared_server_policies(items: list[dict[str, Any]]) -> dict[str, A
             repos.add(repo)
         labels = item.get("allowed_relation_labels") if isinstance(item.get("allowed_relation_labels"), list) else []
         label_count = len([label for label in labels if str(label or "").strip()])
+        memory_kinds = item.get("allowed_memory_kinds") if isinstance(item.get("allowed_memory_kinds"), list) else []
+        memory_kind_count = len([kind for kind in memory_kinds if str(kind or "").strip()])
         try:
             min_fact_rating = float(item.get("min_fact_rating") or 0.0)
         except (TypeError, ValueError):
             min_fact_rating = 0.0
         shared_disabled = not bool(item.get("allow_shared_relations", True))
         personal_disabled = not bool(item.get("allow_personal_relations", True))
-        if label_count > 0 or min_fact_rating > 0.0 or shared_disabled or personal_disabled:
+        memory_disabled = not bool(item.get("allow_memory_writes", True))
+        if label_count > 0 or memory_kind_count > 0 or min_fact_rating > 0.0 or shared_disabled or personal_disabled or memory_disabled:
             constrained_count += 1
         if shared_disabled:
             disabled_shared_count += 1
         if personal_disabled:
             disabled_personal_count += 1
+        if memory_disabled:
+            disabled_memory_count += 1
     return {
         "policies_count": len(items),
         "constrained_policies_count": constrained_count,
         "disabled_shared_policy_count": disabled_shared_count,
         "disabled_personal_policy_count": disabled_personal_count,
+        "disabled_memory_policy_count": disabled_memory_count,
         "policy_repos": sorted(repos)[:20],
     }
 
@@ -4993,22 +5000,27 @@ def summarize_shared_server_policies(items: list[dict[str, Any]]) -> dict[str, A
 def summarize_shared_server_effective_policy(policy: dict[str, Any]) -> dict[str, Any]:
     labels = policy.get("allowed_relation_labels") if isinstance(policy.get("allowed_relation_labels"), list) else []
     label_count = len([label for label in labels if str(label or "").strip()])
+    memory_kinds = policy.get("allowed_memory_kinds") if isinstance(policy.get("allowed_memory_kinds"), list) else []
+    memory_kind_count = len([kind for kind in memory_kinds if str(kind or "").strip()])
     try:
         min_fact_rating = float(policy.get("min_fact_rating") or 0.0)
     except (TypeError, ValueError):
         min_fact_rating = 0.0
     shared_allowed = bool(policy.get("allow_shared_relations", True))
     personal_allowed = bool(policy.get("allow_personal_relations", True))
-    constrained = label_count > 0 or min_fact_rating > 0.0 or not shared_allowed or not personal_allowed
+    memory_allowed = bool(policy.get("allow_memory_writes", True))
+    constrained = label_count > 0 or memory_kind_count > 0 or min_fact_rating > 0.0 or not shared_allowed or not personal_allowed or not memory_allowed
     return {
         "effective_policy_repo": str(policy.get("repo") or ""),
         "effective_policy_inherited_from": str(policy.get("inherited_from") or ""),
         "effective_policy_version_ns": str(policy.get("version_ns") or ""),
         "effective_policy_fingerprint": str(policy.get("policy_fingerprint") or ""),
         "effective_policy_relation_label_count": label_count,
+        "effective_policy_memory_kind_count": memory_kind_count,
         "effective_policy_min_fact_rating": min_fact_rating,
         "effective_policy_shared_relations_allowed": shared_allowed,
         "effective_policy_personal_relations_allowed": personal_allowed,
+        "effective_policy_memory_writes_allowed": memory_allowed,
         "effective_policy_constrained": constrained,
     }
 
@@ -6106,6 +6118,8 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
             fail("shared-server update-policy cannot combine --allow-shared-relations and --disable-shared-relations", 2)
         if bool(getattr(args, "allow_personal_relations", False)) and bool(getattr(args, "disable_personal_relations", False)):
             fail("shared-server update-policy cannot combine --allow-personal-relations and --disable-personal-relations", 2)
+        if bool(getattr(args, "allow_memory_writes", False)) and bool(getattr(args, "disable_memory_writes", False)):
+            fail("shared-server update-policy cannot combine --allow-memory-writes and --disable-memory-writes", 2)
         existing = shared_server_request_or_fail(config, shared_server_policy_path(graph_slug, repo), timeout=10)
         supplied_labels = split_cli_csv_values(getattr(args, "allowed_relation_label", None))
         if bool(getattr(args, "clear_relation_labels", False)):
@@ -6117,6 +6131,17 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
                 str(label)
                 for label in existing.get("allowed_relation_labels", [])
                 if str(label or "").strip()
+            ]
+        supplied_memory_kinds = split_cli_csv_values(getattr(args, "allowed_memory_kind", None))
+        if bool(getattr(args, "clear_memory_kinds", False)):
+            allowed_memory_kinds: list[str] = []
+        elif supplied_memory_kinds:
+            allowed_memory_kinds = supplied_memory_kinds
+        else:
+            allowed_memory_kinds = [
+                str(kind)
+                for kind in existing.get("allowed_memory_kinds", [])
+                if str(kind or "").strip()
             ]
         min_fact_rating = normalize_fact_rating(getattr(args, "min_fact_rating", None))
         if min_fact_rating is None:
@@ -6131,13 +6156,20 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
             allow_personal_relations = True
         if bool(getattr(args, "disable_personal_relations", False)):
             allow_personal_relations = False
+        allow_memory_writes = bool(existing.get("allow_memory_writes", True))
+        if bool(getattr(args, "allow_memory_writes", False)):
+            allow_memory_writes = True
+        if bool(getattr(args, "disable_memory_writes", False)):
+            allow_memory_writes = False
         notes = getattr(args, "policy_notes", None)
         policy_payload = {
             "repo": repo,
             "allowed_relation_labels": allowed_relation_labels,
+            "allowed_memory_kinds": allowed_memory_kinds,
             "min_fact_rating": min_fact_rating,
             "allow_shared_relations": allow_shared_relations,
             "allow_personal_relations": allow_personal_relations,
+            "allow_memory_writes": allow_memory_writes,
             "notes": str(existing.get("notes") or "") if notes is None else str(notes),
             "expected_version_ns": int(existing.get("version_ns") or 0),
         }

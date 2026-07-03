@@ -282,9 +282,12 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "repo-a",
             "--allowed-relation-label",
             "supports,depends_on",
+            "--allowed-memory-kind",
+            "decision,observation",
             "--min-fact-rating",
             "0.8",
             "--disable-personal-relations",
+            "--disable-memory-writes",
             "--policy-notes",
             "strong evidence only",
         ])
@@ -530,8 +533,10 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(storage_status_args.shared_server_action, "storage-status")
         self.assertEqual(update_policy_args.shared_server_action, "update-policy")
         self.assertEqual(update_policy_args.allowed_relation_label, ["supports,depends_on"])
+        self.assertEqual(update_policy_args.allowed_memory_kind, ["decision,observation"])
         self.assertEqual(update_policy_args.min_fact_rating, 0.8)
         self.assertTrue(update_policy_args.disable_personal_relations)
+        self.assertTrue(update_policy_args.disable_memory_writes)
         self.assertEqual(update_policy_args.policy_notes, "strong evidence only")
         self.assertEqual(reset_policy_args.shared_server_action, "reset-policy")
         self.assertEqual(reset_policy_args.repo_scope, "repo-a")
@@ -2543,9 +2548,12 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "repo-a",
             "--allowed-relation-label",
             "supports,depends_on",
+            "--allowed-memory-kind",
+            "decision,observation",
             "--min-fact-rating",
             "0.8",
             "--disable-personal-relations",
+            "--disable-memory-writes",
             "--policy-notes",
             "strong only",
         ])
@@ -2559,9 +2567,11 @@ class AutopsyCLIContractTests(unittest.TestCase):
                     "graph_slug": "autopsy",
                     "repo": "repo-a",
                     "allowed_relation_labels": ["references"],
+                    "allowed_memory_kinds": ["attempt"],
                     "min_fact_rating": 0.2,
                     "allow_shared_relations": True,
                     "allow_personal_relations": True,
+                    "allow_memory_writes": True,
                     "notes": "old",
                     "version_ns": 42,
                 }
@@ -2577,6 +2587,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
 
         payload = json.loads(stream.getvalue())
         self.assertEqual(payload["allowed_relation_labels"], ["supports", "depends_on"])
+        self.assertEqual(payload["allowed_memory_kinds"], ["decision", "observation"])
+        self.assertFalse(payload["allow_memory_writes"])
         self.assertEqual(
             calls,
             [
@@ -2587,9 +2599,11 @@ class AutopsyCLIContractTests(unittest.TestCase):
                     {
                         "repo": "repo-a",
                         "allowed_relation_labels": ["supports", "depends_on"],
+                        "allowed_memory_kinds": ["decision", "observation"],
                         "min_fact_rating": 0.8,
                         "allow_shared_relations": True,
                         "allow_personal_relations": False,
+                        "allow_memory_writes": False,
                         "notes": "strong only",
                         "expected_version_ns": 42,
                     },
@@ -2806,9 +2820,11 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         {
                             "repo": "repo-a",
                             "allowed_relation_labels": ["supports"],
+                            "allowed_memory_kinds": ["decision"],
                             "min_fact_rating": 0.8,
                             "allow_shared_relations": True,
                             "allow_personal_relations": False,
+                            "allow_memory_writes": False,
                         }
                     ],
                 }
@@ -2817,9 +2833,11 @@ class AutopsyCLIContractTests(unittest.TestCase):
                     "repo": "repo-a",
                     "inherited_from": "",
                     "allowed_relation_labels": ["supports"],
+                    "allowed_memory_kinds": ["decision"],
                     "min_fact_rating": 0.8,
                     "allow_shared_relations": True,
                     "allow_personal_relations": False,
+                    "allow_memory_writes": False,
                     "version_ns": 123,
                     "policy_fingerprint": "sha256:abc123policy",
                     "notes": "keep private",
@@ -3006,6 +3024,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["team"]["constrained_policies_count"], 1)
         self.assertEqual(payload["team"]["disabled_personal_policy_count"], 1)
         self.assertEqual(payload["team"]["disabled_shared_policy_count"], 0)
+        self.assertEqual(payload["team"]["disabled_memory_policy_count"], 1)
         self.assertEqual(payload["team"]["policy_repos"], ["repo-a"])
         self.assertTrue(payload["team"]["policy_inventory_repo_filter_present"])
         self.assertTrue(payload["team"]["can_read_policy"])
@@ -3013,9 +3032,11 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["team"]["effective_policy_version_ns"], "123")
         self.assertEqual(payload["team"]["effective_policy_fingerprint"], "sha256:abc123policy")
         self.assertEqual(payload["team"]["effective_policy_relation_label_count"], 1)
+        self.assertEqual(payload["team"]["effective_policy_memory_kind_count"], 1)
         self.assertEqual(payload["team"]["effective_policy_min_fact_rating"], 0.8)
         self.assertTrue(payload["team"]["effective_policy_shared_relations_allowed"])
         self.assertFalse(payload["team"]["effective_policy_personal_relations_allowed"])
+        self.assertFalse(payload["team"]["effective_policy_memory_writes_allowed"])
         self.assertTrue(payload["team"]["effective_policy_constrained"])
         self.assertTrue(payload["team"]["can_read_audit_integrity"])
         self.assertEqual(payload["team"]["audit_integrity"]["status"], "verified")
