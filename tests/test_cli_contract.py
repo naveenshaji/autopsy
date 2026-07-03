@@ -3731,6 +3731,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "idempotency_response_storage_failure_guard": True,
                         "memory_lifecycle_policy_cas": True,
                         "access_mutation_idempotency": True,
+                        "relation_mutation_idempotency": True,
                     },
                     "security": {
                         "idempotency_record_retention_days": 7,
@@ -3830,6 +3831,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertTrue(payload["team"]["can_use_idempotency_response_storage_failure_guard"])
         self.assertTrue(payload["team"]["can_use_memory_lifecycle_policy_cas"])
         self.assertTrue(payload["team"]["can_use_access_mutation_idempotency"])
+        self.assertTrue(payload["team"]["can_use_relation_mutation_idempotency"])
         self.assertEqual(payload["team"]["idempotency_response_max_bytes"], 262144)
 
     def test_shared_server_team_status_summarizes_remote_access_and_scoped_tokens(self):
@@ -3870,6 +3872,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "idempotency_response_storage_failure_guard": True,
                         "memory_lifecycle_policy_cas": True,
                         "access_mutation_idempotency": True,
+                        "relation_mutation_idempotency": True,
                     },
                     "security": {
                         "idempotency_record_retention_days": 7,
@@ -4327,6 +4330,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertTrue(payload["team"]["can_use_idempotency_response_storage_failure_guard"])
         self.assertTrue(payload["team"]["can_use_memory_lifecycle_policy_cas"])
         self.assertTrue(payload["team"]["can_use_access_mutation_idempotency"])
+        self.assertTrue(payload["team"]["can_use_relation_mutation_idempotency"])
         self.assertEqual(payload["team"]["idempotency_record_retention_days"], 7)
         self.assertEqual(payload["team"]["idempotency_pending_timeout_seconds"], 3600)
         self.assertEqual(payload["team"]["idempotency_response_max_bytes"], 262144)

@@ -368,6 +368,7 @@ final class ActivityStore: ObservableObject {
                 ("repo_policy_version_conflict_audits", "policy conflict audits"),
                 ("idempotency_keys", "retry-safe memory writes"),
                 ("access_mutation_idempotency", "retry-safe access actions"),
+                ("relation_mutation_idempotency", "retry-safe relation actions"),
                 ("idempotency_response_secret_guard", "secret-safe retry storage"),
                 ("idempotency_response_size_guard", idempotencyResponseSizeLimitLabel(capabilities)),
                 ("idempotency_response_storage_failure_guard", "retry storage fallback"),
