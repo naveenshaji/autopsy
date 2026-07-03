@@ -263,6 +263,9 @@ private struct SharedSettingsTab: View {
                 if !store.sharedServerIdempotencyConflictsText.isEmpty {
                     LabeledContent("Idempotency Conflicts", value: store.sharedServerIdempotencyConflictsText)
                 }
+                if !store.sharedServerIdempotencyResponseNotStoredText.isEmpty {
+                    LabeledContent("Retry Storage Skips", value: store.sharedServerIdempotencyResponseNotStoredText)
+                }
                 HStack {
                     Button("Use Owner Config") {
                         store.configureSharedServerFromOwnerConfig()

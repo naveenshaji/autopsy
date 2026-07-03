@@ -91,6 +91,7 @@ final class ActivityStore: ObservableObject {
         "relation_policy_version_conflict",
         "idempotency_replay",
         "idempotency_key_conflict",
+        "idempotency_response_not_stored",
         "upsert_memory",
         "archive_memory",
         "restore_memory",
@@ -893,6 +894,34 @@ final class ActivityStore: ObservableObject {
             return text.clippedForMenuBar(limit: 110)
         }
         if let error = team.idempotencyConflictsError, !error.isEmpty {
+            return error.clippedForMenuBar(limit: 28)
+        }
+        return ""
+    }
+
+    var sharedServerIdempotencyResponseNotStoredText: String {
+        guard let team = currentSharedServer?.team else { return "" }
+        if let count = team.idempotencyResponseNotStoredCount {
+            var parts: [String] = []
+            if let modeCounts = team.idempotencyResponseNotStoredModeCounts, !modeCounts.isEmpty {
+                parts.append(contentsOf: modeCounts
+                    .sorted { $0.key < $1.key }
+                    .map { "\($0.key): \($0.value)" })
+            }
+            if let reasonCounts = team.idempotencyResponseNotStoredReasonCounts, !reasonCounts.isEmpty {
+                let reasons = reasonCounts
+                    .sorted { $0.key < $1.key }
+                    .map { "\($0.key): \($0.value)" }
+                    .joined(separator: ", ")
+                parts.append("reasons \(reasons)")
+            }
+            if let latest = team.latestIdempotencyResponseNotStoredAt, !latest.isEmpty {
+                parts.append("latest \(compactSharedServerDate(latest))")
+            }
+            let text = parts.isEmpty ? "\(count)" : "\(count) (\(parts.joined(separator: ", ")))"
+            return text.clippedForMenuBar(limit: 110)
+        }
+        if let error = team.idempotencyResponseNotStoredError, !error.isEmpty {
             return error.clippedForMenuBar(limit: 28)
         }
         return ""

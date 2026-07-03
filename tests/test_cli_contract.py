@@ -4131,6 +4131,26 @@ class AutopsyCLIContractTests(unittest.TestCase):
                 }
             if path == (
                 "/v1/audit-events/summary?graph_slug=autopsy&limit=50&repo=repo-a"
+                "&action=idempotency_response_not_stored"
+                "&metadata_field=mode&metadata_field=reason"
+            ):
+                return {
+                    "event_count": 2,
+                    "metadata_counts": {
+                        "mode": {"upsert_memory": 2},
+                        "reason": {"secret_response_key": 2},
+                    },
+                    "latest_created_at": "2026-07-02T09:55:00Z",
+                    "scope": {
+                        "graph_slug": "autopsy",
+                        "repo": "repo-a",
+                        "actions": ["idempotency_response_not_stored"],
+                        "metadata_fields": ["mode", "reason"],
+                        "filtered_window": True,
+                    },
+                }
+            if path == (
+                "/v1/audit-events/summary?graph_slug=autopsy&limit=50&repo=repo-a"
                 "&action=invite_user&metadata_field=expires_at_defaulted"
             ):
                 return {
@@ -4388,6 +4408,12 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["team"]["idempotency_conflict_mode_counts"], {"upsert_memory": 1})
         self.assertEqual(payload["team"]["idempotency_conflict_reason_counts"], {"request_hash_mismatch": 1})
         self.assertEqual(payload["team"]["latest_idempotency_conflict_at"], "2026-07-02T09:50:00Z")
+        self.assertTrue(payload["team"]["can_read_idempotency_response_not_stored"])
+        self.assertEqual(payload["team"]["idempotency_response_not_stored_source"], "summary")
+        self.assertEqual(payload["team"]["idempotency_response_not_stored_count"], 2)
+        self.assertEqual(payload["team"]["idempotency_response_not_stored_mode_counts"], {"upsert_memory": 2})
+        self.assertEqual(payload["team"]["idempotency_response_not_stored_reason_counts"], {"secret_response_key": 2})
+        self.assertEqual(payload["team"]["latest_idempotency_response_not_stored_at"], "2026-07-02T09:55:00Z")
         self.assertTrue(payload["team"]["can_read_invite_expiration_summary"])
         self.assertEqual(payload["team"]["invite_expiration_summary_source"], "summary")
         self.assertEqual(payload["team"]["invite_expiration_audit_count"], 5)

@@ -5307,6 +5307,27 @@ def summarize_shared_server_idempotency_conflicts(items: list[dict[str, Any]]) -
     }
 
 
+def summarize_shared_server_idempotency_response_not_stored(items: list[dict[str, Any]]) -> dict[str, Any]:
+    mode_counts: dict[str, int] = {}
+    reason_counts: dict[str, int] = {}
+    latest_created_at = ""
+    for item in items:
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        mode = str(metadata.get("mode") or "unknown").strip() or "unknown"
+        reason = str(metadata.get("reason") or "unknown").strip() or "unknown"
+        mode_counts[mode] = mode_counts.get(mode, 0) + 1
+        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        created_at = str(item.get("created_at") or "").strip()
+        if created_at and (not latest_created_at or created_at > latest_created_at):
+            latest_created_at = created_at
+    return {
+        "idempotency_response_not_stored_count": len(items),
+        "idempotency_response_not_stored_mode_counts": dict(sorted(mode_counts.items())),
+        "idempotency_response_not_stored_reason_counts": dict(sorted(reason_counts.items())),
+        "latest_idempotency_response_not_stored_at": latest_created_at,
+    }
+
+
 def _safe_int(value: Any) -> int:
     try:
         return int(value or 0)
@@ -5381,6 +5402,16 @@ def summarize_shared_server_idempotency_conflict_summary(summary: dict[str, Any]
         "idempotency_conflict_mode_counts": _int_count_map(metadata_counts.get("mode")),
         "idempotency_conflict_reason_counts": _int_count_map(metadata_counts.get("reason")),
         "latest_idempotency_conflict_at": str(summary.get("latest_created_at") or ""),
+    }
+
+
+def summarize_shared_server_idempotency_response_not_stored_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    metadata_counts = summary.get("metadata_counts") if isinstance(summary.get("metadata_counts"), dict) else {}
+    return {
+        "idempotency_response_not_stored_count": _safe_int(summary.get("event_count")),
+        "idempotency_response_not_stored_mode_counts": _int_count_map(metadata_counts.get("mode")),
+        "idempotency_response_not_stored_reason_counts": _int_count_map(metadata_counts.get("reason")),
+        "latest_idempotency_response_not_stored_at": str(summary.get("latest_created_at") or ""),
     }
 
 
@@ -5488,6 +5519,7 @@ def build_shared_server_team_status_payload(
         "can_read_memory_version_conflicts": False,
         "can_read_idempotency_replays": False,
         "can_read_idempotency_conflicts": False,
+        "can_read_idempotency_response_not_stored": False,
         "can_read_invite_expiration_summary": False,
         "can_read_audit_reader_summary": False,
         "can_read_shared_read_summary": False,
@@ -5710,6 +5742,7 @@ def build_shared_server_team_status_payload(
     read_raw_repo_policy_conflict_audits = False
     read_raw_idempotency_replay_audits = False
     read_raw_idempotency_conflict_audits = False
+    read_raw_idempotency_response_not_stored_audits = False
     try:
         repo_conflict_summary_payload = shared_server_request(
             config,
@@ -5860,6 +5893,31 @@ def build_shared_server_team_status_payload(
         team["can_read_idempotency_conflicts"] = True
         team["idempotency_conflicts_source"] = "summary"
         team.update(summarize_shared_server_idempotency_conflict_summary(idempotency_conflict_summary_payload))
+    try:
+        idempotency_response_not_stored_summary_payload = shared_server_request(
+            config,
+            shared_server_audit_summary_path(
+                graph_slug,
+                repo or "*",
+                limit=50,
+                actions=["idempotency_response_not_stored"],
+                metadata_fields=["mode", "reason"],
+                since=audit_since,
+                until=audit_until,
+            ),
+            timeout=10,
+        )
+    except urllib.error.HTTPError as exc:
+        if exc.code in {404, 405}:
+            read_raw_idempotency_response_not_stored_audits = True
+        else:
+            team["idempotency_response_not_stored_error"] = shared_server_http_error_message(exc)
+    except Exception as exc:
+        team["idempotency_response_not_stored_error"] = str(exc)
+    else:
+        team["can_read_idempotency_response_not_stored"] = True
+        team["idempotency_response_not_stored_source"] = "summary"
+        team.update(summarize_shared_server_idempotency_response_not_stored_summary(idempotency_response_not_stored_summary_payload))
     try:
         invite_summary_payload = shared_server_request(
             config,
@@ -6083,6 +6141,29 @@ def build_shared_server_team_status_payload(
             team["can_read_idempotency_conflicts"] = True
             team["idempotency_conflicts_source"] = "raw_fallback"
             team.update(summarize_shared_server_idempotency_conflicts(conflicts))
+    if read_raw_idempotency_response_not_stored_audits:
+        try:
+            response_not_stored_payload = shared_server_request(
+                config,
+                shared_server_audit_path(
+                    graph_slug,
+                    repo or "*",
+                    limit=50,
+                    actions=["idempotency_response_not_stored"],
+                    since=audit_since,
+                    until=audit_until,
+                ),
+                timeout=10,
+            )
+        except urllib.error.HTTPError as exc:
+            team["idempotency_response_not_stored_error"] = shared_server_http_error_message(exc)
+        except Exception as exc:
+            team["idempotency_response_not_stored_error"] = str(exc)
+        else:
+            items = response_not_stored_payload.get("items") if isinstance(response_not_stored_payload.get("items"), list) else []
+            team["can_read_idempotency_response_not_stored"] = True
+            team["idempotency_response_not_stored_source"] = "raw_fallback"
+            team.update(summarize_shared_server_idempotency_response_not_stored(items))
     return payload
 
 
