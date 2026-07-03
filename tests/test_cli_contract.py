@@ -385,8 +385,31 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "--limit",
             "5",
         ])
-        archive_args = parser.parse_args(["shared-server", "archive", "shared:1", "--repo-scope", "repo-a", "--reason", "duplicate"])
-        restore_args = parser.parse_args(["shared-server", "restore", "shared:1", "--repo-scope", "repo-a", "--reason", "needed"])
+        archive_args = parser.parse_args([
+            "shared-server",
+            "archive",
+            "shared:1",
+            "--repo-scope",
+            "repo-a",
+            "--expected-version-ns",
+            "222",
+            "--reason",
+            "duplicate",
+        ])
+        restore_args = parser.parse_args([
+            "shared-server",
+            "restore",
+            "shared:1",
+            "--repo-scope",
+            "repo-a",
+            "--expected-version-ns",
+            "333",
+            "--kind",
+            "observation",
+            "--check-policy",
+            "--reason",
+            "needed",
+        ])
         restore_version_args = parser.parse_args([
             "shared-server",
             "restore-version",
@@ -637,8 +660,12 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(context_args.limit, 5)
         self.assertEqual(archive_args.shared_server_action, "archive")
         self.assertEqual(archive_args.stable_key, "shared:1")
+        self.assertEqual(archive_args.expected_version_ns, 222)
         self.assertEqual(archive_args.reason, "duplicate")
         self.assertEqual(restore_args.shared_server_action, "restore")
+        self.assertEqual(restore_args.expected_version_ns, 333)
+        self.assertEqual(restore_args.kind, "observation")
+        self.assertTrue(restore_args.check_policy)
         self.assertEqual(restore_args.reason, "needed")
         self.assertEqual(restore_version_args.shared_server_action, "restore-version")
         self.assertEqual(restore_version_args.stable_key, "shared:1")
@@ -1457,9 +1484,19 @@ class AutopsyCLIContractTests(unittest.TestCase):
 
     def test_shared_server_archive_posts_lifecycle_payload(self):
         parser = cli.build_parser()
-        args = parser.parse_args(["shared-server", "archive", "shared:1", "--repo-scope", "repo-a", "--reason", "duplicate"])
+        args = parser.parse_args([
+            "shared-server",
+            "archive",
+            "shared:1",
+            "--repo-scope",
+            "repo-a",
+            "--expected-version-ns",
+            "222",
+            "--reason",
+            "duplicate",
+        ])
         config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
-        calls: list[tuple[str, str, dict[str, str] | None]] = []
+        calls: list[tuple[str, str, dict[str, object] | None]] = []
 
         def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
             calls.append((path, method, payload))
@@ -1480,8 +1517,75 @@ class AutopsyCLIContractTests(unittest.TestCase):
                 (
                     "/v1/shared-graphs/autopsy/memories/archive",
                     "POST",
-                    {"stable_key": "shared:1", "repo": "repo-a", "reason": "duplicate"},
+                    {"stable_key": "shared:1", "repo": "repo-a", "reason": "duplicate", "expected_version_ns": 222},
                 )
+            ],
+        )
+
+    def test_shared_server_restore_check_policy_preflights_and_posts_lifecycle_payload(self):
+        parser = cli.build_parser()
+        args = parser.parse_args([
+            "shared-server",
+            "restore",
+            "shared:1",
+            "--repo-scope",
+            "repo-a",
+            "--expected-version-ns",
+            "333",
+            "--kind",
+            "observation",
+            "--check-policy",
+            "--reason",
+            "needed",
+        ])
+        config = {"base_url": "https://shared.example", "graph_slug": "autopsy", "token": "secret"}
+        calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+        def fake_request(_config, path, *, method="GET", payload=None, timeout=5.0):
+            calls.append((path, method, payload))
+            if path.endswith("/memories/check"):
+                return {
+                    "allowed": True,
+                    "reason": "allowed",
+                    "kind": "observation",
+                    "policy_fingerprint": "sha256:checked-memory",
+                    "policy_version_ns": 42,
+                    "dry_run": True,
+                }
+            return {"stable_key": "shared:1", "archived": False, "audit": {"id": "aud_1"}}
+
+        stream = io.StringIO()
+        with (
+            mock.patch.object(cli, "load_shared_server_config", return_value=config),
+            mock.patch.object(cli, "shared_server_request", side_effect=fake_request),
+            contextlib.redirect_stdout(stream),
+        ):
+            args.func(args)
+
+        payload = json.loads(stream.getvalue())
+        self.assertEqual(payload["restored"]["archived"], False)
+        self.assertEqual(payload["policy_check"]["policy_version_ns"], 42)
+        self.assertEqual(payload["audit"]["id"], "aud_1")
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "/v1/shared-graphs/autopsy/memories/check",
+                    "POST",
+                    {"repo": "repo-a", "kind": "observation"},
+                ),
+                (
+                    "/v1/shared-graphs/autopsy/memories/restore",
+                    "POST",
+                    {
+                        "stable_key": "shared:1",
+                        "repo": "repo-a",
+                        "reason": "needed",
+                        "expected_version_ns": 333,
+                        "expected_policy_fingerprint": "sha256:checked-memory",
+                        "expected_policy_version_ns": 42,
+                    },
+                ),
             ],
         )
 

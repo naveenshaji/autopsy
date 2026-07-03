@@ -392,6 +392,7 @@ private struct SharedSettingsTab: View {
                         store.archiveSharedServerMemory(
                             stableKey: sharedMemoryStableKey,
                             repoScope: sharedMemoryRepoScope,
+                            expectedVersionNS: sharedMemoryExpectedVersionNS,
                             reason: sharedMemoryReason
                         )
                     }
@@ -401,6 +402,8 @@ private struct SharedSettingsTab: View {
                         store.restoreSharedServerMemory(
                             stableKey: sharedMemoryStableKey,
                             repoScope: sharedMemoryRepoScope,
+                            expectedVersionNS: sharedMemoryExpectedVersionNS,
+                            kind: sharedMemoryKind,
                             reason: sharedMemoryReason
                         )
                     }

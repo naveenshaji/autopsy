@@ -127,9 +127,10 @@ Run checks:
   and access-change reports include short policy fingerprint prefixes when the
   configured server supports them.
   Shared-memory controls include a memory-kind field, direct memory policy
-  checks that copy a dry-run report, and checked restore-version writes that
-  send the policy fingerprint/version returned by the server before mutating
-  shared memory.
+  checks that copy a dry-run report, lifecycle archive/restore actions that
+  send the reviewed expected memory version, and checked restore/restore-version
+  writes that send the policy fingerprint/version returned by the server before
+  reactivating or mutating shared memory.
   Team status surfaces relation-policy and memory-policy conflict counts with
   compact reason breakdowns when the server audit summary endpoint is available,
   and its refresh controls accept optional relative-hour or since/until audit

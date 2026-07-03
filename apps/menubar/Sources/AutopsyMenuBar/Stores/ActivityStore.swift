@@ -1142,15 +1142,29 @@ final class ActivityStore: ObservableObject {
         }
     }
 
-    func archiveSharedServerMemory(stableKey: String, repoScope: String, reason: String) {
+    func archiveSharedServerMemory(stableKey: String, repoScope: String, expectedVersionNS: String, reason: String) {
         Task {
-            await updateSharedMemoryLifecycle(action: "archive", stableKey: stableKey, repoScope: repoScope, reason: reason)
+            await updateSharedMemoryLifecycle(
+                action: "archive",
+                stableKey: stableKey,
+                repoScope: repoScope,
+                expectedVersionNS: expectedVersionNS,
+                kind: "",
+                reason: reason
+            )
         }
     }
 
-    func restoreSharedServerMemory(stableKey: String, repoScope: String, reason: String) {
+    func restoreSharedServerMemory(stableKey: String, repoScope: String, expectedVersionNS: String, kind: String, reason: String) {
         Task {
-            await updateSharedMemoryLifecycle(action: "restore", stableKey: stableKey, repoScope: repoScope, reason: reason)
+            await updateSharedMemoryLifecycle(
+                action: "restore",
+                stableKey: stableKey,
+                repoScope: repoScope,
+                expectedVersionNS: expectedVersionNS,
+                kind: kind,
+                reason: reason
+            )
         }
     }
 
@@ -2062,24 +2076,30 @@ final class ActivityStore: ObservableObject {
         }
     }
 
-    private func updateSharedMemoryLifecycle(action: String, stableKey: String, repoScope: String, reason: String) async {
+    private func updateSharedMemoryLifecycle(action: String, stableKey: String, repoScope: String, expectedVersionNS: String, kind: String, reason: String) async {
         let trimmedStableKey = stableKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedStableKey.isEmpty else {
             sharedServerError = "Stable key required"
             return
         }
-        await runSharedAccessCommand(
-            [
-                "shared-server",
-                action,
-                trimmedStableKey,
-                "--repo-scope",
-                normalizedRepoScope(repoScope),
-                "--reason",
-                reason.trimmingCharacters(in: .whitespacesAndNewlines),
-            ],
-            successMessage: action == "restore" ? "Shared memory restored" : "Shared memory archived"
-        )
+        var arguments = [
+            "shared-server",
+            action,
+            trimmedStableKey,
+            "--repo-scope",
+            normalizedRepoScope(repoScope),
+            "--reason",
+            reason.trimmingCharacters(in: .whitespacesAndNewlines),
+        ]
+        let trimmedExpected = expectedVersionNS.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedExpected.isEmpty {
+            arguments += ["--expected-version-ns", trimmedExpected]
+        }
+        let trimmedKind = kind.trimmingCharacters(in: .whitespacesAndNewlines)
+        if action == "restore" && !trimmedKind.isEmpty {
+            arguments += ["--kind", trimmedKind, "--check-policy"]
+        }
+        await runSharedAccessCommand(arguments, successMessage: action == "restore" ? "Shared memory restored" : "Shared memory archived")
     }
 
     private func restoreSharedMemoryVersion(stableKey: String, versionID: String, expectedVersionNS: String, repoScope: String, kind: String, reason: String) async {

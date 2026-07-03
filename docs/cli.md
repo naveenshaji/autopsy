@@ -95,13 +95,13 @@ autopsy shared-server audit --global-audit --action auth_failure
 autopsy shared-server verify-receipt aud_123 --repo-scope /path/to/repo --integrity-hash <hash>
 autopsy shared-server invite --email dev@example.com --role writer --repo-scope /path/to/repo
 autopsy shared-server revoke-token tok_123 --repo-scope /path/to/repo
-autopsy shared-server archive shared:key --repo-scope /path/to/repo --reason duplicate
+autopsy shared-server archive shared:key --repo-scope /path/to/repo --expected-version-ns 123 --reason duplicate
 autopsy shared-server list --repo-scope /path/to/repo --include-archived
 autopsy shared-server memory-history shared:key --repo-scope /path/to/repo
 autopsy shared-server check-memory --repo-scope /path/to/repo --kind decision
 autopsy shared-server restore-version shared:key --repo-scope /path/to/repo --version-id ver_123 --kind decision --check-policy
 autopsy shared-server context --repo-scope /path/to/repo --query "current task" --min-fact-rating 0.8
-autopsy shared-server restore shared:key --repo-scope /path/to/repo --reason needed
+autopsy shared-server restore shared:key --repo-scope /path/to/repo --expected-version-ns 123 --kind decision --check-policy --reason needed
 autopsy shared-server relate shared:source shared:target --repo-scope /path/to/repo --relation depends_on --fact-rating 0.9 --check-policy
 autopsy shared-server shared-relations --repo-scope /path/to/repo --source-key shared:source
 autopsy shared-server unrelate rel_123 --repo-scope /path/to/repo
@@ -257,8 +257,8 @@ shared or personal relation before mutating the graph.
 `shared-server check-memory --repo-scope <repo> --kind <memory-kind>` dry-runs
 the repo policy for shared memory writes. It returns `allowed`, `reason`,
 effective policy source, allowed memory-kind counts, memory-write status, and
-policy fingerprint/version so clients can explain a planned publish or
-restore-version before mutating the graph.
+policy fingerprint/version so clients can explain a planned publish, restore,
+or restore-version before mutating the graph.
 `--repo` resolves to a team-stable Git scope such as
 `git:github.com/owner/repo` from `origin` when available, and falls back to the
 local absolute path for non-Git repos. `--repo-scope` passes an exact
@@ -281,6 +281,12 @@ memory changed since review. Add `--kind <memory-kind> --check-policy` to
 protect the restore with a fresh repo memory-policy preflight; manual expected
 policy fingerprint/version values are accepted when replaying a previously
 reviewed dry-run.
+`shared-server archive <shared-key> --repo-scope <repo>` and `shared-server
+restore <shared-key> --repo-scope <repo>` accept `--expected-version-ns` from a
+prior list/history review to reject stale lifecycle changes. Restore also accepts
+`--kind <memory-kind> --check-policy` or manual expected policy
+fingerprint/version values, so reactivating archived memory is guarded by the
+current repo policy before the server makes it visible again.
 `shared-server context --repo-scope <repo> --query <text>` fetches
 source-attributed shared memories plus adjacent shared graph relations as a
 ready-to-insert context block without importing them into the personal graph.

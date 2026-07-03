@@ -6687,13 +6687,54 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         stable_key = str(getattr(args, "stable_key", "") or "").strip()
         if not stable_key:
             fail(f"shared-server {action} requires a stable key", 2)
+        lifecycle_payload: dict[str, Any] = {
+            "stable_key": stable_key,
+            "repo": repo,
+            "reason": str(getattr(args, "reason", "") or ""),
+        }
+        expected_version_ns = getattr(args, "expected_version_ns", None)
+        if expected_version_ns is not None:
+            lifecycle_payload["expected_version_ns"] = int(expected_version_ns)
+        expected_policy_fingerprint = str(getattr(args, "expected_policy_fingerprint", "") or "").strip()
+        expected_policy_version_ns = getattr(args, "expected_policy_version_ns", None)
+        check_policy = bool(getattr(args, "check_policy", False))
+        policy_check: dict[str, Any] | None = None
+        if action == "archive":
+            if check_policy or expected_policy_fingerprint or expected_policy_version_ns is not None:
+                fail("shared-server archive does not accept policy guards; use --expected-version-ns for stale lifecycle protection", 2)
+        else:
+            if check_policy:
+                if expected_policy_fingerprint or expected_policy_version_ns is not None:
+                    fail("shared-server restore cannot combine --check-policy with --expected-policy-fingerprint or --expected-policy-version-ns", 2)
+                kind = str(getattr(args, "kind", "") or "").strip()
+                if not kind:
+                    fail("shared-server restore --check-policy requires --kind", 2)
+                expected_policy_fingerprint, expected_policy_version_ns, policy_check = checked_memory_policy_expectation(
+                    config,
+                    graph_slug,
+                    repo=repo,
+                    kind=kind,
+                )
+            if expected_policy_fingerprint:
+                lifecycle_payload["expected_policy_fingerprint"] = expected_policy_fingerprint
+            if expected_policy_version_ns is not None:
+                lifecycle_payload["expected_policy_version_ns"] = int(expected_policy_version_ns)
         payload = shared_server_request_or_fail(
             config,
             shared_server_memory_lifecycle_path(graph_slug, action),
             method="POST",
-            payload={"stable_key": stable_key, "repo": repo, "reason": str(getattr(args, "reason", "") or "")},
+            payload=lifecycle_payload,
             timeout=10,
         )
+        if policy_check is not None:
+            print(json.dumps({
+                "shared_server": redacted_shared_server_config(config, path=config_path),
+                "repo": repo,
+                "restored": payload,
+                "policy_check": policy_check,
+                "audit": payload.get("audit") if isinstance(payload, dict) else None,
+            }, indent=2))
+            return
         print(json.dumps(payload, indent=2))
         return
     if action == "restore-version":
