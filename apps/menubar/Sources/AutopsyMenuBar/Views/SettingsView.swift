@@ -278,9 +278,16 @@ private struct SharedSettingsTab: View {
                         )
                     }
                     .disabled(sharedActionDisabled)
+                }
 
+                HStack {
                     Button("Copy Storage") {
                         store.copySharedServerStorageStatus()
+                    }
+                    .disabled(sharedActionDisabled)
+
+                    Button("Copy Export") {
+                        store.copySharedServerExportSnapshot()
                     }
                     .disabled(sharedActionDisabled)
                 }

@@ -148,6 +148,8 @@ Run checks:
   fingerprints, server-side token fingerprints when present, token-scope denial
   counts, and user lifecycle targets, and require a global-admin shared-server
   token because they intentionally omit graph and repo filters.
+  Admin copy controls can also copy a redacted shared-server export snapshot for
+  backup handoff without including audit events by default.
   Team status is requested for the current workspace repo scope by default and
   also surfaces disabled-user counts, explicit/constrained repo-policy inventory
   counts, effective repo-policy source/fingerprint, server-side audit integrity,

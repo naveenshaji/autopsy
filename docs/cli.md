@@ -82,6 +82,7 @@ autopsy activity
 autopsy shared-server health
 autopsy shared-server capabilities
 autopsy shared-server team-status
+autopsy shared-server export-snapshot --audit-limit 0
 autopsy shared-server users
 autopsy shared-server disable-user usr_123
 autopsy shared-server enable-user --user-id usr_123
@@ -163,10 +164,13 @@ include active, never-used, non-expiring, stale, expired, revoked, and disabled
 token totals. For admins, storage-status fields also include aggregate
 idempotency-record counts and the server's completed-record retention and
 pending-record timeout windows. Team-status also reports when the server
-supports idempotency keys and bounded idempotency-record retention for
+supports admin export snapshots, idempotency keys, and bounded idempotency-record retention for
 retry-safe shared-memory mutations, plus whether retries are replaying cleanly
-or conflicting because a key was reused for a different request. Graph owners
-can use `shared-server invite --email <email> --role reader|writer|owner
+or conflicting because a key was reused for a different request.
+`shared-server export-snapshot` requires a global-admin token and returns a
+redacted shared-server snapshot suitable for backup handoff or inspection; add
+`--include-audit --audit-limit <n>` to include a bounded redacted audit-event
+tail. Graph owners can use `shared-server invite --email <email> --role reader|writer|owner
 --repo-scope <repo>` to create or reuse a user, grant repo access, and issue a
 one-time token in one audited operation. Successful shared mutation responses
 can include a redacted `audit` receipt with the audit event id and integrity

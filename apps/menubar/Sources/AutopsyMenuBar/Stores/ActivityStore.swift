@@ -78,6 +78,7 @@ final class ActivityStore: ObservableObject {
         "read_scoped_tokens",
         "read_grants",
         "read_access_check",
+        "export_snapshot",
         "read_repo_policy",
         "read_repo_policies",
         "check_memory_policy",
@@ -325,6 +326,7 @@ final class ActivityStore: ObservableObject {
                 ("tamper_evident_audit_chain", "audit chain"),
                 ("audit_event_summaries", "audit summaries"),
                 ("admin_storage_status", "storage status"),
+                ("admin_export_snapshot", "export snapshots"),
                 ("admin_storage_token_hygiene", "token hygiene"),
                 ("admin_token_inventory", "token inventory"),
                 ("repo_policies", "repo policies"),
@@ -1179,6 +1181,12 @@ final class ActivityStore: ObservableObject {
         }
     }
 
+    func copySharedServerExportSnapshot() {
+        Task {
+            await copySharedExportSnapshot()
+        }
+    }
+
     func copySharedServerAccessCheck(repoScope: String, mode: String) {
         Task {
             await copySharedAccessCheck(repoScope: repoScope, mode: mode)
@@ -1701,6 +1709,31 @@ final class ActivityStore: ObservableObject {
             NSPasteboard.general.setString(summary, forType: .string)
             lastActionMessage = "Storage status copied"
             clearLastActionMessageAfterDelay(expected: "Storage status copied")
+        } catch {
+            sharedServerError = error.localizedDescription
+        }
+    }
+
+    private func copySharedExportSnapshot() async {
+        guard !isManagingSharedAccess else { return }
+        isManagingSharedAccess = true
+        sharedServerError = nil
+        lastActionMessage = nil
+        defer {
+            isManagingSharedAccess = false
+        }
+
+        do {
+            let output = try await AutopsyCLI(executable: cliPath, timeoutSeconds: 45).run([
+                "shared-server",
+                "export-snapshot",
+                "--audit-limit",
+                "0",
+            ])
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(sharedExportSnapshotReport(from: output), forType: .string)
+            lastActionMessage = "Export snapshot copied"
+            clearLastActionMessageAfterDelay(expected: "Export snapshot copied")
         } catch {
             sharedServerError = error.localizedDescription
         }
@@ -3385,6 +3418,10 @@ final class ActivityStore: ObservableObject {
             }
         }
         return lines.joined(separator: "\n")
+    }
+
+    private func sharedExportSnapshotReport(from output: String) -> String {
+        output.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func sharedUsersReport(from output: String) -> String {

@@ -112,6 +112,7 @@ struct SharedServerTeamPayload: Decodable {
     var canReadAuditReaderSummary: Bool?
     var canReadSharedReadSummary: Bool?
     var canReadStorageStatus: Bool?
+    var canUseAdminExportSnapshot: Bool?
     var canUseIdempotencyKeys: Bool?
     var canUseIdempotencyRecordRetention: Bool?
     var idempotencyRecordRetentionDays: Int?
@@ -279,6 +280,7 @@ struct SharedServerTeamPayload: Decodable {
         case canReadAuditReaderSummary = "can_read_audit_reader_summary"
         case canReadSharedReadSummary = "can_read_shared_read_summary"
         case canReadStorageStatus = "can_read_storage_status"
+        case canUseAdminExportSnapshot = "can_use_admin_export_snapshot"
         case canUseIdempotencyKeys = "can_use_idempotency_keys"
         case canUseIdempotencyRecordRetention = "can_use_idempotency_record_retention"
         case idempotencyRecordRetentionDays = "idempotency_record_retention_days"

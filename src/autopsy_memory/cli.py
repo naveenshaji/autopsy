@@ -4570,6 +4570,16 @@ def shared_server_storage_status_path() -> str:
     return "/v1/admin/storage-status"
 
 
+def shared_server_export_snapshot_path(*, include_audit: bool = False, audit_limit: int | None = None) -> str:
+    if audit_limit is None:
+        audit_limit = 500 if include_audit else 0
+    query = {
+        "include_audit": "true" if include_audit else "false",
+        "audit_limit": max(0, min(5000, int(audit_limit))),
+    }
+    return f"/v1/admin/export-snapshot?{urllib.parse.urlencode(query)}"
+
+
 def shared_server_admin_tokens_path(
     *,
     limit: int = 500,
@@ -5416,6 +5426,7 @@ def build_shared_server_team_status_payload(
         "can_read_audit_reader_summary": False,
         "can_read_shared_read_summary": False,
         "can_read_storage_status": False,
+        "can_use_admin_export_snapshot": False,
         "can_use_idempotency_keys": False,
         "can_use_idempotency_record_retention": False,
     }
@@ -5424,6 +5435,7 @@ def build_shared_server_team_status_payload(
     server_security = capabilities_payload.get("security") if isinstance(capabilities_payload.get("security"), dict) else {}
     team["can_use_idempotency_keys"] = bool(server_capabilities.get("idempotency_keys"))
     team["can_use_idempotency_record_retention"] = bool(server_capabilities.get("idempotency_record_retention"))
+    team["can_use_admin_export_snapshot"] = bool(server_capabilities.get("admin_export_snapshot"))
     team["idempotency_record_retention_days"] = _safe_int(server_security.get("idempotency_record_retention_days"))
     team["idempotency_pending_timeout_seconds"] = _safe_int(server_security.get("idempotency_pending_timeout_seconds"))
     if audit_since or audit_until:
@@ -6501,6 +6513,20 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
         return
     if action == "storage-status":
         payload = shared_server_request_or_fail(config, shared_server_storage_status_path(), timeout=10)
+        print(json.dumps(payload, indent=2))
+        return
+    if action == "export-snapshot":
+        include_audit = bool(getattr(args, "include_audit", False))
+        raw_audit_limit = getattr(args, "audit_limit", None)
+        try:
+            audit_limit = int(raw_audit_limit) if raw_audit_limit is not None else None
+        except (TypeError, ValueError):
+            fail("shared-server export-snapshot --audit-limit must be an integer", 2)
+        payload = shared_server_request_or_fail(
+            config,
+            shared_server_export_snapshot_path(include_audit=include_audit, audit_limit=audit_limit),
+            timeout=30,
+        )
         print(json.dumps(payload, indent=2))
         return
     if action == "admin-tokens":
