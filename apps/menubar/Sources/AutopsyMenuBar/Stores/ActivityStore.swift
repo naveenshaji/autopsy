@@ -334,6 +334,7 @@ final class ActivityStore: ObservableObject {
                 ("admin_export_snapshot_manifest", "snapshot manifests"),
                 ("admin_storage_token_hygiene", "token hygiene"),
                 ("admin_token_inventory", "token inventory"),
+                ("token_inventory_fingerprints", "token fingerprints"),
                 ("repo_policies", "repo policies"),
                 ("repo_policy_inventory", "policy inventory"),
                 ("repo_policy_fingerprints", "policy fingerprints"),
@@ -3887,6 +3888,9 @@ final class ActivityStore: ObservableObject {
             parts.append("last used \(lastUsedAt)")
         } else {
             parts.append("never used")
+        }
+        if let fingerprint = auditString(item["token_fingerprint"]) {
+            parts.append("fp \(fingerprint)")
         }
         if let issuedBy = auditString(item["issued_by"]) {
             parts.append("issued by \(issuedBy)")

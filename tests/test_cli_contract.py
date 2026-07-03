@@ -2850,6 +2850,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "revoked": False,
                         "expired": False,
                         "last_used_at": "2026-07-02T00:00:00Z",
+                        "token_fingerprint": "abcdef1234567890",
                     }
                 ]
             }
@@ -2864,6 +2865,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
 
         payload = json.loads(stream.getvalue())
         self.assertEqual(payload["items"][0]["id"], "tok_1")
+        self.assertEqual(payload["items"][0]["token_fingerprint"], "abcdef1234567890")
         self.assertNotIn("token_hash", stream.getvalue())
 
     def test_shared_server_bulk_revoke_tokens_action_posts_filtered_dry_run_payload(self):
@@ -3469,6 +3471,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
                         "admin_export_snapshot_validation": True,
                         "admin_export_snapshot_restore_plan": True,
                         "admin_export_snapshot_manifest": True,
+                        "token_inventory_fingerprints": True,
                         "idempotency_keys": True,
                         "idempotency_record_retention": True,
                     },
@@ -3863,6 +3866,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertTrue(payload["team"]["can_use_admin_export_snapshot_validation"])
         self.assertTrue(payload["team"]["can_use_admin_export_snapshot_restore_plan"])
         self.assertTrue(payload["team"]["can_use_admin_export_snapshot_manifest"])
+        self.assertTrue(payload["team"]["can_use_token_inventory_fingerprints"])
         self.assertTrue(payload["team"]["can_use_idempotency_keys"])
         self.assertTrue(payload["team"]["can_use_idempotency_record_retention"])
         self.assertEqual(payload["team"]["idempotency_record_retention_days"], 7)
