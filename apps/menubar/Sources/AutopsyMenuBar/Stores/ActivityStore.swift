@@ -333,6 +333,7 @@ final class ActivityStore: ObservableObject {
                 ("admin_export_snapshot_restore_plan", "restore planning"),
                 ("admin_export_snapshot_restore_plan_digest", "restore plan digests"),
                 ("admin_export_snapshot_restore_apply", "guarded restore apply"),
+                ("admin_export_snapshot_restore_apply_idempotency", "retry-safe restore apply"),
                 ("admin_export_snapshot_manifest", "snapshot manifests"),
                 ("admin_storage_token_hygiene", "token hygiene"),
                 ("admin_token_inventory", "token inventory"),

@@ -5470,6 +5470,7 @@ def build_shared_server_team_status_payload(
         "can_use_admin_export_snapshot_restore_plan": False,
         "can_use_admin_export_snapshot_restore_plan_digest": False,
         "can_use_admin_export_snapshot_restore_apply": False,
+        "can_use_admin_export_snapshot_restore_apply_idempotency": False,
         "can_use_admin_export_snapshot_manifest": False,
         "can_use_token_inventory_fingerprints": False,
         "can_use_idempotency_keys": False,
@@ -5487,6 +5488,9 @@ def build_shared_server_team_status_payload(
         server_capabilities.get("admin_export_snapshot_restore_plan_digest")
     )
     team["can_use_admin_export_snapshot_restore_apply"] = bool(server_capabilities.get("admin_export_snapshot_restore_apply"))
+    team["can_use_admin_export_snapshot_restore_apply_idempotency"] = bool(
+        server_capabilities.get("admin_export_snapshot_restore_apply_idempotency")
+    )
     team["can_use_admin_export_snapshot_manifest"] = bool(server_capabilities.get("admin_export_snapshot_manifest"))
     team["can_use_token_inventory_fingerprints"] = bool(server_capabilities.get("token_inventory_fingerprints"))
     team["idempotency_record_retention_days"] = _safe_int(server_security.get("idempotency_record_retention_days"))
@@ -6620,6 +6624,8 @@ def cmd_shared_server(args: argparse.Namespace) -> None:
             method="POST",
             payload=snapshot_payload,
             timeout=60,
+            extra_headers=shared_server_idempotency_headers(args, action=action),
+            retry_transient=True,
         )
         print(json.dumps(payload, indent=2))
         return
