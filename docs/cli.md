@@ -27,9 +27,14 @@ writes, embedded FalkorDB snapshots, worker settings, and shared-server commands
 cannot collide with the Homebrew-managed production memory store. It also
 removes inherited `AUTOPSY_FALKORDB_HOST` and `AUTOPSY_FALKORDB_PORT` settings
 before the normal CLI starts, forcing the embedded dev database unless
-`AUTOPSY_DEV_ALLOW_REMOTE_FALKORDB=1` is set intentionally. If you intentionally
-need to point `autopsy-dev` at the production support tree, set
-`AUTOPSY_DEV_ALLOW_PRODUCTION_MEMORY=1`; otherwise it refuses production paths.
+`AUTOPSY_DEV_ALLOW_REMOTE_FALKORDB=1` is set intentionally. Inherited custom
+path variables such as `AUTOPSY_APP_SUPPORT_DIR`, `AUTOPSY_UNIFIED_MEMORY_ROOT`,
+and `AUTOPSY_SHARED_SERVER_CONFIG` are ignored unless they live under the active
+dev support tree; use `AUTOPSY_DEV_APP_SUPPORT_DIR` for an alternate dev tree or
+set `AUTOPSY_DEV_ALLOW_CUSTOM_PATHS=1` when you intentionally want arbitrary
+custom dev paths. If you intentionally need to point `autopsy-dev` at the
+production support tree, set `AUTOPSY_DEV_ALLOW_PRODUCTION_MEMORY=1`; otherwise
+it refuses production paths.
 
 From a source checkout, `./scripts/autopsy-dev ...` runs the development CLI via
 the repo virtualenv and `src/` tree even when `.venv/bin/autopsy-dev` has not

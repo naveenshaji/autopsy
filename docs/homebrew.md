@@ -103,9 +103,12 @@ which defaults to `~/Library/Application Support/AutopsyDev` and refuses the
 production support tree unless `AUTOPSY_DEV_ALLOW_PRODUCTION_MEMORY=1` is set
 intentionally. The dev CLI also keeps shared-server config, activity snapshots,
 and diagnostic logs in that dev tree, and strips inherited remote FalkorDB
-host/port settings unless `AUTOPSY_DEV_ALLOW_REMOTE_FALKORDB=1` is set. In a
-source checkout, `./scripts/autopsy-dev ...` is the stable wrapper for the same
-dev CLI even if the local virtualenv entry points have not been regenerated.
+host/port settings unless `AUTOPSY_DEV_ALLOW_REMOTE_FALKORDB=1` is set.
+Inherited custom path variables are scrubbed unless they stay under the active
+dev support tree; use `AUTOPSY_DEV_APP_SUPPORT_DIR` for an alternate dev tree or
+`AUTOPSY_DEV_ALLOW_CUSTOM_PATHS=1` for intentional arbitrary custom dev paths.
+In a source checkout, `./scripts/autopsy-dev ...` is the stable wrapper for the
+same dev CLI even if the local virtualenv entry points have not been regenerated.
 
 ## Plain `brew install autopsy-memory`
 

@@ -95,6 +95,36 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertIn("AUTOPSY_SHARED_SERVER_CONFIG", str(raised.exception))
         self.assertIn("refused to use production memory", str(raised.exception))
 
+    def test_autopsy_dev_scrubs_inherited_custom_paths_by_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            inherited_support = Path(tmp) / "RealSupport"
+            inherited_root = Path(tmp) / "RealRoot"
+            inherited_config = Path(tmp) / "shared-server.json"
+            env = {
+                "AUTOPSY_APP_SUPPORT_DIR": str(inherited_support),
+                "AUTOPSY_UNIFIED_MEMORY_ROOT": str(inherited_root),
+                "AUTOPSY_SHARED_SERVER_CONFIG": str(inherited_config),
+            }
+
+            configured = dev_cli.configure_dev_environment(env)
+
+        self.assertEqual(Path(configured["AUTOPSY_APP_SUPPORT_DIR"]).name, "AutopsyDev")
+        self.assertIn("AutopsyDev", configured["AUTOPSY_UNIFIED_MEMORY_ROOT"])
+        self.assertIn("AutopsyDev", configured["AUTOPSY_SHARED_SERVER_CONFIG"])
+        self.assertEqual(env["AUTOPSY_APP_SUPPORT_DIR"], configured["AUTOPSY_APP_SUPPORT_DIR"])
+        self.assertIn("AUTOPSY_APP_SUPPORT_DIR", configured["scrubbed_custom_path_env"])
+        self.assertIn("AUTOPSY_UNIFIED_MEMORY_ROOT", configured["scrubbed_custom_path_env"])
+        self.assertIn("AUTOPSY_SHARED_SERVER_CONFIG", configured["scrubbed_custom_path_env"])
+
+    def test_autopsy_dev_uses_explicit_dev_support_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dev_support = Path(tmp) / "AutopsyDevScratch"
+            configured = dev_cli.configure_dev_environment({"AUTOPSY_DEV_APP_SUPPORT_DIR": str(dev_support)})
+
+        self.assertEqual(configured["AUTOPSY_APP_SUPPORT_DIR"], str(dev_support))
+        self.assertIn(str(dev_support), configured["AUTOPSY_UNIFIED_MEMORY_ROOT"])
+        self.assertEqual(configured["scrubbed_custom_path_env"], "")
+
     def test_autopsy_dev_allows_production_support_with_explicit_override(self):
         production = str(dev_cli.PRODUCTION_APP_SUPPORT_DIR)
         env = {
@@ -104,6 +134,21 @@ class AutopsyCLIContractTests(unittest.TestCase):
         configured = dev_cli.configure_dev_environment(env)
 
         self.assertEqual(configured["AUTOPSY_APP_SUPPORT_DIR"], production)
+
+    def test_autopsy_dev_preserves_custom_paths_with_explicit_override(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            custom_support = Path(tmp) / "CustomSupport"
+            custom_config = Path(tmp) / "shared-server.json"
+            env = {
+                "AUTOPSY_APP_SUPPORT_DIR": str(custom_support),
+                "AUTOPSY_SHARED_SERVER_CONFIG": str(custom_config),
+                dev_cli.ALLOW_CUSTOM_PATHS_ENV: "1",
+            }
+            configured = dev_cli.configure_dev_environment(env)
+
+        self.assertEqual(configured["AUTOPSY_APP_SUPPORT_DIR"], str(custom_support))
+        self.assertEqual(configured["AUTOPSY_SHARED_SERVER_CONFIG"], str(custom_config))
+        self.assertEqual(configured["scrubbed_custom_path_env"], "")
 
     def test_autopsy_dev_scrubs_inherited_remote_falkordb_by_default(self):
         env = {

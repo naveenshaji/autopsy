@@ -9,6 +9,7 @@ PRODUCTION_APP_SUPPORT_DIR = Path.home() / "Library" / "Application Support" / "
 DEFAULT_DEV_APP_SUPPORT_DIR = Path.home() / "Library" / "Application Support" / "AutopsyDev"
 ALLOW_PRODUCTION_ENV = "AUTOPSY_DEV_ALLOW_PRODUCTION_MEMORY"
 ALLOW_REMOTE_FALKOR_ENV = "AUTOPSY_DEV_ALLOW_REMOTE_FALKORDB"
+ALLOW_CUSTOM_PATHS_ENV = "AUTOPSY_DEV_ALLOW_CUSTOM_PATHS"
 REMOTE_FALKOR_ENV_KEYS = ("AUTOPSY_FALKORDB_HOST", "AUTOPSY_FALKORDB_PORT")
 DEV_PATH_ENV_KEYS = (
     "AUTOPSY_UNIFIED_MEMORY_ROOT",
@@ -30,6 +31,12 @@ def _is_production_path(path: str | Path, production_root: Path = PRODUCTION_APP
     return resolved == production or production in resolved.parents
 
 
+def _is_within_path(path: str | Path, root: str | Path) -> bool:
+    resolved = _resolved(path)
+    resolved_root = _resolved(root)
+    return resolved == resolved_root or resolved_root in resolved.parents
+
+
 def _env_flag_enabled(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -38,7 +45,14 @@ def configure_dev_environment(environ: MutableMapping[str, str] | None = None) -
     env = environ if environ is not None else os.environ
     allow_production = _env_flag_enabled(env.get(ALLOW_PRODUCTION_ENV))
     allow_remote_falkor = _env_flag_enabled(env.get(ALLOW_REMOTE_FALKOR_ENV))
-    app_support = env.get("AUTOPSY_APP_SUPPORT_DIR") or env.get("AUTOPSY_DEV_APP_SUPPORT_DIR") or str(DEFAULT_DEV_APP_SUPPORT_DIR)
+    allow_custom_paths = _env_flag_enabled(env.get(ALLOW_CUSTOM_PATHS_ENV))
+    inherited_app_support = env.get("AUTOPSY_APP_SUPPORT_DIR") or ""
+    explicit_dev_app_support = env.get("AUTOPSY_DEV_APP_SUPPORT_DIR") or ""
+    app_support = (
+        explicit_dev_app_support
+        or (inherited_app_support if (allow_custom_paths or allow_production) else "")
+        or str(DEFAULT_DEV_APP_SUPPORT_DIR)
+    )
     app_support_path = Path(app_support).expanduser()
 
     path_defaults = {
@@ -51,8 +65,8 @@ def configure_dev_environment(environ: MutableMapping[str, str] | None = None) -
     }
 
     guarded_values = {
-        "AUTOPSY_APP_SUPPORT_DIR": app_support,
-        "AUTOPSY_DEV_APP_SUPPORT_DIR": env.get("AUTOPSY_DEV_APP_SUPPORT_DIR") or "",
+        "AUTOPSY_APP_SUPPORT_DIR": inherited_app_support,
+        "AUTOPSY_DEV_APP_SUPPORT_DIR": explicit_dev_app_support,
         "AUTOPSY_FALKORDB_LITE_PATH": env.get("AUTOPSY_FALKORDB_LITE_PATH") or "",
         "AUTOPSY_UNIFIED_MEMORY_ROOT": env.get("AUTOPSY_UNIFIED_MEMORY_ROOT") or "",
         "AUTOPSY_SHARED_SERVER_CONFIG": env.get("AUTOPSY_SHARED_SERVER_CONFIG") or "",
@@ -67,6 +81,17 @@ def configure_dev_environment(environ: MutableMapping[str, str] | None = None) -
                     f"autopsy-dev refused to use production memory via {key}={value}. "
                     f"Use autopsy for release memory, or set {ALLOW_PRODUCTION_ENV}=1 intentionally."
                 )
+
+    scrubbed_custom_path_keys: list[str] = []
+    if not allow_custom_paths:
+        if inherited_app_support and not _is_within_path(inherited_app_support, app_support_path):
+            scrubbed_custom_path_keys.append("AUTOPSY_APP_SUPPORT_DIR")
+            env.pop("AUTOPSY_APP_SUPPORT_DIR", None)
+        for key in DEV_PATH_ENV_KEYS:
+            value = str(env.get(key) or "").strip()
+            if value and not _is_within_path(value, app_support_path):
+                scrubbed_custom_path_keys.append(key)
+                env.pop(key, None)
 
     scrubbed_remote_keys: list[str] = []
     if not allow_remote_falkor:
@@ -93,6 +118,7 @@ def configure_dev_environment(environ: MutableMapping[str, str] | None = None) -
         "AUTOPSY_MEMORY_BACKEND": env["AUTOPSY_MEMORY_BACKEND"],
         "AUTOPSY_FALKORDB_ENABLED": env["AUTOPSY_FALKORDB_ENABLED"],
         "scrubbed_remote_falkordb_env": ",".join(scrubbed_remote_keys),
+        "scrubbed_custom_path_env": ",".join(scrubbed_custom_path_keys),
     }
 
 
