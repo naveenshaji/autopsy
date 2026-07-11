@@ -44,6 +44,10 @@ compare any row numerically with Mem0's published end-to-end answer-accuracy
 scores; those use different retrieval depths, answerers, judges, exclusion
 rules, and in some cases managed-platform features.
 
+For the exact current Mem0 claims, their checked-in artifact discrepancies,
+and the official LongMemEval baseline, see
+[PUBLISHED_SCORE_CONTEXT.md](PUBLISHED_SCORE_CONTEXT.md).
+
 ## Frozen protocols
 
 | Dataset | Artifact and representation | Unit | Cutoffs | Scoring population |
