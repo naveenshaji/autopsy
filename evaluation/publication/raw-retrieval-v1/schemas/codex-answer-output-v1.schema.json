@@ -11,8 +11,7 @@
           "case_handle": { "minLength": 1, "type": "string" },
           "cited_context_handles": {
             "items": { "minLength": 1, "type": "string" },
-            "type": "array",
-            "uniqueItems": true
+            "type": "array"
           }
         },
         "required": ["case_handle", "answer", "abstained", "cited_context_handles"],

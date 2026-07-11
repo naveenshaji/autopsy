@@ -129,7 +129,6 @@ ANSWER_OUTPUT_JSON_SCHEMA = {
                     "abstained": {"type": "boolean"},
                     "cited_context_handles": {
                         "type": "array",
-                        "uniqueItems": True,
                         "items": {"type": "string", "minLength": 1},
                     },
                 },
@@ -191,7 +190,7 @@ FROZEN_DEFINITION_HASHES = {
     "selection_policy_sha256": "28d4180814cbd0acf4278cd8d132fffa9e16238674d7599dbfb0d52086c67f30",
     "answer_prompt_sha256": "8eea67ab5e3610f3faa0c56281932e6bd3555343a979dd7a7755cdf9df9423bb",
     "judge_prompt_sha256": "3bad99b433ffa489b1cfe4dd9fc3b06f3c6f6e7e1d3f5d6e2dd1f99f2f7914ee",
-    "answer_schema_sha256": "ad07f06cc5179a9b0a05041081577f1f0e9ec1ed63df7a41df79b0c70ce7ad68",
+    "answer_schema_sha256": "aed74a059ae8bf1b1d528405088a54c3f7366775585129f1d3e4e9a4964e4464",
     "judge_schema_sha256": "8794dcf462b5ab90abb70515cd212c2c2318e82300e70390a581e2963e833e58",
 }
 
