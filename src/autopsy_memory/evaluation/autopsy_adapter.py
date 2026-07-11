@@ -261,20 +261,20 @@ class AutopsyEvaluationAdapter:
             return
         self.graph.query(
             """
-            MATCH (node:SemanticItem)
-            WHERE node.stable_key IN $stable_keys
-            SET node.access_count = 0,
-                node.last_accessed_at = '',
-                node.last_access_source = '',
-                node.last_access_query = '',
-                node.feedback_score = 0.0,
-                node.positive_feedback_count = 0,
-                node.negative_feedback_count = 0,
-                node.neutral_feedback_count = 0,
-                node.last_feedback_at = '',
-                node.last_feedback_rating = '',
-                node.last_feedback_source = '',
-                node.last_feedback_note = ''
+            MATCH (usage:MemoryUsage)
+            WHERE usage.stable_key IN $stable_keys
+            SET usage.access_count = 0,
+                usage.last_accessed_at = '',
+                usage.last_access_source = '',
+                usage.last_access_query = '',
+                usage.feedback_score = 0.0,
+                usage.positive_feedback_count = 0,
+                usage.negative_feedback_count = 0,
+                usage.neutral_feedback_count = 0,
+                usage.last_feedback_at = '',
+                usage.last_feedback_rating = '',
+                usage.last_feedback_source = '',
+                usage.last_feedback_note = ''
             """,
             params={"stable_keys": sorted(self._query_state_keys)},
         )
@@ -340,7 +340,8 @@ class AutopsyEvaluationAdapter:
                 "store": "falkordblite",
                 "embeddings": self.config,
                 "telemetry_reset_between_queries": True,
-                "telemetry_reset_mode": "prior-hit-stable-keys",
+                "telemetry_reset_mode": "prior-hit-memory-usage-sidecars",
+                "telemetry_storage": "non-indexed-memory-usage-sidecar",
             },
             source_path=__file__,
             retrieval_family="hybrid",
@@ -380,7 +381,8 @@ class AutopsyEvaluationAdapter:
             "store": "falkordblite",
             "production_worker_used": False,
             "telemetry_reset_between_queries": True,
-            "telemetry_reset_mode": "prior-hit-stable-keys",
+            "telemetry_reset_mode": "prior-hit-memory-usage-sidecars",
+            "telemetry_storage": "non-indexed-memory-usage-sidecar",
             "eligible_items": eligible,
             "embedded_items": embedded,
             "vector_coverage": embedded / eligible if eligible else 0.0,

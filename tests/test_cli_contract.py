@@ -9930,6 +9930,128 @@ class AutopsyCLIContractTests(unittest.TestCase):
         )
         self.assertEqual([item["stable_key"] for item in ranked], ["graph-note:very-old"])
 
+    def test_memory_usage_reads_sidecar_first_with_legacy_node_fallback(self):
+        class Graph:
+            query_text = ""
+
+            def query(self, query, params=None):
+                self.query_text = query
+                self.params = params or {}
+                return types.SimpleNamespace(
+                    result_set=[[
+                        "graph-note:usage",
+                        4,
+                        "2026-07-11T00:00:00Z",
+                        "consult",
+                        2.0,
+                        2,
+                        0,
+                        0,
+                        "2026-07-10T00:00:00Z",
+                        "useful",
+                        "cli",
+                        "helped",
+                    ]]
+                )
+
+        graph = Graph()
+        usage = cli.fetch_memory_usage(graph, ["graph-note:usage"])
+
+        self.assertEqual(usage["graph-note:usage"]["access_count"], 4)
+        self.assertEqual(usage["graph-note:usage"]["feedback_score"], 2.0)
+        self.assertIn("OPTIONAL MATCH (node)-[:HAS_USAGE]->(usage:MemoryUsage)", graph.query_text)
+        self.assertIn("coalesce(usage.access_count, node.access_count, 0)", graph.query_text)
+        self.assertEqual(graph.params["stable_keys"], ["graph-note:usage"])
+
+    def test_memory_access_and_feedback_mutate_only_usage_sidecars(self):
+        class Graph:
+            def __init__(self):
+                self.calls = []
+
+            def query(self, query, params=None):
+                self.calls.append((query, params or {}))
+                if "last_accessed_at" in query:
+                    return types.SimpleNamespace(result_set=[["graph-note:usage", 5]])
+                return types.SimpleNamespace(
+                    result_set=[[
+                        "graph-note:usage",
+                        1.0,
+                        1,
+                        0,
+                        0,
+                        "2026-07-11T00:00:00Z",
+                        "useful",
+                        "unit-test",
+                        "helped",
+                    ]]
+                )
+
+        graph = Graph()
+        access = cli.record_memory_access(
+            graph,
+            ["graph-note:usage"],
+            source="consult",
+            query="usage sidecar",
+            timestamp="2026-07-11T00:00:00Z",
+        )
+        feedback = cli.record_memory_feedback(
+            graph,
+            "graph-note:usage",
+            rating="useful",
+            note="helped",
+            source="unit-test",
+            timestamp="2026-07-11T00:00:00Z",
+        )
+
+        self.assertEqual(access["updated"], 1)
+        self.assertEqual(feedback["feedback_score"], 1.0)
+        for query, _params in graph.calls:
+            self.assertIn("MERGE (usage:MemoryUsage", query)
+            self.assertIn("MERGE (node)-[:HAS_USAGE]->(usage)", query)
+            self.assertNotIn("SET node.", query)
+        self.assertIn("coalesce(usage.access_count, node.access_count, 0) + 1", graph.calls[0][0])
+        self.assertIn("coalesce(usage.feedback_score, node.feedback_score, 0.0)", graph.calls[1][0])
+
+    def test_activity_and_audit_usage_reads_are_sidecar_first(self):
+        class Graph:
+            def __init__(self):
+                self.calls = []
+
+            def query(self, query, params=None):
+                self.calls.append((query, params or {}))
+                return types.SimpleNamespace(result_set=[])
+
+        graph = Graph()
+        self.assertEqual(cli.fetch_activity_consults(graph, limit=3), [])
+        self.assertEqual(cli.fetch_audit_items(graph, filters={"kinds": []}, limit=3), [])
+
+        activity_query, audit_query = (call[0] for call in graph.calls)
+        self.assertIn("coalesce(usage.last_accessed_at, node.last_accessed_at, '')", activity_query)
+        self.assertIn("coalesce(usage.access_count, node.access_count, 0)", audit_query)
+        self.assertIn("coalesce(usage.feedback_score, node.feedback_score, 0.0)", audit_query)
+
+    def test_runtime_indexes_and_delete_cover_memory_usage_sidecars(self):
+        class Graph:
+            def __init__(self):
+                self.calls = []
+
+            def query(self, query, params=None):
+                self.calls.append((query, params or {}))
+                return types.SimpleNamespace(result_set=[])
+
+        graph = Graph()
+        cli.ensure_runtime_indexes(graph, {"enabled": False})
+        self.assertTrue(
+            any("CREATE INDEX FOR (usage:MemoryUsage) ON (usage.stable_key)" in query for query, _params in graph.calls)
+        )
+
+        graph.calls.clear()
+        cli.delete_graph_item_payload(graph, stable_key="graph-note:usage", record_history=False)
+        self.assertEqual(len(graph.calls), 2)
+        self.assertIn("MATCH (usage:MemoryUsage {stable_key: $stable_key})", graph.calls[0][0])
+        self.assertIn("DETACH DELETE usage", graph.calls[0][0])
+        self.assertIn("MATCH (node:MemoryNode {stable_key: $stable_key})", graph.calls[1][0])
+
     def test_audit_repair_plan_groups_issues_by_memory_and_operator(self):
         issues = [
             {
@@ -11313,6 +11435,63 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(kept, [])
         self.assertTrue(payload["abstained"])
         self.assertEqual(payload["reason_codes"], ["no_candidates"])
+
+    def test_candidate_score_ties_use_stable_identity_before_backend_rank(self):
+        ranked = cli.sort_candidates(
+            [
+                {"stable_key": "memory:z", "rank": 0, "lexical_score": 5.0},
+                {"stable_key": "memory:a", "rank": 99, "lexical_score": 5.0},
+            ]
+        )
+        self.assertEqual([item["stable_key"] for item in ranked], ["memory:a", "memory:z"])
+
+    def test_vector_candidates_reorder_equal_distances_by_stable_identity(self):
+        config = dict(cli.EMBEDDINGS_CONFIG_DEFAULT)
+
+        class Tool:
+            embedding_provider_available = staticmethod(lambda _config: (True, None))
+            embed_texts_with_provider = staticmethod(lambda _texts, _config: [[0.0] * 768])
+
+        class Graph:
+            name = "vector-order-unit"
+
+            def query(self, query, params=None):
+                if "RETURN count(node)" in query:
+                    return types.SimpleNamespace(result_set=[[2]])
+                common = [
+                    "memory_note",
+                    "Title",
+                    "Summary",
+                    "2026-07-11T00:00:00Z",
+                    "unit",
+                    "",
+                ]
+                profile = [
+                    "ready",
+                    config["provider"],
+                    config["model"],
+                    config["model_revision"],
+                    config["text_template_version"],
+                    config["dimension"],
+                    "2026-07-11T00:00:00Z",
+                ]
+                return types.SimpleNamespace(result_set=[
+                    [2, "memory:z", *common, 0.25, *profile],
+                    [1, "memory:a", *common, 0.25, *profile],
+                ])
+
+        cli._GRAPH_VECTOR_AVAILABILITY.clear()
+        with mock.patch.object(cli, "check_runtime_vector_index", return_value=True):
+            items, _elapsed = cli.fetch_vector_candidates(
+                Graph(),
+                Tool(),
+                "deterministic vector order",
+                config,
+                limit=2,
+            )
+
+        self.assertEqual([item["stable_key"] for item in items], ["memory:a", "memory:z"])
+        self.assertEqual([item["rank"] for item in items], [0, 1])
 
     def test_historical_queries_explicitly_bypass_current_lineage_filter(self):
         self.assertFalse(cli.query_requests_historical_memory("Which formatter should contributors use now?"))

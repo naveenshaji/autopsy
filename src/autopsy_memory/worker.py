@@ -313,7 +313,11 @@ def embed_texts_with_provider(texts: list[str], config: dict) -> list[list[float
         raise RuntimeError(f'Unsupported embeddings provider: {provider}')
     if not model_name:
         raise RuntimeError('Embeddings config missing model')
-    model = load_sentence_transformer(model_name, str(config.get('device') or 'cpu'))
+    model = load_sentence_transformer(
+        model_name,
+        str(config.get('device') or 'cpu'),
+        str(config.get('model_revision') or ''),
+    )
     batch_size = max(1, int(config.get('batch_size', 16)))
     vectors = model.encode(
         texts,
@@ -350,7 +354,11 @@ def rerank_candidates(query: str, candidates: list[dict], config: dict | None) -
         )
         for item in shortlist
     ]
-    model = load_cross_encoder(model_name, str(reranker.get('device') or 'cpu'))
+    model = load_cross_encoder(
+        model_name,
+        str(reranker.get('device') or 'cpu'),
+        str(reranker.get('model_revision') or ''),
+    )
     scores = model.predict(
         [[query, text] for text in shortlist_texts],
         batch_size=max(1, int(reranker.get('batch_size', 8))),
@@ -381,6 +389,7 @@ def candidate_final_score(item: dict) -> float:
     score += float(item.get('relationship_score') or 0.0) * 1.5
     score += float(item.get('lexical_score') or 0.0)
     score += float(item.get('embedding_score') or 0.0) * 10.0
+    score += float(item.get('usage_rank_score') or 0.0)
     score += float(item.get('query_penalty') or 0.0)
     return score
 
@@ -390,8 +399,8 @@ def sort_candidates(items: list[dict]) -> list[dict]:
         items,
         key=lambda item: (
             -candidate_final_score(item),
-            item.get('rank', 1_000_000),
             item.get('stable_key') or '',
+            item.get('rank', 1_000_000),
         ),
     )
 
@@ -471,22 +480,28 @@ def load_falkor_module(tool_path: str):
         return module
 
 
-def load_sentence_transformer(model_name: str, device: str):
-    key = (model_name, device)
+def load_sentence_transformer(model_name: str, device: str, revision: str = ''):
+    key = (model_name, revision, device)
     model = _EMBEDDING_MODEL_CACHE.get(key)
     if model is None:
         from sentence_transformers import SentenceTransformer
-        model = SentenceTransformer(model_name, device=device)
+        kwargs = {'device': device}
+        if revision:
+            kwargs['revision'] = revision
+        model = SentenceTransformer(model_name, **kwargs)
         _EMBEDDING_MODEL_CACHE[key] = model
     return model
 
 
-def load_cross_encoder(model_name: str, device: str):
-    key = (model_name, device)
+def load_cross_encoder(model_name: str, device: str, revision: str = ''):
+    key = (model_name, revision, device)
     model = _RERANKER_MODEL_CACHE.get(key)
     if model is None:
         from sentence_transformers import CrossEncoder
-        model = CrossEncoder(model_name, device=device)
+        kwargs = {'device': device}
+        if revision:
+            kwargs['revision'] = revision
+        model = CrossEncoder(model_name, **kwargs)
         _RERANKER_MODEL_CACHE[key] = model
     return model
 
@@ -1808,12 +1823,13 @@ class Handler(BaseHTTPRequestHandler):
                 if provider != 'sentence_transformers':
                     raise ValueError(f'unsupported provider: {provider}')
                 model_name = str(payload.get('model') or '').strip()
+                model_revision = str(payload.get('model_revision') or '').strip()
                 device = str(payload.get('device') or 'cpu').strip() or 'cpu'
                 batch_size = max(1, int(payload.get('batch_size', 16)))
                 texts = payload.get('texts') or []
                 if not isinstance(texts, list):
                     raise ValueError('texts must be a list')
-                model = load_sentence_transformer(model_name, device)
+                model = load_sentence_transformer(model_name, device, model_revision)
                 vectors = model.encode(
                     texts,
                     batch_size=batch_size,
@@ -1828,13 +1844,14 @@ class Handler(BaseHTTPRequestHandler):
                 if provider != 'sentence_transformers':
                     raise ValueError(f'unsupported provider: {provider}')
                 model_name = str(payload.get('model') or '').strip()
+                model_revision = str(payload.get('model_revision') or '').strip()
                 device = str(payload.get('device') or 'cpu').strip() or 'cpu'
                 batch_size = max(1, int(payload.get('batch_size', 8)))
                 query = str(payload.get('query') or '')
                 texts = payload.get('texts') or []
                 if not isinstance(texts, list):
                     raise ValueError('texts must be a list')
-                model = load_cross_encoder(model_name, device)
+                model = load_cross_encoder(model_name, device, model_revision)
                 pairs = [[query, str(text or '')] for text in texts]
                 scores = model.predict(pairs, batch_size=batch_size, show_progress_bar=False)
                 self._write_json(200, {'scores': [float(score) for score in scores]})

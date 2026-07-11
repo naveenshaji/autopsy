@@ -1648,8 +1648,12 @@ def sort_candidates(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         items,
         key=lambda item: (
             -candidate_final_score(item),
-            item.get("rank", 1_000_000),
+            # Channel-local ranks can inherit backend tie order (notably from
+            # full-text result sets).  Stable keys are opaque, deterministic
+            # identifiers, so use them before the diagnostic source rank when
+            # fused scores tie exactly.
             item.get("stable_key") or "",
+            item.get("rank", 1_000_000),
         ),
     )
 
@@ -2036,8 +2040,8 @@ def rerank_lexical_hits(query: str, items: list[dict[str, Any]]) -> list[dict[st
         key=lambda item: (
             -(float(item.get("lexical_rank_score", 0.0))),
             -(float(item.get("token_overlap_score", 0.0))),
-            item.get("rank", 0),
             item.get("stable_key", ""),
+            item.get("rank", 0),
         )
     )
     return reranked
@@ -3113,6 +3117,9 @@ def fetch_node_lexical(graph, query: str, *, limit: int, as_of: str | None = Non
           coalesce(node.detail_content, ''),
           coalesce(node.expired_at, ''),
           score
+        ORDER BY score DESC,
+                 coalesce(node.updated_at, node.created_at, '') DESC,
+                 node.stable_key ASC
         LIMIT $limit
         """,
         params={
@@ -3172,8 +3179,8 @@ def fetch_node_lexical(graph, query: str, *, limit: int, as_of: str | None = Non
     items.sort(
         key=lambda item: (
             -(float(item.get("exact_match_boost", 0.0)) + float(item.get("lexical_score", 0.0))),
-            item.get("rank", 0),
             item.get("stable_key", ""),
+            item.get("rank", 0),
         )
     )
     return items, elapsed
@@ -3206,6 +3213,8 @@ def fetch_exact_text_candidates(graph, query: str, *, limit: int, as_of: str | N
           node.updated_at,
           coalesce(node.source_kind, ''),
           coalesce(node.expired_at, '')
+        ORDER BY coalesce(node.updated_at, node.created_at, '') DESC,
+                 node.stable_key ASC
         LIMIT $limit
         """,
         params={
@@ -3260,8 +3269,8 @@ def fetch_exact_text_candidates(graph, query: str, *, limit: int, as_of: str | N
     items.sort(
         key=lambda item: (
             -(float(item.get("exact_match_boost", 0.0))),
-            item.get("rank", 0),
             item.get("stable_key", ""),
+            item.get("rank", 0),
         )
     )
     return items, elapsed
@@ -3300,7 +3309,10 @@ def fetch_relationship_matches(
           AND (coalesce(target.expired_at, '') = '' OR coalesce(target.expired_at, '') > $read_time)
           AND ($min_fact_rating < 0.0 OR coalesce(relationship.fact_rating, 0.5) >= $min_fact_rating)
         WITH source, target, relationship, score
-        ORDER BY score DESC
+        ORDER BY score DESC,
+                 source.stable_key ASC,
+                 target.stable_key ASC,
+                 coalesce(relationship.relation, '') ASC
         LIMIT $relationship_limit
         UNWIND [source, target] AS node
         RETURN
@@ -3523,7 +3535,10 @@ def fetch_relation_expansion(
               coalesce(fact.fact_rating, 0.5),
               CASE WHEN fact.from_entity_id = anchor.entity_id THEN anchor.stable_key ELSE neighbor.stable_key END,
               CASE WHEN fact.from_entity_id = anchor.entity_id THEN neighbor.stable_key ELSE anchor.stable_key END
-            ORDER BY coalesce(fact.fact_rating, 0.5) DESC, coalesce(fact.updated_at, fact.created_at, '') DESC
+            ORDER BY coalesce(fact.fact_rating, 0.5) DESC,
+                     coalesce(fact.updated_at, fact.created_at, '') DESC,
+                     anchor.stable_key ASC,
+                     neighbor.stable_key ASC
             LIMIT $row_limit
             """,
             params={
@@ -3714,6 +3729,9 @@ def fetch_entity_overlap_candidates(graph, query: str, *, limit: int, as_of: str
           coalesce(node.source_kind, ''),
           coalesce(node.expired_at, ''),
           score
+        ORDER BY score DESC,
+                 coalesce(node.updated_at, node.created_at, '') DESC,
+                 node.stable_key ASC
         LIMIT $limit
         """,
         params={
@@ -3813,7 +3831,8 @@ def fetch_token_overlap_candidates(
               AND ($as_of = '' OR coalesce(node.updated_at, node.created_at, '') <= $as_of)
               AND (coalesce(node.expired_at, '') = '' OR coalesce(node.expired_at, '') > $read_time)
             WITH node
-            ORDER BY coalesce(node.updated_at, node.created_at) DESC
+            ORDER BY coalesce(node.updated_at, node.created_at) DESC,
+                     node.stable_key ASC
             LIMIT $scan_limit
             WITH node, {score_expression} AS token_hits
             WHERE token_hits >= $min_token_hits
@@ -3827,7 +3846,9 @@ def fetch_token_overlap_candidates(
               coalesce(node.source_kind, ''),
               coalesce(node.expired_at, ''),
               token_hits
-            ORDER BY token_hits DESC, coalesce(node.updated_at, node.created_at) DESC
+            ORDER BY token_hits DESC,
+                     coalesce(node.updated_at, node.created_at) DESC,
+                     node.stable_key ASC
             LIMIT $limit
             """,
             params={**params, "min_token_hits": min_token_hits},
@@ -3853,7 +3874,9 @@ def fetch_token_overlap_candidates(
               coalesce(node.source_kind, ''),
               coalesce(node.expired_at, ''),
               token_hits
-            ORDER BY token_hits DESC, coalesce(node.updated_at, node.created_at) DESC
+            ORDER BY token_hits DESC,
+                     coalesce(node.updated_at, node.created_at) DESC,
+                     node.stable_key ASC
             LIMIT $limit
             """,
             params={**params, "min_token_hits": min_token_hits},
@@ -4043,6 +4066,18 @@ def fetch_vector_candidates(
                 "rank": rank,
             }
         )
+    # FalkorDB's ANN procedure returns an ordered nearest-neighbor stream, but
+    # equal-distance rows do not have a documented identity tie-break.  Sort
+    # the bounded candidate set again so reranker input and fused channel ranks
+    # cannot inherit an implementation-dependent HNSW traversal order.
+    items.sort(
+        key=lambda item: (
+            float(item.get("embedding_distance") or 0.0),
+            str(item.get("stable_key") or ""),
+        )
+    )
+    for rank, item in enumerate(items):
+        item["rank"] = rank
     return items, elapsed
 
 
@@ -4984,7 +5019,9 @@ def fetch_activity_consults(graph, *, limit: int) -> list[dict[str, Any]]:
     result = graph.query(
         """
         MATCH (node:SemanticItem)
-        WHERE coalesce(node.last_accessed_at, '') <> ''
+        OPTIONAL MATCH (node)-[:HAS_USAGE]->(usage:MemoryUsage)
+        WITH node, usage
+        WHERE coalesce(usage.last_accessed_at, node.last_accessed_at, '') <> ''
           AND coalesce(node.source_kind, '') <> 'graph_episode'
           AND NOT coalesce(node.stable_key, '') STARTS WITH 'turn-outcome:'
         RETURN
@@ -4992,11 +5029,11 @@ def fetch_activity_consults(graph, *, limit: int) -> list[dict[str, Any]]:
           node.kind,
           node.label,
           coalesce(node.summary, ''),
-          coalesce(node.last_accessed_at, ''),
-          coalesce(node.last_access_source, ''),
-          coalesce(node.last_access_query, ''),
-          coalesce(node.access_count, 0)
-        ORDER BY node.last_accessed_at DESC
+          coalesce(usage.last_accessed_at, node.last_accessed_at, ''),
+          coalesce(usage.last_access_source, node.last_access_source, ''),
+          coalesce(usage.last_access_query, node.last_access_query, ''),
+          coalesce(usage.access_count, node.access_count, 0)
+        ORDER BY coalesce(usage.last_accessed_at, node.last_accessed_at, '') DESC
         LIMIT $limit
         """,
         params={"limit": max(bounded_limit * 8, bounded_limit)},
@@ -11262,6 +11299,13 @@ def delete_graph_item_payload(
             )
     graph.query(
         """
+        MATCH (usage:MemoryUsage {stable_key: $stable_key})
+        DETACH DELETE usage
+        """,
+        params={"stable_key": stable_key},
+    )
+    graph.query(
+        """
         MATCH (node:MemoryNode {stable_key: $stable_key})
         OPTIONAL MATCH (node)-[edge]-()
         DELETE edge, node
@@ -11593,6 +11637,7 @@ def ensure_runtime_indexes(graph, config: dict[str, Any] | None = None) -> None:
         "CREATE INDEX FOR (node:MemoryNode) ON (node.entity_id)",
         "CREATE INDEX FOR (node:MemoryNode) ON (node.stable_key)",
         "CREATE INDEX FOR (node:MemoryNode) ON (node.kind)",
+        "CREATE INDEX FOR (usage:MemoryUsage) ON (usage.stable_key)",
         "CREATE FULLTEXT INDEX FOR (node:SemanticItem) ON (node.label, node.summary, node.detail_content, node.search_text)",
         "CREATE FULLTEXT INDEX FOR ()-[fact:FACT_EDGE]-() ON (fact.fact_text, fact.relation, fact.predicate)",
     ]
@@ -14081,19 +14126,20 @@ def fetch_memory_usage(graph, stable_keys: list[str]) -> dict[str, dict[str, Any
                 """
                 MATCH (node:MemoryNode)
                 WHERE node.stable_key IN $stable_keys
+                OPTIONAL MATCH (node)-[:HAS_USAGE]->(usage:MemoryUsage)
                 RETURN
                   node.stable_key,
-                  coalesce(node.access_count, 0),
-                  coalesce(node.last_accessed_at, ''),
-                  coalesce(node.last_access_source, ''),
-                  coalesce(node.feedback_score, 0.0),
-                  coalesce(node.positive_feedback_count, 0),
-                  coalesce(node.negative_feedback_count, 0),
-                  coalesce(node.neutral_feedback_count, 0),
-                  coalesce(node.last_feedback_at, ''),
-                  coalesce(node.last_feedback_rating, ''),
-                  coalesce(node.last_feedback_source, ''),
-                  coalesce(node.last_feedback_note, '')
+                  coalesce(usage.access_count, node.access_count, 0),
+                  coalesce(usage.last_accessed_at, node.last_accessed_at, ''),
+                  coalesce(usage.last_access_source, node.last_access_source, ''),
+                  coalesce(usage.feedback_score, node.feedback_score, 0.0),
+                  coalesce(usage.positive_feedback_count, node.positive_feedback_count, 0),
+                  coalesce(usage.negative_feedback_count, node.negative_feedback_count, 0),
+                  coalesce(usage.neutral_feedback_count, node.neutral_feedback_count, 0),
+                  coalesce(usage.last_feedback_at, node.last_feedback_at, ''),
+                  coalesce(usage.last_feedback_rating, node.last_feedback_rating, ''),
+                  coalesce(usage.last_feedback_source, node.last_feedback_source, ''),
+                  coalesce(usage.last_feedback_note, node.last_feedback_note, '')
                 """,
                 params={"stable_keys": keys},
             )
@@ -14146,13 +14192,15 @@ def record_memory_access(
         rows = result_rows(
             graph.query(
                 """
-                MATCH (node:MemoryNode)
-                WHERE node.stable_key IN $stable_keys
-                SET node.access_count = coalesce(node.access_count, 0) + 1,
-                    node.last_accessed_at = $timestamp,
-                    node.last_access_source = $source,
-                    node.last_access_query = $query
-                RETURN node.stable_key, node.access_count
+                UNWIND $stable_keys AS stable_key
+                MATCH (node:MemoryNode {stable_key: stable_key})
+                MERGE (usage:MemoryUsage {stable_key: stable_key})
+                MERGE (node)-[:HAS_USAGE]->(usage)
+                SET usage.access_count = coalesce(usage.access_count, node.access_count, 0) + 1,
+                    usage.last_accessed_at = $timestamp,
+                    usage.last_access_source = $source,
+                    usage.last_access_query = $query
+                RETURN node.stable_key, usage.access_count
                 """,
                 params={
                     "stable_keys": keys,
@@ -14199,24 +14247,26 @@ def record_memory_feedback(
             graph.query(
                 """
                 MATCH (node:MemoryNode {stable_key: $stable_key})
-                SET node.feedback_score = coalesce(node.feedback_score, 0.0) + $delta,
-                    node.positive_feedback_count = coalesce(node.positive_feedback_count, 0) + $positive_delta,
-                    node.negative_feedback_count = coalesce(node.negative_feedback_count, 0) + $negative_delta,
-                    node.neutral_feedback_count = coalesce(node.neutral_feedback_count, 0) + $neutral_delta,
-                    node.last_feedback_at = $timestamp,
-                    node.last_feedback_rating = $rating,
-                    node.last_feedback_source = $source,
-                    node.last_feedback_note = $note
+                MERGE (usage:MemoryUsage {stable_key: $stable_key})
+                MERGE (node)-[:HAS_USAGE]->(usage)
+                SET usage.feedback_score = coalesce(usage.feedback_score, node.feedback_score, 0.0) + $delta,
+                    usage.positive_feedback_count = coalesce(usage.positive_feedback_count, node.positive_feedback_count, 0) + $positive_delta,
+                    usage.negative_feedback_count = coalesce(usage.negative_feedback_count, node.negative_feedback_count, 0) + $negative_delta,
+                    usage.neutral_feedback_count = coalesce(usage.neutral_feedback_count, node.neutral_feedback_count, 0) + $neutral_delta,
+                    usage.last_feedback_at = $timestamp,
+                    usage.last_feedback_rating = $rating,
+                    usage.last_feedback_source = $source,
+                    usage.last_feedback_note = $note
                 RETURN
                     node.stable_key,
-                    node.feedback_score,
-                    node.positive_feedback_count,
-                    node.negative_feedback_count,
-                    node.neutral_feedback_count,
-                    node.last_feedback_at,
-                    node.last_feedback_rating,
-                    node.last_feedback_source,
-                    node.last_feedback_note
+                    usage.feedback_score,
+                    usage.positive_feedback_count,
+                    usage.negative_feedback_count,
+                    usage.neutral_feedback_count,
+                    usage.last_feedback_at,
+                    usage.last_feedback_rating,
+                    usage.last_feedback_source,
+                    usage.last_feedback_note
                 """,
                 params={
                     "stable_key": stable_key,
@@ -16964,6 +17014,8 @@ def fetch_audit_items(
           AND NOT coalesce(node.stable_key, '') STARTS WITH 'turn-outcome:'
         OPTIONAL MATCH (node)-[fact:FACT_EDGE]-(:MemoryNode)
         WITH node, count(fact) AS relation_count
+        OPTIONAL MATCH (node)-[:HAS_USAGE]->(usage:MemoryUsage)
+        WITH node, relation_count, usage
         OPTIONAL MATCH (node)-[:ABOUT]-(repo:Repository)
         RETURN
           node.stable_key,
@@ -16975,17 +17027,17 @@ def fetch_audit_items(
           coalesce(node.source_kind, ''),
           relation_count,
           count(DISTINCT repo),
-          coalesce(node.access_count, 0),
-          coalesce(node.last_accessed_at, ''),
-          coalesce(node.last_access_source, ''),
-          coalesce(node.feedback_score, 0.0),
-          coalesce(node.positive_feedback_count, 0),
-          coalesce(node.negative_feedback_count, 0),
-          coalesce(node.neutral_feedback_count, 0),
-          coalesce(node.last_feedback_at, ''),
-          coalesce(node.last_feedback_rating, ''),
-          coalesce(node.last_feedback_source, ''),
-          coalesce(node.last_feedback_note, ''),
+          coalesce(usage.access_count, node.access_count, 0),
+          coalesce(usage.last_accessed_at, node.last_accessed_at, ''),
+          coalesce(usage.last_access_source, node.last_access_source, ''),
+          coalesce(usage.feedback_score, node.feedback_score, 0.0),
+          coalesce(usage.positive_feedback_count, node.positive_feedback_count, 0),
+          coalesce(usage.negative_feedback_count, node.negative_feedback_count, 0),
+          coalesce(usage.neutral_feedback_count, node.neutral_feedback_count, 0),
+          coalesce(usage.last_feedback_at, node.last_feedback_at, ''),
+          coalesce(usage.last_feedback_rating, node.last_feedback_rating, ''),
+          coalesce(usage.last_feedback_source, node.last_feedback_source, ''),
+          coalesce(usage.last_feedback_note, node.last_feedback_note, ''),
           coalesce(node.memory_tags, ''),
           coalesce(node.memory_metadata, '{}')
         ORDER BY coalesce(node.updated_at, node.created_at) DESC

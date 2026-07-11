@@ -399,7 +399,9 @@ class ExternalEvaluationContractTests(unittest.TestCase):
 
         self.assertEqual(len(adapter.graph.calls), 1)
         query, params = adapter.graph.calls[0]
-        self.assertIn("node.stable_key IN $stable_keys", query)
+        self.assertIn("MATCH (usage:MemoryUsage)", query)
+        self.assertIn("usage.stable_key IN $stable_keys", query)
+        self.assertNotIn("SET node.", query)
         self.assertEqual(params["stable_keys"], ["memory:a", "memory:b"])
         self.assertEqual(adapter._query_state_keys, set())
 
@@ -950,6 +952,63 @@ class ExternalEvaluationContractTests(unittest.TestCase):
 
 @unittest.skipUnless(FALKORDBLITE_AVAILABLE, "FalkorDBLite runtime is not installed")
 class IsolatedAutopsyAdapterTests(unittest.TestCase):
+    def test_usage_sidecar_access_and_reset_preserve_fulltext_scores(self):
+        from autopsy_memory.evaluation.autopsy_adapter import AutopsyEvaluationAdapter
+
+        with AutopsyEvaluationAdapter() as adapter:
+            adapter.graph.query(
+                """
+                CREATE (:MemoryNode:SemanticItem:MemoryNote {
+                  stable_key: 'memory:a', kind: 'memory_note', label: 'Deterministic ranking alpha',
+                  summary: 'deterministic ranking token', detail_content: 'deterministic ranking token alpha',
+                  search_text: 'deterministic ranking token alpha', created_at: '2026-01-01T00:00:00Z',
+                  updated_at: '2026-01-01T00:00:00Z', source_kind: 'unit',
+                  access_count: 7, last_accessed_at: '2026-01-02T00:00:00Z',
+                  last_access_source: 'legacy'
+                })
+                CREATE (:MemoryNode:SemanticItem:MemoryNote {
+                  stable_key: 'memory:b', kind: 'memory_note', label: 'Deterministic ranking beta',
+                  summary: 'deterministic ranking token', detail_content: 'deterministic ranking token beta',
+                  search_text: 'deterministic ranking token beta', created_at: '2026-01-01T00:00:00Z',
+                  updated_at: '2026-01-01T00:00:00Z', source_kind: 'unit'
+                })
+                """
+            )
+            score_query = """
+                CALL db.idx.fulltext.queryNodes('SemanticItem', 'deterministic ranking')
+                YIELD node, score
+                RETURN node.stable_key, score
+                ORDER BY node.stable_key ASC
+                """
+            before = adapter.graph.query(score_query).result_set
+            legacy_usage = cli.fetch_memory_usage(adapter.graph, ["memory:a"])
+
+            access = cli.record_memory_access(
+                adapter.graph,
+                ["memory:a"],
+                source="integration-test",
+                query="deterministic ranking",
+                timestamp="2026-07-11T00:00:00Z",
+            )
+            after_access = adapter.graph.query(score_query).result_set
+            migrated_usage = cli.fetch_memory_usage(adapter.graph, ["memory:a"])
+            adapter._query_state_keys = {"memory:a"}
+            adapter.reset_query_state()
+            after_reset = adapter.graph.query(score_query).result_set
+            stored = adapter.graph.query(
+                """
+                MATCH (node:MemoryNode {stable_key: 'memory:a'})-[:HAS_USAGE]->(usage:MemoryUsage)
+                RETURN node.access_count, usage.access_count, usage.last_accessed_at
+                """
+            ).result_set
+
+            self.assertEqual(access["updated"], 1)
+            self.assertEqual(legacy_usage["memory:a"]["access_count"], 7)
+            self.assertEqual(migrated_usage["memory:a"]["access_count"], 8)
+            self.assertEqual(before, after_access)
+            self.assertEqual(before, after_reset)
+            self.assertEqual(stored, [[7, 0, ""]])
+
     def test_keep_store_preserves_an_automatically_allocated_directory(self):
         from autopsy_memory.evaluation.autopsy_adapter import AutopsyEvaluationAdapter
 

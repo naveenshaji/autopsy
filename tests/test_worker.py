@@ -106,6 +106,111 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
         self.assertEqual(worker.int_request_argument({"inspect_limit": 0}, "inspect_limit", 3), 0)
         self.assertEqual(worker.int_request_argument({}, "inspect_limit", 3), 3)
 
+    def test_worker_candidate_ranking_uses_usage_score_and_stable_identity_ties(self):
+        worker = load_worker_module()
+
+        usage_ranked = worker.sort_candidates(
+            [
+                {"stable_key": "memory:a", "lexical_score": 5.0},
+                {"stable_key": "memory:z", "lexical_score": 5.0, "usage_rank_score": 0.5},
+            ]
+        )
+        self.assertEqual([item["stable_key"] for item in usage_ranked], ["memory:z", "memory:a"])
+
+        tied = worker.sort_candidates(
+            [
+                {"stable_key": "memory:z", "rank": 0, "lexical_score": 5.0},
+                {"stable_key": "memory:a", "rank": 99, "lexical_score": 5.0},
+            ]
+        )
+        self.assertEqual([item["stable_key"] for item in tied], ["memory:a", "memory:z"])
+
+    def test_worker_model_caches_are_partitioned_by_immutable_revision(self):
+        worker = load_worker_module()
+        embedding_calls = []
+        reranker_calls = []
+
+        class SentenceTransformer:
+            def __init__(self, model_name, **kwargs):
+                embedding_calls.append((model_name, kwargs))
+
+        class CrossEncoder:
+            def __init__(self, model_name, **kwargs):
+                reranker_calls.append((model_name, kwargs))
+
+        fake_module = mock.Mock(SentenceTransformer=SentenceTransformer, CrossEncoder=CrossEncoder)
+        worker._EMBEDDING_MODEL_CACHE.clear()
+        worker._RERANKER_MODEL_CACHE.clear()
+        with mock.patch.dict(sys.modules, {"sentence_transformers": fake_module}):
+            embedding_v1 = worker.load_sentence_transformer("embedding", "cpu", "revision-1")
+            embedding_v1_again = worker.load_sentence_transformer("embedding", "cpu", "revision-1")
+            embedding_v2 = worker.load_sentence_transformer("embedding", "cpu", "revision-2")
+            reranker_v1 = worker.load_cross_encoder("reranker", "cpu", "revision-1")
+            reranker_v1_again = worker.load_cross_encoder("reranker", "cpu", "revision-1")
+            reranker_v2 = worker.load_cross_encoder("reranker", "cpu", "revision-2")
+
+        self.assertIs(embedding_v1, embedding_v1_again)
+        self.assertIsNot(embedding_v1, embedding_v2)
+        self.assertIs(reranker_v1, reranker_v1_again)
+        self.assertIsNot(reranker_v1, reranker_v2)
+        self.assertEqual(
+            embedding_calls,
+            [
+                ("embedding", {"device": "cpu", "revision": "revision-1"}),
+                ("embedding", {"device": "cpu", "revision": "revision-2"}),
+            ],
+        )
+        self.assertEqual(
+            reranker_calls,
+            [
+                ("reranker", {"device": "cpu", "revision": "revision-1"}),
+                ("reranker", {"device": "cpu", "revision": "revision-2"}),
+            ],
+        )
+
+    def test_worker_embedding_and_reranker_forward_configured_revisions(self):
+        worker = load_worker_module()
+        embedding_model = mock.Mock()
+        embedding_vector = mock.Mock()
+        embedding_vector.tolist.return_value = [0.25, 0.75]
+        embedding_model.encode.return_value = [embedding_vector]
+        reranker_model = mock.Mock()
+        reranker_model.predict.return_value = [0.5]
+
+        with (
+            mock.patch.object(worker, "load_sentence_transformer", return_value=embedding_model) as load_embedding,
+            mock.patch.object(worker, "load_cross_encoder", return_value=reranker_model) as load_reranker,
+            mock.patch.object(worker, "embedding_provider_available", return_value=(True, None)),
+            mock.patch.object(worker, "reranker_provider_available", return_value=(True, None)),
+        ):
+            vectors = worker.embed_texts_with_provider(
+                ["memory"],
+                {
+                    "provider": "sentence_transformers",
+                    "model": "embedding-model",
+                    "model_revision": "embedding-revision",
+                    "device": "cpu",
+                },
+            )
+            ranked = worker.rerank_candidates(
+                "query",
+                [{"stable_key": "memory:a", "title": "Memory"}],
+                {
+                    "reranker": {
+                        "enabled": True,
+                        "provider": "sentence_transformers",
+                        "model": "reranker-model",
+                        "model_revision": "reranker-revision",
+                        "device": "cpu",
+                    }
+                },
+            )
+
+        self.assertEqual(vectors, [[0.25, 0.75]])
+        self.assertEqual(ranked[0]["reranker_score"], 0.5)
+        load_embedding.assert_called_once_with("embedding-model", "cpu", "embedding-revision")
+        load_reranker.assert_called_once_with("reranker-model", "cpu", "reranker-revision")
+
     def test_consult_fails_loudly_when_falkor_context_is_unavailable(self):
         worker = load_worker_module()
         original = worker.require_falkor_context
