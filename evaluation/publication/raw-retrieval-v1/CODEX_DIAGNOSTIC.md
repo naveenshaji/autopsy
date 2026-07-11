@@ -63,7 +63,7 @@ python "$TOOL" resume --run-dir "$RUN"
 python "$TOOL" status --run-dir "$RUN"
 ```
 
-Answer batches are capped at 16 cases and 100,000 input characters. The lower
+Answer batches are capped at 8 cases and 100,000 input characters. The lower
 case cap makes exact output coverage easier to enforce and limits the amount of
 work lost when a batch fails closed.
 

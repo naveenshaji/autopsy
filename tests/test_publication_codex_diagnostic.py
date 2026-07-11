@@ -219,7 +219,7 @@ class CodexDiagnosticTests(unittest.TestCase):
                     self.assertEqual(args.judge_model, "gpt-5.4")
 
     def test_answer_batch_cap_limits_strict_output_coverage_risk(self) -> None:
-        self.assertEqual(diagnostic.MAX_BATCH_CASES, 16)
+        self.assertEqual(diagnostic.MAX_BATCH_CASES, 8)
         self.assertEqual(diagnostic.MAX_BATCH_CHARACTERS, 100_000)
 
 
