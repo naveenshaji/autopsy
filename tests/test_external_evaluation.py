@@ -7,10 +7,12 @@ import os
 import re
 import shutil
 import tempfile
+import types
 import unittest
 from dataclasses import asdict, fields
 from pathlib import Path
 from contextlib import redirect_stdout
+from unittest import mock
 from unittest.mock import patch
 
 from autopsy_memory import cli
@@ -380,6 +382,45 @@ class ExternalMetricTests(unittest.TestCase):
 
 
 class ExternalEvaluationContractTests(unittest.TestCase):
+    def test_autopsy_adapter_uses_static_reads_and_fixed_query_free_reranker_warmup(self):
+        from autopsy_memory.evaluation.autopsy_adapter import AutopsyEvaluationAdapter
+
+        model = mock.Mock()
+        adapter = object.__new__(AutopsyEvaluationAdapter)
+        adapter.config = {
+            "reranker": {
+                "enabled": True,
+                "model": "reranker-model",
+                "model_revision": "immutable-revision",
+                "device": "cpu",
+            }
+        }
+        adapter.cli = types.SimpleNamespace(
+            FalkorToolShim=object(),
+            reranker_provider_available=lambda _config: (True, None),
+            load_cross_encoder=mock.Mock(return_value=model),
+            build_consult_payload=mock.Mock(return_value={"route": "hybrid", "hits": []}),
+        )
+        adapter.graph = object()
+        adapter.workspace = {"root_path": "/tmp/static-eval"}
+        adapter._query_state_keys = set()
+        adapter._stable_to_document = {}
+
+        warmup = adapter._warm_reranker()
+        result = adapter.retrieve(RetrievalRequest("private benchmark query", 5, "hybrid"))
+
+        self.assertEqual(warmup["status"], "complete")
+        self.assertTrue(warmup["query_free"])
+        adapter.cli.load_cross_encoder.assert_called_once_with(
+            "reranker-model", "cpu", "immutable-revision"
+        )
+        warmup_pairs = model.predict.call_args.args[0]
+        self.assertNotIn("private benchmark query", json.dumps(warmup_pairs))
+        self.assertFalse(
+            adapter.cli.build_consult_payload.call_args.kwargs["record_access_telemetry"]
+        )
+        self.assertEqual(result.ranked_document_ids, ())
+
     def test_autopsy_query_state_reset_is_bounded_to_prior_hits(self):
         from autopsy_memory.evaluation.autopsy_adapter import AutopsyEvaluationAdapter
 

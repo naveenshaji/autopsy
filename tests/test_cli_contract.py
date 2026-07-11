@@ -11445,6 +11445,25 @@ class AutopsyCLIContractTests(unittest.TestCase):
         )
         self.assertEqual([item["stable_key"] for item in ranked], ["memory:a", "memory:z"])
 
+    def test_backend_fulltext_scores_are_not_used_as_repeatable_lexical_rank_scores(self):
+        first = cli.deterministic_lexical_match_score(
+            "Where is the deployment guide?",
+            title="Deployment guide",
+            summary="The guide is in docs/runbook.md.",
+        )
+        second = cli.deterministic_lexical_match_score(
+            "Where is the deployment guide?",
+            title="Deployment guide",
+            summary="The guide is in docs/runbook.md.",
+        )
+
+        self.assertEqual(first, second)
+        self.assertGreater(first, 1.0)
+        self.assertEqual(
+            cli.deterministic_lexical_match_score("the and is", title="Unrelated"),
+            1.0,
+        )
+
     def test_vector_candidates_reorder_equal_distances_by_stable_identity(self):
         config = dict(cli.EMBEDDINGS_CONFIG_DEFAULT)
 

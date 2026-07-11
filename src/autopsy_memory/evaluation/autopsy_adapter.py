@@ -71,6 +71,7 @@ class AutopsyEvaluationAdapter:
         self._evaluated_eligible_items = 0
         self._evaluated_embedded_items = 0
         self._query_state_keys: set[str] = set()
+        self._reranker_warmup: dict[str, Any] = {"status": "not_run"}
         self.initialization_seconds = time.perf_counter() - initialization_started
 
     @staticmethod
@@ -119,6 +120,37 @@ class AutopsyEvaluationAdapter:
             "created_at": timestamp,
             "updated_at": timestamp,
             "expired_at": document.expired_at,
+        }
+
+    def _warm_reranker(self) -> dict[str, Any]:
+        """Load and exercise the configured reranker without benchmark input."""
+
+        reranker = self.config.get("reranker") or {}
+        if not bool(reranker.get("enabled", False)):
+            return {"status": "disabled", "query_free": True}
+        available, error = self.cli.reranker_provider_available(self.config)
+        if not available:
+            return {"status": "unavailable", "query_free": True, "error": error}
+        model_name = str(reranker.get("model") or "").strip()
+        revision = str(reranker.get("model_revision") or "").strip()
+        device = str(reranker.get("device") or "cpu").strip() or "cpu"
+        started = time.perf_counter()
+        try:
+            model = self.cli.load_cross_encoder(model_name, device, revision)
+            model.predict(
+                [["Autopsy evaluation warmup", "Frozen query-free reranker warmup document."]],
+                batch_size=1,
+                show_progress_bar=False,
+            )
+        except Exception as exc:
+            raise RuntimeError(f"external evaluation reranker warmup failed: {exc}") from exc
+        return {
+            "status": "complete",
+            "query_free": True,
+            "model": model_name,
+            "revision": revision,
+            "device": device,
+            "seconds": time.perf_counter() - started,
         }
 
     def prepare(self, corpus: EvaluationCorpus) -> dict[str, Any]:
@@ -230,6 +262,7 @@ class AutopsyEvaluationAdapter:
             raise RuntimeError(
                 f"external evaluation embedding backfill failed: {embedding_backfill.get('reason') or embedding_backfill.get('failures')}"
             )
+        self._reranker_warmup = self._warm_reranker()
         elapsed = time.perf_counter() - started
         embedded_items = int(
             self.cli.scalar_query(self.graph, "MATCH (node:SemanticItem) WHERE node.embedding IS NOT NULL RETURN count(node)") or 0
@@ -244,6 +277,7 @@ class AutopsyEvaluationAdapter:
             "relations": len(corpus.relations),
             "embedded_items": embedded_items,
             "embedding_backfill": embedding_backfill,
+            "reranker_warmup": self._reranker_warmup,
             "seconds": elapsed,
             "documents_per_second": len(corpus.documents) / elapsed if elapsed else None,
         }
@@ -298,17 +332,13 @@ class AutopsyEvaluationAdapter:
             scope=request.scope,
             repository_root_path=request.repository_id or None,
             as_of=request.as_of or None,
+            record_access_telemetry=False,
         )
         elapsed = time.perf_counter() - started
         hits = list(payload.get("hits") or [])
-        # Consult mutates access telemetry only for final hits. Remember that
-        # bounded set so the next query can remove adaptive-ranking state
-        # without rewriting the entire corpus before every retrieval.
-        self._query_state_keys = {
-            str(hit.get("stable_key") or "")
-            for hit in hits
-            if str(hit.get("stable_key") or "")
-        }
+        # Public evaluation is a frozen-state read: the same corpus/query pair
+        # must not gain adaptive state merely because repetitions are measured.
+        self._query_state_keys.clear()
         selected_hits = [
             (hit, self._stable_to_document[stable_key])
             for hit in hits
@@ -339,8 +369,10 @@ class AutopsyEvaluationAdapter:
             config={
                 "store": "falkordblite",
                 "embeddings": self.config,
-                "telemetry_reset_between_queries": True,
-                "telemetry_reset_mode": "prior-hit-memory-usage-sidecars",
+                "access_telemetry_recorded": False,
+                "query_state_mode": "static-read",
+                "reranker_warmup_before_queries": True,
+                "reranker_warmup_input": "fixed-query-free-v1",
                 "telemetry_storage": "non-indexed-memory-usage-sidecar",
             },
             source_path=__file__,
@@ -380,8 +412,10 @@ class AutopsyEvaluationAdapter:
             "adapter": "autopsy-isolated-direct-v1",
             "store": "falkordblite",
             "production_worker_used": False,
-            "telemetry_reset_between_queries": True,
-            "telemetry_reset_mode": "prior-hit-memory-usage-sidecars",
+            "access_telemetry_recorded": False,
+            "query_state_mode": "static-read",
+            "reranker_warmup_before_queries": True,
+            "reranker_warmup": dict(self._reranker_warmup),
             "telemetry_storage": "non-indexed-memory-usage-sidecar",
             "eligible_items": eligible,
             "embedded_items": embedded,

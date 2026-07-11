@@ -345,7 +345,9 @@ The built-in Autopsy adapter:
 - ingests no benchmark query strings, QA answer fields, judgment/evidence labels,
   answer-bearing session IDs, or `has_answer` flags (the released memory turns
   themselves naturally retain their conversational content);
-- resets access and feedback telemetry before each measured query;
+- preloads the pinned reranker with a fixed query-free warmup during ingestion;
+- disables access-telemetry writes so every measured repetition reads the same
+  frozen corpus (production consults write usage to non-indexed sidecars);
 - reuses a corpus only when its sanitized document-and-relation fingerprint is
   identical;
 - terminates and removes the temporary store at the end of the run unless

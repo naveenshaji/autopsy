@@ -1280,7 +1280,7 @@ def rerank_candidates(query: str, candidates: list[dict[str, Any]], config: dict
     ranked = []
     for item, score in zip(shortlist, scores):
         normalized = dict(item)
-        normalized["reranker_score"] = float(score)
+        normalized["reranker_score"] = round(float(score), 8)
         reasons = set(normalized.get("retrieval_reasons", []))
         reasons.add("reranker")
         normalized["retrieval_reasons"] = sorted(reasons)
@@ -2002,6 +2002,38 @@ def title_summary_overlap_score(query: str, *, title: str, summary: str, stable_
     if title and query.strip().lower() in title.lower():
         overlap += 40.0
     return overlap
+
+
+def deterministic_lexical_match_score(
+    query: str,
+    *,
+    title: str = "",
+    summary: str = "",
+    detail_content: str = "",
+) -> float:
+    """Canonicalize backend full-text matches into a repeatable local score.
+
+    FalkorDB full-text scores are useful for bounded candidate generation, but
+    they are not a stable persisted property and can change after unrelated
+    index maintenance.  Ranking therefore uses field-aware token coverage while
+    retaining the backend score separately for diagnostics.
+    """
+
+    groups = query_token_variant_groups(query, limit=10)
+    if not groups:
+        return 1.0
+    title_tokens = set(normalized_tokens(title))
+    summary_tokens = set(normalized_tokens(summary))
+    detail_tokens = set(normalized_tokens(detail_content))
+    weighted_matches = 0.0
+    for group in groups:
+        if group & title_tokens:
+            weighted_matches += 1.0
+        elif group & summary_tokens:
+            weighted_matches += 0.75
+        elif group & detail_tokens:
+            weighted_matches += 0.5
+    return round(max(1.0, (weighted_matches / len(groups)) * 5.0), 6)
 
 
 def rerank_lexical_hits(query: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -3146,7 +3178,13 @@ def fetch_node_lexical(graph, query: str, *, limit: int, as_of: str | None = Non
             continue
         title = str(row[3] or "")
         summary = str(row[4] or "")
-        lexical_score = float(row[9])
+        backend_lexical_score = float(row[9])
+        lexical_score = deterministic_lexical_match_score(
+            query,
+            title=title,
+            summary=summary,
+            detail_content=detail_content,
+        )
         exact_match_boost = 0.0
         if query_lower:
             if query_lower in title.lower():
@@ -3171,6 +3209,7 @@ def fetch_node_lexical(graph, query: str, *, limit: int, as_of: str | None = Non
                 "source_kind": source_kind,
                 "expired_at": str(row[8] or ""),
                 "lexical_score": lexical_score,
+                "backend_lexical_score": backend_lexical_score,
                 "exact_match_boost": exact_match_boost,
                 "retrieval_reasons": ["lexical"],
                 "rank": rank,
@@ -3360,11 +3399,16 @@ def fetch_relationship_matches(
             continue
         relation = str(row[1] or "")
         predicate = str(row[2] or "")
-        score = float(row[3])
+        backend_score = float(row[3])
         source_stable_key = str(row[4] or "")
         target_stable_key = str(row[5] or "")
         source_label = str(row[6] or "")
         target_label = str(row[7] or "")
+        score = deterministic_lexical_match_score(
+            query,
+            title=f"{source_label} {target_label}",
+            summary=fact_text,
+        )
         fact_updated_at = str(row[8] or "")
         fact_valid_at = str(row[9] or "")
         fact_invalid_at = str(row[10] or "")
@@ -3387,6 +3431,7 @@ def fetch_relationship_matches(
                     "relation": relation,
                     "predicate": predicate,
                     "score": score,
+                    "backend_score": backend_score,
                     "source_stable_key": source_stable_key,
                     "target_stable_key": target_stable_key,
                     "source_label": source_label,
@@ -3432,6 +3477,7 @@ def fetch_relationship_matches(
                 "source_kind": source_kind,
                 "expired_at": str(row[20] or ""),
                 "lexical_score": score,
+                "backend_lexical_score": backend_score,
                 "relationship_score": score,
                 "retrieval_reasons": ["graph_relation"],
                 "rank": len(candidates),
@@ -3753,6 +3799,7 @@ def fetch_entity_overlap_candidates(graph, query: str, *, limit: int, as_of: str
             continue
         if source_kind == "graph_episode":
             continue
+        backend_lexical_score = float(row[8] or 0.0)
         item = apply_entity_overlap_scoring(
             query,
             {
@@ -3765,7 +3812,12 @@ def fetch_entity_overlap_candidates(graph, query: str, *, limit: int, as_of: str
                 "activity_at": str(row[5] or ""),
                 "source_kind": source_kind,
                 "expired_at": str(row[7] or ""),
-                "lexical_score": float(row[8] or 0.0),
+                "lexical_score": deterministic_lexical_match_score(
+                    query,
+                    title=str(row[3] or ""),
+                    summary=str(row[4] or ""),
+                ),
+                "backend_lexical_score": backend_lexical_score,
                 "retrieval_reasons": ["entity_overlap"],
                 "rank": rank,
             },
@@ -4048,7 +4100,7 @@ def fetch_vector_candidates(
             continue
         distance = float(row[8])
         similarity_function = str(config.get("similarity_function") or "cosine").strip().lower()
-        embedding_score = vector_distance_to_similarity(distance, similarity_function)
+        embedding_score = round(vector_distance_to_similarity(distance, similarity_function), 8)
         items.append(
             {
                 "entity_id": int(row[0]),
@@ -11602,6 +11654,7 @@ def short_hits(items: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any
                 "entity_scopes": item_memory_entity_scopes(item),
                 "retrieval_reasons": list(item.get("retrieval_reasons") or []),
                 "lexical_score": item.get("lexical_score"),
+                "backend_lexical_score": item.get("backend_lexical_score"),
                 "embedding_score": item.get("embedding_score"),
                 "entity_overlap_score": item.get("entity_overlap_score"),
                 "entity_matches": item.get("entity_matches"),
@@ -14321,6 +14374,7 @@ def build_consult_payload(
     filter_json: Any = None,
     as_of: str | None = None,
     min_fact_rating: float | str | None = None,
+    record_access_telemetry: bool = True,
 ) -> dict[str, Any]:
     normalized_as_of = normalize_as_of_timestamp(as_of)
     normalized_min_fact_rating = normalize_fact_rating(min_fact_rating)
@@ -14628,12 +14682,20 @@ def build_consult_payload(
     relationship_side_hits = filter_items_by_read_guard(relationship_side_hits, read_guard)
     vector_side_hits = filter_items_by_read_guard(vector_side_hits, read_guard)
     relationship_hits = filter_relationship_hits_by_read_guard(relationship_hits, read_guard)
-    access_log = record_memory_access(
-        graph,
-        [str(hit.get("stable_key") or "") for hit in hits],
-        source="consult",
-        query=query,
-    )
+    if record_access_telemetry:
+        access_log = record_memory_access(
+            graph,
+            [str(hit.get("stable_key") or "") for hit in hits],
+            source="consult",
+            query=query,
+        )
+    else:
+        access_log = {
+            "updated": 0,
+            "stable_keys": [],
+            "disabled": True,
+            "reason": "static_read_requested",
+        }
     usage_by_key = (
         {}
         if normalized_as_of
@@ -14761,6 +14823,7 @@ def retrieval_evidence_from_item(item: dict[str, Any] | None) -> dict[str, Any]:
         key: item.get(key)
         for key in (
             "lexical_score",
+            "backend_lexical_score",
             "embedding_score",
             "entity_overlap_score",
             "relationship_score",

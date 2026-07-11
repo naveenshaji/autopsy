@@ -367,7 +367,7 @@ def rerank_candidates(query: str, candidates: list[dict], config: dict | None) -
     normalized_shortlist = []
     for item, score in zip(shortlist, scores):
         normalized = dict(item)
-        normalized['reranker_score'] = float(score)
+        normalized['reranker_score'] = round(float(score), 8)
         reasons = set(normalized.get('retrieval_reasons', []))
         reasons.add('reranker')
         normalized['retrieval_reasons'] = sorted(reasons)
