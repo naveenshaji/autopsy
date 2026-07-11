@@ -346,8 +346,6 @@ def validate_answer_output(payload: Any, answer_input: Mapping[str, Any]) -> dic
         allowed = {context["context_handle"] for context in expected[handle]["contexts"]}
         if not set(citations).issubset(allowed):
             raise DiagnosticError(f"Answer output row {index} cites another case or an unknown context")
-        if row["abstained"] and citations:
-            raise DiagnosticError(f"Answer output row {index} abstains but cites evidence")
         if not row["abstained"] and not citations:
             raise DiagnosticError(f"Answer output row {index} answers without evidence citation")
     if seen != set(expected):

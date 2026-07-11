@@ -30,6 +30,10 @@ resume verifies the seal. Answer and judge runs use separate ephemeral Codex
 sessions in blank directories with tools, apps, shell, browser, web search,
 memory, hooks, and multi-agent features disabled.
 
+Any cited context handles must belong to the same case. Non-abstaining answers
+must cite support; abstentions may cite case-local context when it explains why
+the supplied evidence is insufficient.
+
 The launcher copies only the cached ChatGPT login into a temporary mode-0600
 `CODEX_HOME`, removes API-key/token environment variables, enforces
 `forced_login_method="chatgpt"`, and requires `codex login status` to report

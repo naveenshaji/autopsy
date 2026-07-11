@@ -142,6 +142,13 @@ class CodexDiagnosticTests(unittest.TestCase):
             },
             answer_input,
         )
+        diagnostic.validate_answer_output(
+            {
+                "schema": diagnostic.ANSWER_OUTPUT_SCHEMA,
+                "answers": [{"case_handle": "Q1", "answer": "", "abstained": True, "cited_context_handles": ["C001"]}],
+            },
+            answer_input,
+        )
         with self.assertRaises(diagnostic.DiagnosticError):
             diagnostic.validate_answer_output(
                 {
