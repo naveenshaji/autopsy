@@ -84,8 +84,11 @@ class Mem0RawWorker:
         self.fingerprint = ""
         self.mem0_to_document: dict[str, str] = {}
         self.document_policy: dict[str, dict[str, str]] = {}
+        self.eligible_document_ids: set[str] = set()
         self.ingestion_history: list[dict[str, Any]] = []
         self.evaluated_documents = 0
+        self.evaluated_eligible_documents = 0
+        self.evaluated_skipped_empty_documents = 0
         self.evaluated_embedded = 0
         self.searches = 0
         self.resolved_embedding_revision = ""
@@ -201,17 +204,30 @@ class Mem0RawWorker:
         self.memory = self._new_memory(fingerprint)
         self.mem0_to_document.clear()
         self.document_policy.clear()
+        self.eligible_document_ids.clear()
         embedded = 0
+        skipped_empty = 0
         characters = 0
         for document in documents:
             document_id = str(document.get("document_id") or "")
             if not document_id or document_id in self.document_policy:
                 raise ValueError("prepared documents require unique non-empty opaque ids")
-            raw_text = _raw_document_text(document)
-            if not raw_text:
-                raise ValueError(f"prepared document {document_id!r} has no indexable text")
             repository_id = str(document.get("repository_id") or "")
             expired_at = str(document.get("expired_at") or "")
+            self.document_policy[document_id] = {
+                "repository_id": repository_id,
+                "expired_at": expired_at,
+            }
+            raw_text = _raw_document_text(document)
+            if not raw_text:
+                # Upstream-compatible LongMemEval intentionally serializes only
+                # user turns, so an assistant-only session can be empty.  An
+                # empty string has no embedding semantics: omit it explicitly
+                # instead of inventing a searchable placeholder or failing the
+                # entire corpus.
+                skipped_empty += 1
+                continue
+            self.eligible_document_ids.add(document_id)
             metadata = {"repository_id": repository_id} if repository_id else None
             result = self.memory.add(
                 raw_text,
@@ -227,21 +243,21 @@ class Mem0RawWorker:
             if memory_id in self.mem0_to_document:
                 raise RuntimeError("Mem0 returned a duplicate memory id")
             self.mem0_to_document[memory_id] = document_id
-            self.document_policy[document_id] = {
-                "repository_id": repository_id,
-                "expired_at": expired_at,
-            }
             embedded += 1
             characters += len(raw_text)
 
         elapsed = time.perf_counter() - started
         self.fingerprint = fingerprint
         self.evaluated_documents += len(documents)
+        self.evaluated_eligible_documents += len(self.eligible_document_ids)
+        self.evaluated_skipped_empty_documents += skipped_empty
         self.evaluated_embedded += embedded
         payload = {
             "reused": False,
             "corpus_fingerprint": fingerprint,
             "documents": len(documents),
+            "eligible_items": len(self.eligible_document_ids),
+            "skipped_empty_items": skipped_empty,
             "characters": characters,
             "relations": int(message.get("relation_count") or 0),
             "relations_indexed": 0,
@@ -335,17 +351,21 @@ class Mem0RawWorker:
         return {
             **self.handshake(),
             "documents": len(self.document_policy),
+            "eligible_items": len(self.eligible_document_ids),
+            "skipped_empty_items": len(self.document_policy) - len(self.eligible_document_ids),
             "embedded_items": len(self.mem0_to_document),
             "vector_coverage": (
-                len(self.mem0_to_document) / len(self.document_policy)
-                if self.document_policy
+                len(self.mem0_to_document) / len(self.eligible_document_ids)
+                if self.eligible_document_ids
                 else 0.0
             ),
-            "evaluated_eligible_items": self.evaluated_documents,
+            "evaluated_documents": self.evaluated_documents,
+            "evaluated_eligible_items": self.evaluated_eligible_documents,
+            "evaluated_skipped_empty_items": self.evaluated_skipped_empty_documents,
             "evaluated_embedded_items": self.evaluated_embedded,
             "evaluated_vector_coverage": (
-                self.evaluated_embedded / self.evaluated_documents
-                if self.evaluated_documents
+                self.evaluated_embedded / self.evaluated_eligible_documents
+                if self.evaluated_eligible_documents
                 else 0.0
             ),
             "embedding_model_revision": EMBEDDING_REVISION,

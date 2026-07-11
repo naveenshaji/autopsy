@@ -22,6 +22,7 @@ from autopsy_memory.evaluation.mem0_adapter import (
     mem0_bootstrap_dir,
     mem0_setup_script,
 )
+from autopsy_memory.evaluation.mem0_worker import Mem0RawWorker
 from autopsy_memory.evaluation.models import (
     EvaluationCorpus,
     EvaluationDocument,
@@ -113,6 +114,42 @@ for line in sys.stdin:
 
 
 class Mem0AdapterContractTests(unittest.TestCase):
+    def test_worker_skips_empty_upstream_documents_without_faking_embeddings(self):
+        class FakeMemory:
+            def __init__(self):
+                self.added: list[str] = []
+
+            def add(self, text, **_kwargs):
+                self.added.append(text)
+                return {"results": [{"id": f"memory-{len(self.added)}"}]}
+
+        with tempfile.TemporaryDirectory() as directory:
+            worker = Mem0RawWorker(Path(directory))
+            fake = FakeMemory()
+            with mock.patch.object(worker, "_new_memory", return_value=fake):
+                ingestion = worker.prepare(
+                    {
+                        "corpus_fingerprint": "a" * 64,
+                        "relation_count": 0,
+                        "documents": [
+                            {"document_id": "empty", "title": "", "text": ""},
+                            {"document_id": "fact", "title": "", "text": "A usable memory."},
+                        ],
+                    }
+                )
+            with mock.patch.object(worker, "handshake", return_value={}):
+                capabilities = worker.capabilities()
+
+        self.assertEqual(fake.added, ["A usable memory."])
+        self.assertEqual(ingestion["documents"], 2)
+        self.assertEqual(ingestion["eligible_items"], 1)
+        self.assertEqual(ingestion["skipped_empty_items"], 1)
+        self.assertEqual(ingestion["embedded_items"], 1)
+        self.assertEqual(capabilities["evaluated_documents"], 2)
+        self.assertEqual(capabilities["evaluated_eligible_items"], 1)
+        self.assertEqual(capabilities["evaluated_skipped_empty_items"], 1)
+        self.assertEqual(capabilities["evaluated_vector_coverage"], 1.0)
+
     def _fake_worker(self, directory: str) -> Path:
         worker = Path(directory) / "fake_mem0_worker.py"
         worker.write_text(textwrap.dedent(FAKE_WORKER), encoding="utf-8")
@@ -341,6 +378,7 @@ class Mem0PinnedEnvironmentIntegrationTests(unittest.TestCase):
                     expired_at="2020-01-01T00:00:00Z",
                     metadata={"repository_id": "/repo/a"},
                 ),
+                EvaluationDocument("opaque-empty", ""),
             )
         )
         with Mem0OSSEvaluationAdapter() as adapter:
@@ -357,6 +395,8 @@ class Mem0PinnedEnvironmentIntegrationTests(unittest.TestCase):
             )
             capabilities = adapter.capabilities()
         self.assertEqual(ingestion["embedded_items"], 3)
+        self.assertEqual(ingestion["eligible_items"], 3)
+        self.assertEqual(ingestion["skipped_empty_items"], 1)
         self.assertIn("opaque-current", result.ranked_document_ids)
         self.assertNotIn("opaque-other-repo", result.ranked_document_ids)
         self.assertNotIn("opaque-expired", result.ranked_document_ids)

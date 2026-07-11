@@ -225,6 +225,9 @@ on-disk Qdrant, and `MEM0_TELEMETRY=false`. The environment and model download
 need the network once during bootstrap; measured retrieval is a local
 subprocess with inherited API credentials stripped and model loading forced
 offline, needs no service credentials, and reports USD 0 external API cost.
+User-only upstream sessions with no indexable text are explicitly counted and
+skipped rather than embedded as synthetic placeholders; vector coverage is
+computed over the remaining eligible documents.
 The exact runtime dependency versions are copied into every adapter manifest.
 The canonical setup script, complete lock, and README ship under
 `autopsy_memory/evaluation/competitors/mem0/` in the wheel. If an installed CLI

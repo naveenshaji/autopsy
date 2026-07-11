@@ -333,6 +333,7 @@ class Mem0OSSEvaluationAdapter:
                 "process": True,
                 "prepare_receives_query": False,
                 "mem0_uuid_mapping": "out-of-band",
+                "empty_document_policy": "skip-and-report-ineligible",
                 "runtime_network": "offline",
                 "inherited_api_credentials": False,
             },

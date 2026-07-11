@@ -38,6 +38,9 @@ Repository scope uses Mem0/Qdrant metadata filtering and a result-boundary
 verification. Expiration uses Mem0's native current-date behavior plus an exact
 UTC result check. Mem0 OSS 2.0.11 rejects `reference_date`; native historical
 `as-of` retrieval is therefore reported as unsupported and is not emulated.
+Empty documents in an upstream representation have no embedding semantics and
+are reported as `skipped_empty_items`; they are never replaced with searchable
+placeholder text. Vector coverage is computed over non-empty eligible items.
 
 After bootstrap, evaluation is local and requires no API key or paid service.
 The first bootstrap/model download uses the network; measured runs use local
