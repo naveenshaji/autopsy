@@ -1267,7 +1267,7 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--longmemeval-predictions", required=True)
     prepare.add_argument("--answer-model", default="gpt-5.4-mini")
     prepare.add_argument("--answer-reasoning-effort", default="xhigh", choices=("low", "medium", "high", "xhigh"))
-    prepare.add_argument("--judge-model", default="gpt-5.2")
+    prepare.add_argument("--judge-model", default="gpt-5.4")
     prepare.add_argument("--judge-reasoning-effort", default="medium", choices=("low", "medium", "high", "xhigh"))
     prepare.add_argument("--judge-repetitions", type=int, default=DEFAULT_JUDGE_REPETITIONS, choices=range(1, 4))
 

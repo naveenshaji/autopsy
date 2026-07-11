@@ -64,7 +64,7 @@ python "$TOOL" status --run-dir "$RUN"
 ```
 
 The defaults pin answer routing to `gpt-5.4-mini` at `xhigh` reasoning and the
-judge to `gpt-5.2` at `medium` reasoning, with two independent judge passes.
+judge to `gpt-5.4` at `medium` reasoning, with two independent judge passes.
 The manifest also pins the exact prompt, selection-policy, output-schema,
 dataset, and retrieval-artifact hashes. Model IDs pin routing names, not
 immutable server-side weights; Codex CLI does not expose a temperature or seed
