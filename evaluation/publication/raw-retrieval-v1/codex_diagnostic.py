@@ -116,7 +116,7 @@ ANSWER_OUTPUT_JSON_SCHEMA = {
     "additionalProperties": False,
     "required": ["schema", "answers"],
     "properties": {
-        "schema": {"const": ANSWER_OUTPUT_SCHEMA},
+        "schema": {"type": "string", "const": ANSWER_OUTPUT_SCHEMA},
         "answers": {
             "type": "array",
             "items": {
@@ -143,7 +143,7 @@ JUDGE_OUTPUT_JSON_SCHEMA = {
     "additionalProperties": False,
     "required": ["schema", "judgments"],
     "properties": {
-        "schema": {"const": JUDGE_OUTPUT_SCHEMA},
+        "schema": {"type": "string", "const": JUDGE_OUTPUT_SCHEMA},
         "judgments": {
             "type": "array",
             "items": {
@@ -190,8 +190,8 @@ FROZEN_DEFINITION_HASHES = {
     "selection_policy_sha256": "28d4180814cbd0acf4278cd8d132fffa9e16238674d7599dbfb0d52086c67f30",
     "answer_prompt_sha256": "8eea67ab5e3610f3faa0c56281932e6bd3555343a979dd7a7755cdf9df9423bb",
     "judge_prompt_sha256": "3bad99b433ffa489b1cfe4dd9fc3b06f3c6f6e7e1d3f5d6e2dd1f99f2f7914ee",
-    "answer_schema_sha256": "aed74a059ae8bf1b1d528405088a54c3f7366775585129f1d3e4e9a4964e4464",
-    "judge_schema_sha256": "8794dcf462b5ab90abb70515cd212c2c2318e82300e70390a581e2963e833e58",
+    "answer_schema_sha256": "78e9aa6a15cf9141d5561be3ae74b5afe404fbf2420c1138a3f3aecedb01eb45",
+    "judge_schema_sha256": "0398d5c9bedfbf3c865e0800f51d53760371fbf53971c990400bfb7febddb99d",
 }
 
 

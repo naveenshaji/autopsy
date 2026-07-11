@@ -19,7 +19,7 @@
       },
       "type": "array"
     },
-    "schema": { "const": "autopsy-codex-answer-output/v1" }
+    "schema": { "const": "autopsy-codex-answer-output/v1", "type": "string" }
   },
   "required": ["schema", "answers"],
   "type": "object"

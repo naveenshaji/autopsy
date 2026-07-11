@@ -14,7 +14,7 @@
       },
       "type": "array"
     },
-    "schema": { "const": "autopsy-codex-judge-output/v1" }
+    "schema": { "const": "autopsy-codex-judge-output/v1", "type": "string" }
   },
   "required": ["schema", "judgments"],
   "type": "object"
