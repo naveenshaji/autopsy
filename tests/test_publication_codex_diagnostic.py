@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -54,6 +55,25 @@ def prediction(item: EvaluationCase) -> dict:
 
 
 class CodexDiagnosticTests(unittest.TestCase):
+    def test_published_aggregate_is_frozen_and_contains_no_private_rows(self) -> None:
+        path = SCRIPT.parent / "codex-diagnostic-aggregate.json"
+        raw = path.read_bytes()
+        published = json.loads(raw)
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), "1bae87f6b23503c54eac5f5068b4cec4604cfbf3b58c5e066e079e24882ed013")
+        self.assertEqual(published["schema"], diagnostic.SCORE_SCHEMA)
+        self.assertEqual(published["status"], "complete")
+        self.assertTrue(published["exploratory"])
+        self.assertFalse(published["cost"]["openai_api_key_used"])
+        self.assertEqual(published["cost"]["api_dollar_spend_usd"], 0.0)
+        self.assertEqual(published["cost"]["remote_model_calls_completed"], 42)
+        self.assertAlmostEqual(
+            published["metrics"]["combined_unweighted_diagnostic"]["primary_codex_judge_pass_rate"],
+            0.5909090909090909,
+        )
+        text = raw.decode("utf-8")
+        for forbidden in ("/Users/", "/private/tmp/", "case_id", "corpus_id", "context_handle", "reference_answer"):
+            self.assertNotIn(forbidden, text)
+
     def test_publication_prompt_selection_and_schema_hashes_are_frozen(self) -> None:
         diagnostic.assert_frozen_definitions()
         self.assertEqual(

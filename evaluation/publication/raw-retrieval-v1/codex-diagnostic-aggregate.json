@@ -1,0 +1,409 @@
+{
+  "answer_prompt_sha256": "9991a31df8bc7a824d5b76ff608068a6ded842be752599aec85c56d0193aec82",
+  "cost": {
+    "api_dollar_spend_usd": 0.0,
+    "billing_channel": "ChatGPT subscription",
+    "chatgpt_quota_or_credits_consumed": "unmeasured",
+    "openai_api_key_used": false,
+    "remote_model_calls_completed": 42
+  },
+  "exploratory": true,
+  "judge_prompt_sha256": "3bad99b433ffa489b1cfe4dd9fc3b06f3c6f6e7e1d3f5d6e2dd1f99f2f7914ee",
+  "label": "Autopsy source snapshot a22c3c7 (package metadata 0.1.30) Codex-answerer exploratory diagnostic (110-case stratified sample; raw retrieval; ChatGPT-authenticated Codex CLI)",
+  "metrics": {
+    "by_dataset": {
+      "locomo": {
+        "abstention": {
+          "f1": 0.38461538461538464,
+          "false_negative": 5,
+          "false_positive": 11,
+          "precision": 0.3125,
+          "recall": 0.5,
+          "true_negative": 29,
+          "true_positive": 5
+        },
+        "answer_coverage": 0.725,
+        "answerable_cases": 40,
+        "by_category": {
+          "adversarial-abstention": {
+            "abstention": {
+              "f1": 0.6666666666666666,
+              "false_negative": 5,
+              "false_positive": 0,
+              "precision": 1.0,
+              "recall": 0.5,
+              "true_negative": 0,
+              "true_positive": 5
+            },
+            "answer_coverage": null,
+            "answerable_cases": 0,
+            "exact_match": null,
+            "judge_pass_rate_by_repetition": [
+              0.5,
+              0.5
+            ],
+            "judge_pass_rate_sensitivity_range": [
+              0.5,
+              0.5
+            ],
+            "judge_unanimous_agreement": 1.0,
+            "primary_codex_judge_pass_rate": 0.5,
+            "sample_cases": 10,
+            "token_f1": null
+          },
+          "multi-hop": {
+            "abstention": {
+              "f1": 0.0,
+              "false_negative": 0,
+              "false_positive": 4,
+              "precision": 0.0,
+              "recall": null,
+              "true_negative": 6,
+              "true_positive": 0
+            },
+            "answer_coverage": 0.6,
+            "answerable_cases": 10,
+            "exact_match": 0.0,
+            "judge_pass_rate_by_repetition": [
+              0.1,
+              0.2
+            ],
+            "judge_pass_rate_sensitivity_range": [
+              0.1,
+              0.2
+            ],
+            "judge_unanimous_agreement": 0.9,
+            "primary_codex_judge_pass_rate": 0.1,
+            "sample_cases": 10,
+            "token_f1": 0.13870129870129871
+          },
+          "open-domain": {
+            "abstention": {
+              "f1": 0.0,
+              "false_negative": 0,
+              "false_positive": 4,
+              "precision": 0.0,
+              "recall": null,
+              "true_negative": 6,
+              "true_positive": 0
+            },
+            "answer_coverage": 0.6,
+            "answerable_cases": 10,
+            "exact_match": 0.2,
+            "judge_pass_rate_by_repetition": [
+              0.3,
+              0.3
+            ],
+            "judge_pass_rate_sensitivity_range": [
+              0.3,
+              0.3
+            ],
+            "judge_unanimous_agreement": 1.0,
+            "primary_codex_judge_pass_rate": 0.3,
+            "sample_cases": 10,
+            "token_f1": 0.24210526315789474
+          },
+          "single-hop": {
+            "abstention": {
+              "f1": 0.0,
+              "false_negative": 0,
+              "false_positive": 1,
+              "precision": 0.0,
+              "recall": null,
+              "true_negative": 9,
+              "true_positive": 0
+            },
+            "answer_coverage": 0.9,
+            "answerable_cases": 10,
+            "exact_match": 0.1,
+            "judge_pass_rate_by_repetition": [
+              0.8,
+              0.9
+            ],
+            "judge_pass_rate_sensitivity_range": [
+              0.8,
+              0.9
+            ],
+            "judge_unanimous_agreement": 0.9,
+            "primary_codex_judge_pass_rate": 0.8,
+            "sample_cases": 10,
+            "token_f1": 0.5271428571428571
+          },
+          "temporal": {
+            "abstention": {
+              "f1": 0.0,
+              "false_negative": 0,
+              "false_positive": 2,
+              "precision": 0.0,
+              "recall": null,
+              "true_negative": 8,
+              "true_positive": 0
+            },
+            "answer_coverage": 0.8,
+            "answerable_cases": 10,
+            "exact_match": 0.3,
+            "judge_pass_rate_by_repetition": [
+              0.6,
+              0.6
+            ],
+            "judge_pass_rate_sensitivity_range": [
+              0.6,
+              0.6
+            ],
+            "judge_unanimous_agreement": 1.0,
+            "primary_codex_judge_pass_rate": 0.6,
+            "sample_cases": 10,
+            "token_f1": 0.6103535353535353
+          }
+        },
+        "exact_match": 0.15,
+        "judge_pass_rate_by_repetition": [
+          0.46,
+          0.5
+        ],
+        "judge_pass_rate_sensitivity_range": [
+          0.46,
+          0.5
+        ],
+        "judge_unanimous_agreement": 0.96,
+        "primary_codex_judge_pass_rate": 0.46,
+        "sample_cases": 50,
+        "token_f1": 0.3795757385888965
+      },
+      "longmemeval-s": {
+        "abstention": {
+          "f1": 0.8285714285714285,
+          "false_negative": 1,
+          "false_positive": 11,
+          "precision": 0.725,
+          "recall": 0.9666666666666667,
+          "true_negative": 19,
+          "true_positive": 29
+        },
+        "answer_coverage": 0.6333333333333333,
+        "answerable_cases": 30,
+        "by_category": {
+          "knowledge-update": {
+            "abstention": {
+              "f1": 0.923076923076923,
+              "false_negative": 0,
+              "false_positive": 1,
+              "precision": 0.8571428571428571,
+              "recall": 1.0,
+              "true_negative": 4,
+              "true_positive": 6
+            },
+            "answer_coverage": 0.8,
+            "answerable_cases": 5,
+            "exact_match": 0.2,
+            "judge_pass_rate_by_repetition": [
+              0.8181818181818182,
+              0.8181818181818182
+            ],
+            "judge_pass_rate_sensitivity_range": [
+              0.8181818181818182,
+              0.8181818181818182
+            ],
+            "judge_unanimous_agreement": 1.0,
+            "primary_codex_judge_pass_rate": 0.8181818181818182,
+            "sample_cases": 11,
+            "token_f1": 0.4
+          },
+          "multi-session": {
+            "abstention": {
+              "f1": 0.9600000000000001,
+              "false_negative": 0,
+              "false_positive": 1,
+              "precision": 0.9230769230769231,
+              "recall": 1.0,
+              "true_negative": 4,
+              "true_positive": 12
+            },
+            "answer_coverage": 0.8,
+            "answerable_cases": 5,
+            "exact_match": 0.4,
+            "judge_pass_rate_by_repetition": [
+              0.8823529411764706,
+              0.8823529411764706
+            ],
+            "judge_pass_rate_sensitivity_range": [
+              0.8823529411764706,
+              0.8823529411764706
+            ],
+            "judge_unanimous_agreement": 1.0,
+            "primary_codex_judge_pass_rate": 0.8823529411764706,
+            "sample_cases": 17,
+            "token_f1": 0.6
+          },
+          "single-session-assistant": {
+            "abstention": {
+              "f1": 0.0,
+              "false_negative": 0,
+              "false_positive": 3,
+              "precision": 0.0,
+              "recall": null,
+              "true_negative": 2,
+              "true_positive": 0
+            },
+            "answer_coverage": 0.4,
+            "answerable_cases": 5,
+            "exact_match": 0.2,
+            "judge_pass_rate_by_repetition": [
+              0.4,
+              0.4
+            ],
+            "judge_pass_rate_sensitivity_range": [
+              0.4,
+              0.4
+            ],
+            "judge_unanimous_agreement": 1.0,
+            "primary_codex_judge_pass_rate": 0.4,
+            "sample_cases": 5,
+            "token_f1": 0.2666666666666667
+          },
+          "single-session-preference": {
+            "abstention": {
+              "f1": 0.0,
+              "false_negative": 0,
+              "false_positive": 2,
+              "precision": 0.0,
+              "recall": null,
+              "true_negative": 3,
+              "true_positive": 0
+            },
+            "answer_coverage": 0.6,
+            "answerable_cases": 5,
+            "exact_match": 0.0,
+            "judge_pass_rate_by_repetition": [
+              0.2,
+              0.2
+            ],
+            "judge_pass_rate_sensitivity_range": [
+              0.2,
+              0.2
+            ],
+            "judge_unanimous_agreement": 1.0,
+            "primary_codex_judge_pass_rate": 0.2,
+            "sample_cases": 5,
+            "token_f1": 0.11243385452479895
+          },
+          "single-session-user": {
+            "abstention": {
+              "f1": 0.8,
+              "false_negative": 0,
+              "false_positive": 3,
+              "precision": 0.6666666666666666,
+              "recall": 1.0,
+              "true_negative": 2,
+              "true_positive": 6
+            },
+            "answer_coverage": 0.4,
+            "answerable_cases": 5,
+            "exact_match": 0.2,
+            "judge_pass_rate_by_repetition": [
+              0.6363636363636364,
+              0.6363636363636364
+            ],
+            "judge_pass_rate_sensitivity_range": [
+              0.6363636363636364,
+              0.6363636363636364
+            ],
+            "judge_unanimous_agreement": 1.0,
+            "primary_codex_judge_pass_rate": 0.6363636363636364,
+            "sample_cases": 11,
+            "token_f1": 0.28888888888888886
+          },
+          "temporal-reasoning": {
+            "abstention": {
+              "f1": 0.8333333333333334,
+              "false_negative": 1,
+              "false_positive": 1,
+              "precision": 0.8333333333333334,
+              "recall": 0.8333333333333334,
+              "true_negative": 4,
+              "true_positive": 5
+            },
+            "answer_coverage": 0.8,
+            "answerable_cases": 5,
+            "exact_match": 0.0,
+            "judge_pass_rate_by_repetition": [
+              0.7272727272727273,
+              0.7272727272727273
+            ],
+            "judge_pass_rate_sensitivity_range": [
+              0.7272727272727273,
+              0.7272727272727273
+            ],
+            "judge_unanimous_agreement": 1.0,
+            "primary_codex_judge_pass_rate": 0.7272727272727273,
+            "sample_cases": 11,
+            "token_f1": 0.24444444444444446
+          }
+        },
+        "exact_match": 0.16666666666666666,
+        "judge_pass_rate_by_repetition": [
+          0.7,
+          0.7
+        ],
+        "judge_pass_rate_sensitivity_range": [
+          0.7,
+          0.7
+        ],
+        "judge_unanimous_agreement": 1.0,
+        "primary_codex_judge_pass_rate": 0.7,
+        "sample_cases": 60,
+        "token_f1": 0.3187389757541332
+      }
+    },
+    "combined_unweighted_diagnostic": {
+      "abstention": {
+        "f1": 0.7083333333333333,
+        "false_negative": 6,
+        "false_positive": 22,
+        "precision": 0.6071428571428571,
+        "recall": 0.85,
+        "true_negative": 48,
+        "true_positive": 34
+      },
+      "answer_coverage": 0.6857142857142857,
+      "answerable_cases": 70,
+      "exact_match": 0.15714285714285714,
+      "judge_pass_rate_by_repetition": [
+        0.5909090909090909,
+        0.6090909090909091
+      ],
+      "judge_pass_rate_sensitivity_range": [
+        0.5909090909090909,
+        0.6090909090909091
+      ],
+      "judge_unanimous_agreement": 0.9818181818181818,
+      "primary_codex_judge_pass_rate": 0.5909090909090909,
+      "sample_cases": 110,
+      "token_f1": 0.35350284023114076
+    }
+  },
+  "models": {
+    "answerer": {
+      "id": "gpt-5.4-mini",
+      "reasoning_effort": "medium"
+    },
+    "judge": {
+      "id": "gpt-5.4",
+      "reasoning_effort": "medium",
+      "repetitions": 2
+    }
+  },
+  "qualifications": [
+    "This is a predeclared 110-case stratified exploratory diagnostic, not full-dataset accuracy.",
+    "The judge is a ChatGPT-authenticated Codex model, not the frozen official LoCoMo or LongMemEval judge.",
+    "The result is not directly comparable to Mem0 vendor-reported 92.5/94.4 scores.",
+    "LongMemEval uses the source raw run's upstream user-only representation, which excludes assistant-side evidence.",
+    "Model IDs pin routing names, not immutable server-side model weights; temperature and random seed are not exposed by Codex CLI.",
+    "Combined metrics are unweighted diagnostics because the sampling intentionally oversamples categories and abstentions."
+  ],
+  "schema": "autopsy-codex-diagnostic-score/v1",
+  "scored_at": "2026-07-11T20:27:52.311783+00:00",
+  "selection_policy_sha256": "28d4180814cbd0acf4278cd8d132fffa9e16238674d7599dbfb0d52086c67f30",
+  "source_manifest_sha256": "b29ae2f1f83f9e62b6d8084cd9611e6f485c9c7fdadd2821a45a6a61bd18018a",
+  "status": "complete"
+}

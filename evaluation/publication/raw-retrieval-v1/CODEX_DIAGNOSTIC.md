@@ -83,4 +83,5 @@ Keep the run directory private. It contains benchmark questions, contexts,
 answers, gold labels, and source identifiers and must not be placed in the
 aggregate-only publication archive. Only the sanitized `aggregate-score.json`
 is suitable for consideration, subject to the dataset attribution and claim
-limits in the publication bundle.
+limits in the publication bundle. The accepted aggregate and interpretation
+are published in [CODEX_DIAGNOSTIC_RESULTS.md](CODEX_DIAGNOSTIC_RESULTS.md).

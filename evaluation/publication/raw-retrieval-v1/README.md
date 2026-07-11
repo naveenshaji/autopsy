@@ -205,6 +205,13 @@ Do not claim "state of the art," "Autopsy beats Mem0," or report Recall-any as
 "accuracy." Report negative findings, latency, exclusions, abstention behavior,
 and category-level results alongside any favorable comparison.
 
+## Exploratory answer-quality follow-up
+
+The separate [Codex diagnostic result](CODEX_DIAGNOSTIC_RESULTS.md) evaluates a
+frozen 110-case stratified sample with a retrieval-grounded Codex answerer and
+two independent judge passes. It is aggregate-only, explicitly exploratory,
+and not part of the raw-retrieval comparison matrix above.
+
 For commands, schemas, and full methodology, see
 [the external evaluation guide](../../../docs/external-evaluation.md). For
 redistribution boundaries and notices, see [ATTRIBUTION.md](ATTRIBUTION.md).
