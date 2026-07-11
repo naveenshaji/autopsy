@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+- Adds `autopsy evaluate`, a reproducible external retrieval-evaluation suite
+  with pinned LoCoMo and LongMemEval-S artifacts, streaming validation,
+  deterministic sampling, isolated FalkorDBLite runs, raw predictions,
+  independent rescoring, category/abstention/ranking/latency metrics, coding
+  memory challenge cases, and explicit vector-coverage qualification.
+- Adds separate `extracted-retrieval` and `common-answer` evaluation tracks with
+  a query/gold-free deterministic sentence extractor, source-attributed memory
+  artifacts, a shared offline extractive answer generator, independent gold
+  scoring, exact-match/token-F1/coverage metrics, and explicit unsupported
+  status for LongMemEval's unbundled official LLM judge. End-to-end reports use
+  the raw suite's semantic/model/cutoff/temporal/safety/provenance gates and
+  require at least two stable measured rankings before comparability can pass.
+  Answer rows bind adapter/extractor/generator package and source pins,
+  execution mode, and cost so independent scoring rejects mixed builds.
+- Adds a process-isolated `mem0-oss-raw` competitor adapter pinned to Mem0
+  2.0.11 and an immutable Hugging Face model revision, with `infer=False`,
+  embedded Qdrant, telemetry disabled, out-of-band ID mapping, scope/expiration
+  enforcement, and explicit disclosure that Mem0 OSS has no native as-of read.
+  The wheel includes its executable setup script, complete dependency lock, and
+  README; source provenance hashes the complete adapter/bootstrap bundle.
+- Populates versioned BGE embeddings on semantic writes, adds safe batched
+  `autopsy embeddings status|backfill`, verifies Falkor full-text/vector indexes
+  instead of swallowing incompatible DDL, and converts Falkor cosine distance
+  into the higher-is-better similarity used by ranking.
+- Makes health and the benchmark gate fail closed on missing, stale, mixed-model,
+  or wrong-dimension semantic vectors; content fingerprints and compare-and-set
+  backfill updates prevent stale vectors from surviving edits.
+
 - Adds an embedded FalkorDBLite generation guard with a persisted sidecar,
   mutation locking, rollback diagnostics, and `NOSAVE` shutdown for cooperating
   stale processes.

@@ -36,7 +36,7 @@ When reading memory:
 - Use `history <stable-key>` when the answer depends on how one memory changed, especially after update, expiration, pinning, or delete operations.
 - Use `neighbors` for related decisions, attempts, dependencies, or reversions.
 - Use `observe --stable-key <stable-key>` to draft or `--write` an evidence-backed observation when one memory's graph neighborhood should become reusable context; use `--write-if-stale` to refresh only after evidence drift.
-- Use `expire <stable-key>` for obsolete memories that should leave current reads but remain available to history and `--as-of` reconstruction.
+- Use `expire <stable-key>` for obsolete memories that should leave current reads but remain available to history and earlier `--as-of` lifecycle views. `--as-of` conservatively filters the current stored body and does not materialize a pre-update in-place body; use `history` for those snapshots.
 - Use `pin <stable-key>` for core memories that should appear in `context` packs without depending on task-specific retrieval; add `--label`, `--description`, `--limit`, `--read-only`, or `--shared` when the pin should behave like an always-visible memory block.
 - Use `feedback <stable-key> --rating useful|not-useful|neutral` after important reads; feedback informs audit activation and bounded consult ranking.
 - Treat memory as evidence, not absolute truth; verify drift-prone facts against code/config/git.

@@ -75,6 +75,9 @@ autopsy init --smoke-test
 autopsy version
 autopsy doctor
 autopsy health
+autopsy embeddings status
+autopsy embeddings backfill --dry-run
+autopsy embeddings backfill
 autopsy diagnostics --limit 10
 autopsy repair-embedded-snapshot --dry-run
 autopsy status --current-only
@@ -117,10 +120,55 @@ autopsy shared-server personal-links --repo-scope /path/to/repo --personal-key g
 autopsy shared-server personal-context --repo-scope /path/to/repo --personal-key graph-note:local
 autopsy shared-server unlink plink_123 --repo-scope /path/to/repo
 autopsy benchmark --sample-size 5 --include-sync
+autopsy evaluate datasets
+autopsy evaluate fetch --dataset locomo --output-dir ~/.cache/autopsy/evaluation --accept-license
+autopsy evaluate validate --dataset locomo --input ~/.cache/autopsy/evaluation/locomo10.json --granularity turn
+autopsy evaluate run --dataset longmemeval-s --input ~/.cache/autopsy/evaluation/longmemeval_s_cleaned.json --granularity session --adapter autopsy --route hybrid --sample-size 25 --seed 42 --k 1,5,10 --output results/longmemeval-s.json
+autopsy evaluate run --dataset coding-traces --input coding-memory-v1.jsonl --granularity turn --adapter builtin-bm25 --route lexical --k 1,5,10 --output results/coding-bm25.json
+AUTOPSY_MEM0_PYTHON=/tmp/autopsy-mem0-venv/bin/python autopsy evaluate run --dataset coding-traces --input coding-memory-v1.jsonl --granularity turn --adapter mem0-oss-raw --route hybrid --k 1,5,10 --output results/coding-mem0.json
+autopsy evaluate run --track extracted-retrieval --dataset locomo --input ~/.cache/autopsy/evaluation/locomo10.json --granularity turn --adapter builtin-bm25 --route lexical --k 1,5,10 --output results/locomo-extracted.json
+autopsy evaluate run --track common-answer --dataset longmemeval-s --input ~/.cache/autopsy/evaluation/longmemeval_s_cleaned.json --granularity session --adapter builtin-bm25 --route lexical --k 10 --output results/longmemeval-answer.json
+autopsy evaluate score --dataset longmemeval-s --input ~/.cache/autopsy/evaluation/longmemeval_s_cleaned.json --granularity session --predictions results/longmemeval-s.predictions.jsonl --k 1,5,10
+autopsy evaluate score --track common-answer --dataset longmemeval-s --input ~/.cache/autopsy/evaluation/longmemeval_s_cleaned.json --granularity session --predictions results/longmemeval-answer.answers.jsonl
 autopsy menubar
 ```
 
-`health` is a lightweight product summary. It checks Falkor reachability, runtime dependencies, graph/index readiness, vector counts, backup freshness, installed instruction state, and local diagnostic log summaries. For non-empty memory graphs, the newest default backup must be valid and within the 24-hour freshness window; backups older than 7 days are reported as critical stale recovery risk. It does not replace the benchmark gate.
+`health` is a lightweight product summary. It checks Falkor reachability,
+runtime dependencies, verified full-text/vector index profiles, current embedding
+coverage, backup freshness, installed instruction state, and local diagnostic log
+summaries. When embeddings are enabled, health fails closed if the vector index
+does not match the configured model dimension or if any semantic item has a
+missing/stale vector. Run `autopsy embeddings status`, then `autopsy embeddings
+backfill` to repair coverage. Backfill uses batches, immutable model revisions,
+text fingerprints, and compare-and-set updates so it cannot attach a vector to
+content that changed concurrently. For non-empty memory graphs, the newest
+default backup must be valid and within the 24-hour freshness window; backups
+older than 7 days are reported as critical stale recovery risk. It does not
+replace the benchmark gate.
+
+`evaluate` is the external retrieval and end-to-end evaluation suite. It downloads only pinned,
+SHA-256-verified artifacts after explicit license acceptance, validates upstream
+structure and anomalies, uses a corpus-only/query-later adapter boundary, writes
+normalized prediction JSONL, and supports independent rescoring. Select
+`--track raw-retrieval` (the default), `extracted-retrieval`, or `common-answer`.
+The end-to-end tracks write separate source-attributed extraction and gold-free
+answer artifacts, report extraction throughput/compression and answer
+coverage/exact-match/token-F1, and explicitly mark LongMemEval's unbundled
+official LLM judge as unsupported. `--adapter autopsy`
+uses an isolated FalkorDBLite store; `--adapter builtin-bm25` runs the bundled,
+dependency-free Okapi BM25 baseline (not BM25S). `--adapter mem0-oss-raw` runs
+the separately bootstrapped, pinned Mem0 2.0.11 `infer=False` environment as a
+local subprocess; see the external guide for its exact source/model revisions
+and unsupported native as-of disclosure. Its bootstrap script and lock ship in
+the wheel, and a missing-environment error prints the packaged executable path.
+Prediction and report artifacts
+bind adapter configuration, package/source pins, execution locality, and cost
+metadata. It never treats a sampled run as a complete comparable result and
+never treats a non-semantic fallback as semantic-qualified. See
+[External Evaluation](external-evaluation.md).
+End-to-end comparability applies the same cutoff, semantic-channel/model,
+temporal/representation, forbidden-exposure, and clean-source gates as raw
+retrieval and requires at least two stable measured `--repetitions`.
 
 `diagnostics` tails sanitized local JSONL diagnostic logs. Use `--log memory-guard` or `--log memory-relations` to inspect one log. Relation diagnostics include missing relation targets and missing memory item events; summarized event payloads are whitelisted so failed memory content, raw stable keys, relation request arrays, and candidate arrays are not printed.
 
@@ -387,7 +435,7 @@ Use deterministic filters when semantic similarity alone is too broad. `--scope 
 
 `consult` uses the resident Autopsy worker by default when the standard Falkor configuration is in use. This keeps local embedding and reranker models warm across CLI calls. Use `--no-worker` only when debugging direct-process retrieval behavior. Set `AUTOPSY_CLI_CONSULT_WORKER=required` to fail instead of falling back to direct retrieval if the worker cannot start.
 
-Use `--as-of <ISO-8601 timestamp>` with `status`, `consult`, `recall`, `search`, or `context` for temporal reconstruction. The read excludes records whose stored content was updated after the requested timestamp and reports temporal filter metadata under `routing.temporal` or top-level `temporal`. Context lineage is also evaluated as of that timestamp, so later superseding/answering/reverting edges do not make an earlier memory stale before the edge existed.
+Use `--as-of <ISO-8601 timestamp>` with `status`, `consult`, `recall`, `search`, or `context` for conservative temporal lifecycle and lineage filtering. The read excludes records whose current stored content was updated after the requested timestamp and reports temporal filter metadata under `routing.temporal` or top-level `temporal`. Context lineage is evaluated as of that timestamp, so later superseding/answering/reverting edges do not make an earlier immutable memory stale before the edge existed. Autopsy does **not** materialize a pre-update body for a memory that was mutated in place: such a node is conservatively absent from the result, and its earlier body must be inspected with `history <stable-key>`. This is not full bitemporal state reconstruction.
 
 ## Governance Audit
 
@@ -413,7 +461,7 @@ The JSON output includes deterministic `activation` scores and a `repair_plan` g
 
 `consult` records lightweight access telemetry for returned memories: `access_count`, `last_accessed_at`, `last_access_source`, and the last query snippet. Use `feedback` to add explicit `useful`, `not-useful`, or `neutral` ratings. Consult uses access and feedback as a bounded search-time ranking prior after normal relevance gates: reinforced or useful memories can move up, stale or negatively rated memories can move down, and the multiplier stays in a conservative 0.3x to 1.5x band so usage never becomes a hard filter. Audit uses the same signals as activation and retention evidence.
 
-Use `expire` for lifecycle management when a memory should leave current reads but remain available for history, audit, export, and point-in-time reconstruction. `autopsy expire <stable-key>` defaults to expiring now, `--expires-at <ISO-8601>` schedules or backdates the lifecycle boundary, `--reason` stores a short explanation, and `--clear` removes the expiration. `consult`, `context`, `search`, `recall`, and `status` omit expired memories from current reads, but `--as-of` before the expiration timestamp still includes them. Memory history events are archival by default: `history` can still inspect them, but they are lifecycle-marked so old snapshots do not become current memory.
+Use `expire` for lifecycle management when a memory should leave current reads but remain available for history, audit, export, and earlier lifecycle views. `autopsy expire <stable-key>` defaults to expiring now, `--expires-at <ISO-8601>` schedules or backdates the lifecycle boundary, `--reason` stores a short explanation, and `--clear` removes the expiration. `consult`, `context`, `search`, `recall`, and `status` omit expired memories from current reads, but `--as-of` before the expiration timestamp still includes them when the stored body itself was not subsequently updated. Memory history events are archival by default: `history` can still inspect them, but they are lifecycle-marked so old snapshots do not become current memory.
 
 Use `pin` when a memory should behave like core memory rather than ordinary retrieval memory. `autopsy pin <stable-key>` stores pin metadata on the memory, and `context` includes pinned memories in a `Pinned Memory` section even when consult has no hits for the task query. `--label`, `--description`, and `--limit` turn the pin into a structured memory block: the context pack shows the block label, purpose, bounded value, and flags. `--read-only` blocks ordinary `update` writes until `autopsy pin <stable-key> --no-read-only` changes the block metadata; `--shared` marks blocks intended for shared agent or entity-scope use. `--clear` removes it from core context. Pinned memories still pass through the unsafe-memory read guard before agent-facing context is built.
 

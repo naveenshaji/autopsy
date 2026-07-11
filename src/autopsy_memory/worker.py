@@ -43,13 +43,20 @@ EMBEDDINGS_CONFIG_DEFAULT = {
     'enabled': True,
     'provider': 'sentence_transformers',
     'model': 'BAAI/bge-base-en-v1.5',
+    'model_revision': 'a5beb1e3e68b9ab74eb54cfd186867f64f240e1a',
     'device': 'cpu',
+    'dimension': 768,
+    'similarity_function': 'cosine',
+    'on_write': True,
+    'write_failure_policy': 'defer',
+    'text_template_version': 'autopsy-passage-v1',
     'batch_size': 16,
     'candidate_limit': 48,
     'reranker': {
         'enabled': True,
         'provider': 'sentence_transformers',
         'model': 'BAAI/bge-reranker-base',
+        'model_revision': '2cfc18c9415c912f9d8155881c133215df768a70',
         'device': 'cpu',
         'batch_size': 8,
             'candidate_limit': 24,
@@ -767,6 +774,7 @@ def maybe_load_falkor_context(payload: dict, workspace: dict, module, embeddings
                 lite_path=settings.get('lite_path'),
             )
             module.sync_workspace_payload(graph, workspace=workspace)
+            module.ensure_runtime_indexes(graph, embeddings_config)
         except Exception as exc:
             if worker_memory_database_rollback_error(exc):
                 reset_falkor_lite_client(module, settings.get('lite_path'))
@@ -968,14 +976,15 @@ def health_via_falkor(tool, workspace, embeddings_config, falkor, request: dict)
     started = time.perf_counter()
 
     def inspect_graph(graph):
-        module.ensure_runtime_indexes(graph)
+        module.ensure_runtime_indexes(graph, embeddings_config)
         stats = module.build_graph_stats_payload(graph)
         vector_count = int(module.scalar_query(graph, "MATCH (node:SemanticItem) WHERE node.embedding IS NOT NULL RETURN count(node)") or 0)
         index_ok = module.check_runtime_index_probe(graph)
+        embedding_status = module.build_embedding_status_payload(graph, embeddings_config)
         graph_ok = module.scalar_query(graph, "MATCH (node) RETURN count(node) LIMIT 1") is not None and index_ok
-        return stats, vector_count, index_ok, graph_ok
+        return stats, vector_count, index_ok, embedding_status, graph_ok
 
-    stats, vector_count, index_ok, graph_ok = run_falkor_operation(falkor, inspect_graph)
+    stats, vector_count, index_ok, embedding_status, graph_ok = run_falkor_operation(falkor, inspect_graph)
     checks = [
         module.python_version_check(),
         module.installed_autopsy_command_check(),
@@ -995,9 +1004,17 @@ def health_via_falkor(tool, workspace, embeddings_config, falkor, request: dict)
     init_targets = [module.target_status(target) for target in targets]
     managed_targets = sum(1 for target in init_targets if target.get("state") == "managed")
     backup = module.latest_backup_status()
-    latest_backup_age = backup.get("age_seconds")
-    backup_fresh = latest_backup_age is not None and int(latest_backup_age) <= 7 * 24 * 60 * 60
-    ok = required_ok and graph_ok
+    item_count = int(stats.get("itemCount") or 0)
+    backup_health = module.backup_freshness_status(backup, item_count=item_count)
+    embeddings_ready = (
+        not bool(embeddings_config.get("enabled", True))
+        or (
+            bool(embedding_status.get("index_ready"))
+            and int(embedding_status.get("current_items") or 0)
+            == int(embedding_status.get("eligible_items") or 0)
+        )
+    )
+    ok = required_ok and graph_ok and embeddings_ready and bool(backup_health.get("ok"))
     return {
         "ok": ok,
         "workspace": tool.workspace_payload(workspace),
@@ -1006,7 +1023,7 @@ def health_via_falkor(tool, workspace, embeddings_config, falkor, request: dict)
         "mode": "native",
         "counts": {
             "entities": int(stats.get("entityCount") or 0),
-            "items": int(stats.get("itemCount") or 0),
+            "items": item_count,
             "edges": int(stats.get("edgeCount") or 0),
             "vectors": vector_count,
         },
@@ -1017,13 +1034,20 @@ def health_via_falkor(tool, workspace, embeddings_config, falkor, request: dict)
             "indexes_ready": index_ok,
             "graph_ready": graph_ok,
             "embeddings_configured": bool(embeddings_config.get("enabled", True)),
+            "embeddings_ready": embeddings_ready,
+            "embedding_index_ready": bool(embedding_status.get("index_ready")),
+            "embedding_current_coverage": float(embedding_status.get("current_coverage") or 0.0),
             "reranker_configured": bool(module.reranker_config(embeddings_config).get("enabled", False)),
             "init_managed_targets": managed_targets,
             "init_target_count": len(init_targets),
-            "backup_fresh": backup_fresh,
+            "backup_fresh": bool(backup_health.get("ok")),
+            "backup_status": backup_health.get("status"),
+            "backup_severity": backup_health.get("severity"),
         },
         "init_targets": init_targets,
         "backup": backup,
+        "embeddings": embedding_status,
+        "backup_health": backup_health,
         "paths": {
             "app_support_dir": str(module.APP_SUPPORT_DIR_DEFAULT),
             "falkordb_lite_path": str(falkor.get('lite_path') or ""),
@@ -1033,8 +1057,8 @@ def health_via_falkor(tool, workspace, embeddings_config, falkor, request: dict)
         "workflow": {
             "status": "ok" if ok else "needs_attention",
             "complete": ok,
-            "next_step": "done" if ok else "inspect_failed_checks",
-            "message": "Autopsy memory health checks passed." if ok else "Autopsy memory health found required checks that need attention.",
+            "next_step": "done" if ok else ("run_embeddings_backfill" if not embeddings_ready else "inspect_failed_checks_or_backup"),
+            "message": "Autopsy memory health checks passed." if ok else "Autopsy memory health found required runtime, index, embedding-coverage, or backup checks that need attention.",
         },
         "timings": {"health_s": round(time.perf_counter() - started, 3)},
     }
@@ -1310,7 +1334,7 @@ def handle_memory_neighbors(payload: dict) -> dict:
 
 def handle_memory_observe(payload: dict) -> dict:
     request = payload.get('request') or {}
-    tool, module, workspace, _embeddings_config, _embeddings_status, falkor = require_falkor_context(payload, include_embeddings_status=False)
+    tool, module, workspace, embeddings_config, _embeddings_status, falkor = require_falkor_context(payload, include_embeddings_status=False)
 
     def observe(graph):
         response = module.build_observe_payload(
@@ -1323,6 +1347,7 @@ def handle_memory_observe(payload: dict) -> dict:
             title=str(request.get('title') or ''),
             write=bool(request.get('write')),
             write_if_stale=bool(request.get('write_if_stale')),
+            embedding_config=embeddings_config,
         )
         if bool(response.get('written')):
             attach_auto_backup_after_worker_write(module, response, graph, workspace, reason='worker_observe', operation='observe')
@@ -1333,7 +1358,7 @@ def handle_memory_observe(payload: dict) -> dict:
 
 def handle_memory_consolidate_session(payload: dict) -> dict:
     request = payload.get('request') or {}
-    tool, module, workspace, _embeddings_config, _embeddings_status, falkor = require_falkor_context(payload, include_embeddings_status=False)
+    tool, module, workspace, embeddings_config, _embeddings_status, falkor = require_falkor_context(payload, include_embeddings_status=False)
 
     def consolidate_session(graph):
         response = module.build_consolidate_session_payload(
@@ -1345,6 +1370,7 @@ def handle_memory_consolidate_session(payload: dict) -> dict:
             title=str(request.get('title') or ''),
             max_events=max(1, int(request.get('max_events') or 80)),
             write=bool(request.get('write')),
+            embedding_config=embeddings_config,
         )
         if bool(request.get('write')) and str((response.get('workflow') or {}).get('status') or '') == 'ok':
             module.refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
@@ -1356,7 +1382,7 @@ def handle_memory_consolidate_session(payload: dict) -> dict:
 
 def handle_memory_import_session(payload: dict) -> dict:
     request = payload.get('request') or {}
-    tool, module, workspace, _embeddings_config, _embeddings_status, falkor = require_falkor_context(payload, include_embeddings_status=False)
+    tool, module, workspace, embeddings_config, _embeddings_status, falkor = require_falkor_context(payload, include_embeddings_status=False)
 
     def import_session(graph):
         response = module.build_import_session_payload(
@@ -1369,6 +1395,7 @@ def handle_memory_import_session(payload: dict) -> dict:
             max_events=max(1, int(request.get('max_events') or 200)),
             dry_run=bool(request.get('dry_run')),
             repository_root_path=str(request.get('repository_root_path') or request.get('repo') or '') or None,
+            embedding_config=embeddings_config,
         )
         if not bool(request.get('dry_run')) and str((response.get('workflow') or {}).get('status') or '') == 'ok':
             module.refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
@@ -1528,7 +1555,7 @@ def handle_memory_graph_item(payload: dict) -> dict:
 
 def handle_memory_graph_note_create(payload: dict) -> dict:
     request = payload.get('request') or {}
-    tool, _module, workspace, _embeddings_config, _embeddings_status, falkor = require_falkor_context(payload)
+    tool, _module, workspace, embeddings_config, _embeddings_status, falkor = require_falkor_context(payload)
     module = falkor['module']
 
     def create_note(graph):
@@ -1568,6 +1595,7 @@ def handle_memory_graph_note_create(payload: dict) -> dict:
             namespaces=list_request_argument(request, 'namespaces'),
             entity_scopes=list_request_argument(request, 'entity_scopes'),
             metadata=metadata_request_argument(request),
+            embedding_config=embeddings_config,
         )
         stable_key = module.payload_item_stable_key(response)
         if stable_key:
@@ -1593,7 +1621,7 @@ def handle_memory_graph_note_create(payload: dict) -> dict:
 
 def handle_memory_graph_item_update(payload: dict) -> dict:
     request = payload.get('request') or {}
-    tool, _module, workspace, _embeddings_config, _embeddings_status, falkor = require_falkor_context(payload)
+    tool, _module, workspace, embeddings_config, _embeddings_status, falkor = require_falkor_context(payload)
     module = falkor['module']
 
     def update_item(graph):
@@ -1627,6 +1655,7 @@ def handle_memory_graph_item_update(payload: dict) -> dict:
             entity_scopes=list_request_argument(request, 'entity_scopes') if request.get('entity_scopes') is not None else None,
             metadata=metadata_request_argument(request) if request.get('metadata') is not None else None,
             thread_id=module.current_write_thread_id(str(request.get('thread_id') or '')),
+            embedding_config=embeddings_config,
         )
         response['write_quality'] = write_quality
         module.refresh_activity_snapshot(graph, tool=tool, workspace=workspace)

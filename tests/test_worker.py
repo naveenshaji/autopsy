@@ -23,6 +23,84 @@ def load_worker_module():
 
 
 class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
+    def worker_health_payload(self, *, embedding_status, backup_health):
+        worker = load_worker_module()
+
+        class Tool:
+            workspace_payload = staticmethod(lambda workspace: dict(workspace))
+
+        class Module:
+            APP_SUPPORT_DIR_DEFAULT = Path("/tmp/autopsy-support")
+            GLOBAL_MEMORY_SETTINGS_DEFAULT = Path("/tmp/autopsy-settings.json")
+
+            @staticmethod
+            def ensure_runtime_indexes(_graph, _config):
+                return None
+
+            @staticmethod
+            def build_graph_stats_payload(_graph):
+                return {"entityCount": 9, "itemCount": 5, "edgeCount": 4}
+
+            @staticmethod
+            def scalar_query(_graph, query):
+                return 5 if "embedding IS NOT NULL" in query else 1
+
+            @staticmethod
+            def check_runtime_index_probe(_graph):
+                return True
+
+            @staticmethod
+            def build_embedding_status_payload(_graph, _config):
+                return dict(embedding_status)
+
+            @staticmethod
+            def python_version_check():
+                return {"ok": True, "required": True}
+
+            installed_autopsy_command_check = python_version_check
+
+            @staticmethod
+            def import_check(_name, *, required):
+                return {"ok": True, "required": required}
+
+            @staticmethod
+            def instruction_targets(**_kwargs):
+                return []
+
+            @staticmethod
+            def target_status(target):
+                return target
+
+            @staticmethod
+            def latest_backup_status():
+                return {"count": 1, "latest": "/tmp/autopsy-backup.json", "valid": True, "age_seconds": 60}
+
+            @staticmethod
+            def backup_freshness_status(_backup, *, item_count):
+                self.assertEqual(item_count, 5)
+                return dict(backup_health)
+
+            @staticmethod
+            def reranker_config(_config):
+                return {"enabled": True}
+
+            @staticmethod
+            def unified_memory_root_path():
+                return Path("/tmp/autopsy-memory")
+
+        with mock.patch.object(
+            worker,
+            "run_falkor_operation",
+            side_effect=lambda _falkor, operation: operation(object()),
+        ):
+            return worker.health_via_falkor(
+                Tool,
+                {"root_path": "/tmp/repo"},
+                {"enabled": True},
+                {"module": Module(), "graph_name": "unit", "lite_path": "/tmp/unit.db"},
+                {"repo": "/tmp/repo"},
+            )
+
     def test_int_request_argument_preserves_zero(self):
         worker = load_worker_module()
         self.assertEqual(worker.int_request_argument({"inspect_limit": 0}, "inspect_limit", 3), 0)
@@ -74,6 +152,47 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
         self.assertEqual(payload["workflow"]["status"], "rollback_detected")
         self.assertEqual(payload["workflow"]["next_step"], "restore_or_repair_embedded_memory_snapshot")
         self.assertEqual(payload["request"], {"repo": "/tmp/repo"})
+
+    def test_worker_health_fails_closed_on_incomplete_or_wrong_profile_embeddings(self):
+        profile = {"dimension": 384, "similarity_function": "cosine", "status": "OPERATIONAL"}
+        payload = self.worker_health_payload(
+            embedding_status={
+                "index_ready": False,
+                "index_profile": profile,
+                "eligible_items": 5,
+                "current_items": 4,
+                "current_coverage": 0.8,
+                "stale_items": 1,
+            },
+            backup_health={"ok": True, "status": "fresh", "severity": "ok"},
+        )
+
+        self.assertFalse(payload["ok"])
+        self.assertFalse(payload["checks"]["embeddings_ready"])
+        self.assertFalse(payload["checks"]["embedding_index_ready"])
+        self.assertEqual(payload["checks"]["embedding_current_coverage"], 0.8)
+        self.assertEqual(payload["embeddings"]["index_profile"], profile)
+        self.assertEqual(payload["workflow"]["next_step"], "run_embeddings_backfill")
+
+    def test_worker_health_fails_closed_on_stale_backup(self):
+        payload = self.worker_health_payload(
+            embedding_status={
+                "index_ready": True,
+                "index_profile": {"dimension": 768, "similarity_function": "cosine", "status": "OPERATIONAL"},
+                "eligible_items": 5,
+                "current_items": 5,
+                "current_coverage": 1.0,
+                "stale_items": 0,
+            },
+            backup_health={"ok": False, "status": "stale", "severity": "warning", "age_seconds": 172800},
+        )
+
+        self.assertFalse(payload["ok"])
+        self.assertTrue(payload["checks"]["embeddings_ready"])
+        self.assertFalse(payload["checks"]["backup_fresh"])
+        self.assertEqual(payload["checks"]["backup_status"], "stale")
+        self.assertEqual(payload["backup_health"]["severity"], "warning")
+        self.assertEqual(payload["workflow"]["next_step"], "inspect_failed_checks_or_backup")
 
     def test_maybe_load_falkor_context_resets_lite_client_on_rollback(self):
         worker = load_worker_module()
@@ -1101,7 +1220,8 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
                 return workspace
 
         class Module:
-            def build_consolidate_session_payload(self, _graph, *, tool, workspace, stable_key, kind, title, max_events, write):
+            def build_consolidate_session_payload(self, _graph, *, tool, workspace, stable_key, kind, title, max_events, write, embedding_config=None):
+                del embedding_config
                 return {
                     "workspace": tool.workspace_payload(workspace),
                     "stable_key": stable_key,
@@ -1152,7 +1272,8 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
         calls = []
 
         class Module:
-            def build_consolidate_session_payload(self, _graph, *, tool, workspace, stable_key, kind, title, max_events, write):
+            def build_consolidate_session_payload(self, _graph, *, tool, workspace, stable_key, kind, title, max_events, write, embedding_config=None):
+                del embedding_config
                 calls.append({"stable_key": stable_key, "kind": kind, "title": title, "max_events": max_events, "write": write})
                 return {
                     "workspace": tool.workspace_payload(workspace),
@@ -1219,7 +1340,8 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
         calls = []
 
         class Module:
-            def build_consolidate_session_payload(self, _graph, *, tool, workspace, stable_key, kind, title, max_events, write):
+            def build_consolidate_session_payload(self, _graph, *, tool, workspace, stable_key, kind, title, max_events, write, embedding_config=None):
+                del embedding_config
                 calls.append({"stable_key": stable_key, "write": write})
                 return {
                     "workspace": tool.workspace_payload(workspace),
@@ -1271,7 +1393,9 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
                 max_events,
                 dry_run,
                 repository_root_path,
+                embedding_config=None,
             ):
+                del embedding_config
                 return {
                     "workspace": tool.workspace_payload(workspace),
                     "path": path,
@@ -1338,7 +1462,9 @@ class AutopsyMLWorkerFalkorStrictnessTests(unittest.TestCase):
                 max_events,
                 dry_run,
                 repository_root_path,
+                embedding_config=None,
             ):
+                del embedding_config
                 calls.append(
                     {
                         "path": path,

@@ -53,6 +53,7 @@ Check that everything is ready:
 ```bash
 autopsy version --json
 autopsy doctor
+autopsy embeddings status
 autopsy status --current-only
 ```
 
@@ -64,6 +65,28 @@ autopsy install --smoke-test
 
 That runs doctor, a current-state read, an abstention consult, and a temporary
 write/delete check.
+
+Run held-out public-dataset retrieval evaluation separately:
+
+```bash
+autopsy evaluate datasets
+autopsy evaluate fetch --dataset locomo --output-dir ~/.cache/autopsy/evaluation --accept-license
+autopsy evaluate validate --dataset locomo --input ~/.cache/autopsy/evaluation/locomo10.json --granularity turn
+autopsy evaluate run --dataset locomo --input ~/.cache/autopsy/evaluation/locomo10.json --granularity turn --adapter autopsy --route lexical --sample-size 25
+autopsy evaluate run --track common-answer --dataset locomo --input ~/.cache/autopsy/evaluation/locomo10.json --granularity turn --adapter builtin-bm25 --route lexical --sample-size 25 --k 10
+```
+
+The internal benchmark is a regression gate. `autopsy evaluate` is the
+reproducible external suite with pinned artifacts, held-out evidence labels,
+isolated stores, raw predictions, independent rescoring, category metrics,
+latency percentiles, vector-coverage disclosure, and a dependency-free
+`--adapter builtin-bm25` comparator. A separately bootstrapped
+`--adapter mem0-oss-raw` comparator pins Mem0, its embedding model revision,
+embedded Qdrant, local execution, and zero external API cost. Explicit `extracted-retrieval` and
+`common-answer` tracks add query-free extraction, source attribution, context
+accounting, gold-separated answer artifacts, and deterministic exact/token-F1
+scoring without pretending to run an unavailable official LLM judge. See
+[External Evaluation](docs/external-evaluation.md).
 
 After setup, use your coding agent normally. The installed agent instructions
 tell supported agents when to consult Autopsy before substantial work and when
@@ -79,6 +102,9 @@ That gives agents:
 - **Lineage:** what refined, implemented, superseded, or depended on what.
 - **Temporal recall:** what was true then versus what is current now.
 - **Local semantic retrieval:** embeddings and reranking without external APIs.
+- **Versioned vector coverage:** semantic writes embed immediately; a safe batch
+  backfill repairs older or deferred items and health verifies model/index/text
+  provenance before vector retrieval is trusted.
 - **Bounded context:** compact answers with evidence instead of whole-file dumps.
 - **Inspectability:** exact reads through `item`, `timeline`, `history`, and
   `neighbors`.

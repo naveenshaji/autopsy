@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/naveenshaji/autopsy/main/src/autopsy_memory/evaluation/schemas/answer-prediction-v1.schema.json",
+  "title": "Autopsy external answer prediction v1",
+  "type": "object",
+  "required": ["schema", "dataset", "dataset_sha256", "granularity", "representation", "adapter_id", "adapter_config_sha256", "track", "extractor_id", "extractor_config_sha256", "generator_id", "generator_config_sha256", "adapter_provenance", "extractor_provenance", "generator_provenance", "case_id", "corpus_id", "category", "query", "answer", "abstained", "ranked_memory_ids", "source_memory_ids", "source_document_ids", "retrieval_latency_seconds", "generation_latency_seconds", "diagnostics"],
+  "properties": {
+    "schema": {"const": "autopsy-external-answer-prediction/v1"},
+    "dataset": {"type": "string", "minLength": 1},
+    "dataset_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "granularity": {"enum": ["turn", "session"]},
+    "representation": {"enum": ["audited", "upstream"]},
+    "adapter_id": {"type": "string", "minLength": 1},
+    "adapter_config_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "track": {"const": "common-answer"},
+    "extractor_id": {"type": "string", "minLength": 1},
+    "extractor_config_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "generator_id": {"type": "string", "minLength": 1},
+    "generator_config_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "adapter_provenance": {"$ref": "#/$defs/componentProvenance"},
+    "extractor_provenance": {"$ref": "#/$defs/componentProvenance"},
+    "generator_provenance": {"$ref": "#/$defs/componentProvenance"},
+    "case_id": {"type": "string", "minLength": 1},
+    "corpus_id": {"type": "string", "minLength": 1},
+    "category": {"type": "string", "minLength": 1},
+    "query": {"type": "string", "minLength": 1},
+    "answer": {"type": "string"},
+    "abstained": {"type": "boolean"},
+    "ranked_memory_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "source_memory_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "source_document_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "retrieval_latency_seconds": {"type": "number", "minimum": 0},
+    "generation_latency_seconds": {"type": "number", "minimum": 0},
+    "diagnostics": {"type": "object"}
+  },
+  "$defs": {
+    "componentProvenance": {
+      "type": "object",
+      "required": ["component_id", "implementation", "config_sha256", "package_pin", "source_pin", "execution", "cost"],
+      "properties": {
+        "component_id": {"type": "string", "minLength": 1},
+        "implementation": {"type": "string", "minLength": 1},
+        "config_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "package_pin": {"type": "object"},
+        "source_pin": {"type": "object"},
+        "execution": {"type": "object"},
+        "cost": {"type": "object"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

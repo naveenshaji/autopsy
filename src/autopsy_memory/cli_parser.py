@@ -27,6 +27,7 @@ class CommandHandlers:
     consult: CommandHandler
     search: CommandHandler
     benchmark: CommandHandler
+    evaluate: CommandHandler
     audit: CommandHandler
     export: CommandHandler
     backup: CommandHandler
@@ -39,6 +40,7 @@ class CommandHandlers:
     shared_server: CommandHandler
     menubar: CommandHandler
     model_warmup: CommandHandler
+    embeddings: CommandHandler
     create_note: CommandHandler
     update_item: CommandHandler
     delete_item: CommandHandler
@@ -298,6 +300,113 @@ def build_parser(
     benchmark_parser.add_argument("--current-only", action="store_true", help="Accepted for compatibility; benchmark reads the current graph by default.")
     benchmark_parser.set_defaults(func=handlers.benchmark)
 
+    evaluate_parser = subparsers.add_parser(
+        "evaluate",
+        help="Run reproducible retrieval, extraction, context, and answer evaluations in an isolated store.",
+    )
+    evaluate_actions = evaluate_parser.add_subparsers(dest="evaluate_action", required=True)
+    evaluate_datasets = evaluate_actions.add_parser("datasets", help="List pinned public dataset artifacts and licenses.")
+    evaluate_datasets.set_defaults(func=handlers.evaluate)
+
+    evaluate_fetch = evaluate_actions.add_parser("fetch", help="Download and SHA-256 verify a pinned public dataset artifact.")
+    evaluate_fetch.add_argument("--dataset", choices=("locomo", "longmemeval-s"), required=True)
+    evaluate_fetch.add_argument("--output-dir", required=True)
+    evaluate_fetch.add_argument("--accept-license", action="store_true")
+    evaluate_fetch.add_argument("--force", action="store_true")
+    evaluate_fetch.set_defaults(func=handlers.evaluate)
+
+    evaluate_fixture = evaluate_actions.add_parser("fixture", help="Copy the bundled controlled coding-memory challenge to a local path.")
+    evaluate_fixture.add_argument("--output", required=True)
+    evaluate_fixture.set_defaults(func=handlers.evaluate)
+
+    evaluate_schemas = evaluate_actions.add_parser("schemas", help="Copy the bundled evaluation JSON schemas to a local directory.")
+    evaluate_schemas.add_argument("--output-dir", required=True)
+    evaluate_schemas.set_defaults(func=handlers.evaluate)
+
+    def add_external_dataset_arguments(target: argparse.ArgumentParser) -> None:
+        target.add_argument("--dataset", choices=("locomo", "longmemeval-s", "coding-traces"), required=True)
+        target.add_argument("--input", required=True, help="Path to the upstream dataset JSON or coding-trace JSONL.")
+        target.add_argument("--granularity", choices=("turn", "session"), default="session")
+        target.add_argument(
+            "--representation",
+            choices=("audited", "upstream"),
+            default="audited",
+            help="Index both roles with explicit evidence (audited) or reproduce the upstream user-only LongMemEval retriever corpus.",
+        )
+        target.add_argument(
+            "--allow-unverified-dataset",
+            action="store_true",
+            help="Allow a non-pinned or modified artifact; the report will not qualify as an official comparable run.",
+        )
+
+    evaluate_validate = evaluate_actions.add_parser("validate", help="Validate dataset structure, evidence ids, provenance, and checksum.")
+    add_external_dataset_arguments(evaluate_validate)
+    evaluate_validate.add_argument("--output")
+    evaluate_validate.set_defaults(func=handlers.evaluate)
+
+    evaluate_run = evaluate_actions.add_parser("run", help="Run a declared retrieval or end-to-end track against held-out labels.")
+    add_external_dataset_arguments(evaluate_run)
+    evaluate_run.add_argument(
+        "--track",
+        choices=("raw-retrieval", "extracted-retrieval", "common-answer"),
+        default="raw-retrieval",
+        help="Evaluate raw retrieval, retrieval after query-free memory extraction, or extracted context plus a common answer generator.",
+    )
+    evaluate_run.add_argument(
+        "--adapter",
+        choices=("autopsy", "builtin-bm25", "mem0-oss-raw"),
+        default="autopsy",
+        help=(
+            "Evaluated retrieval system. builtin-bm25 is Autopsy's dependency-free Okapi BM25 baseline, not BM25S; "
+            "mem0-oss-raw uses the separately installed pinned Mem0 OSS subprocess adapter."
+        ),
+    )
+    evaluate_run.add_argument("--route", choices=("auto", "lexical", "hybrid"), default="hybrid")
+    evaluate_run.add_argument("--k", default="1,3,5,10,30,50", help="Comma-separated retrieval cutoffs.")
+    evaluate_run.add_argument("--sample-size", type=int, default=0, help="Deterministic query sample size; 0 runs the full dataset.")
+    evaluate_run.add_argument("--seed", type=int, default=42)
+    evaluate_run.add_argument("--category", action="append", help="Restrict to an exact dataset category; repeat as needed.")
+    evaluate_run.add_argument("--repetitions", type=int, default=1)
+    evaluate_run.add_argument("--warmups", type=int, default=0)
+    evaluate_run.add_argument(
+        "--temporal-policy",
+        choices=("dataset", "as-of"),
+        default="dataset",
+        help="Use the complete upstream haystack (dataset) or apply each query's as-of timestamp.",
+    )
+    evaluate_run.add_argument("--output", help="Summary JSON output path (default: ./autopsy-external-eval.json).")
+    evaluate_run.add_argument("--predictions", help="Raw prediction JSONL path (default: beside summary output).")
+    evaluate_run.add_argument("--extractions", help="Source-attributed extraction JSONL path for end-to-end tracks (default: beside summary output).")
+    evaluate_run.add_argument("--answers", help="Gold-free generated-answer JSONL path for the common-answer track (default: beside summary output).")
+    evaluate_run.add_argument(
+        "--extractor",
+        choices=("deterministic-sentence-v1",),
+        default="deterministic-sentence-v1",
+        help="Query- and gold-free memory extractor used by end-to-end tracks.",
+    )
+    evaluate_run.add_argument(
+        "--generator",
+        choices=("deterministic-extractive-v1",),
+        default="deterministic-extractive-v1",
+        help="Common answer generator used by the common-answer track.",
+    )
+    evaluate_run.add_argument("--store-dir", help="Dedicated evaluation store directory. Never points at the production store by default.")
+    evaluate_run.add_argument("--keep-store", action="store_true", help="Keep the isolated store after the run for debugging.")
+    evaluate_run.set_defaults(func=handlers.evaluate)
+
+    evaluate_score = evaluate_actions.add_parser("score", help="Independently rescore a normalized prediction JSONL file.")
+    add_external_dataset_arguments(evaluate_score)
+    evaluate_score.add_argument(
+        "--track",
+        choices=("raw-retrieval", "extracted-retrieval", "common-answer"),
+        default="raw-retrieval",
+        help="Select retrieval scoring or gold-separated common-answer scoring.",
+    )
+    evaluate_score.add_argument("--predictions", required=True)
+    evaluate_score.add_argument("--k", default="1,3,5,10,30,50")
+    evaluate_score.add_argument("--output")
+    evaluate_score.set_defaults(func=handlers.evaluate)
+
     audit_parser = subparsers.add_parser("audit", parents=[common], help="Audit memory quality, lineage, duplicate, and governance issues.")
     audit_parser.add_argument("--limit", type=int, default=100, help="Maximum recent semantic memories to audit.")
     audit_parser.add_argument("--kind", action="append", help="Restrict audit to one or more memory kinds. Repeat or comma-separate values.")
@@ -543,6 +652,17 @@ def build_parser(
     model_warmup_parser = subparsers.add_parser("model-warmup", help="Download and warm the local Autopsy ML models.")
     model_warmup_parser.add_argument("--root", help="Memory root whose embedding configuration should be used. Defaults to the unified memory root.")
     model_warmup_parser.set_defaults(func=handlers.model_warmup)
+
+    embeddings_parser = subparsers.add_parser("embeddings", parents=[common], help="Inspect or backfill semantic-memory embeddings.")
+    embeddings_actions = embeddings_parser.add_subparsers(dest="embeddings_action", required=True)
+    embeddings_status = embeddings_actions.add_parser("status", help="Report vector-index readiness and semantic-item embedding coverage.")
+    embeddings_status.set_defaults(func=handlers.embeddings)
+    embeddings_backfill = embeddings_actions.add_parser("backfill", help="Populate missing or stale semantic-item embeddings in batches.")
+    embeddings_backfill.add_argument("--batch-size", type=int, help="Embedding batch size; defaults to the configured batch size.")
+    embeddings_backfill.add_argument("--limit", type=int, default=0, help="Maximum items to process; 0 processes all eligible items.")
+    embeddings_backfill.add_argument("--force", action="store_true", help="Recompute even current embeddings.")
+    embeddings_backfill.add_argument("--dry-run", action="store_true", help="Count work without loading the model or changing graph data.")
+    embeddings_backfill.set_defaults(func=handlers.embeddings)
 
     create_parser = subparsers.add_parser("create", parents=[common], help="Create a typed Falkor memory note.")
     add_note_write_arguments(create_parser, include_kind=True)

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/naveenshaji/autopsy/main/src/autopsy_memory/evaluation/schemas/score-report-v1.schema.json",
+  "title": "Autopsy external evaluation score report v1",
+  "type": "object",
+  "required": ["schema", "evaluation", "status", "scored_at", "dataset", "configuration", "runtime", "artifacts", "metrics", "prediction_integrity", "case_scores"],
+  "properties": {
+    "schema": {"const": "autopsy-external-evaluation-score/v1"},
+    "evaluation": {"const": "external-retrieval-score"},
+    "status": {"enum": ["complete", "invalid_predictions"]},
+    "scored_at": {"type": "string", "format": "date-time"},
+    "dataset": {"type": "object"},
+    "configuration": {"type": "object"},
+    "runtime": {"type": "object"},
+    "artifacts": {"type": "object"},
+    "metrics": {"type": "object"},
+    "prediction_integrity": {"type": "object"},
+    "case_scores": {"type": "array", "items": {"type": "object"}}
+  },
+  "additionalProperties": false
+}

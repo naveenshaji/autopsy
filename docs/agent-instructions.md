@@ -119,7 +119,7 @@ Use `autopsy history <stable-key>` when the answer depends on how one memory cha
 
 Use `autopsy observe --stable-key <stable-key>` to draft an evidence-backed observation from one memory's graph neighborhood. Add `--write` when the derived observation should become reusable context, or `--write-if-stale` when refreshing an existing observation only if its evidence fingerprint has drifted.
 
-Use `autopsy expire <stable-key>` when a memory should leave current reads but remain available for history and `--as-of` reconstruction. Use `autopsy pin <stable-key>` when a memory should appear in `context` packs without depending on task-specific retrieval. Add `--label`, `--description`, `--limit`, `--read-only`, or `--shared` when the pinned memory should behave like an always-visible memory block.
+Use `autopsy expire <stable-key>` when a memory should leave current reads but remain available for history and earlier `--as-of` lifecycle views. `--as-of` is conservative and does not materialize pre-update in-place bodies; use `history` for those snapshots. Use `autopsy pin <stable-key>` when a memory should appear in `context` packs without depending on task-specific retrieval. Add `--label`, `--description`, `--limit`, `--read-only`, or `--shared` when the pinned memory should behave like an always-visible memory block.
 
 Use `autopsy feedback <stable-key> --rating useful|not-useful|neutral` after important reads. Feedback now informs audit activation and bounded consult ranking, so useful memories are reinforced and repeatedly unhelpful memories drift down without being deleted.
 

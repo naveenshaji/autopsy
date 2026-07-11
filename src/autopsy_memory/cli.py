@@ -184,6 +184,7 @@ COMMON_QUERY_TOKENS = {
     "current",
     "do",
     "does",
+    "did",
     "for",
     "from",
     "get",
@@ -201,6 +202,7 @@ COMMON_QUERY_TOKENS = {
     "or",
     "our",
     "show",
+    "should",
     "tell",
     "that",
     "the",
@@ -210,7 +212,9 @@ COMMON_QUERY_TOKENS = {
     "what",
     "when",
     "where",
+    "which",
     "with",
+    "why",
 }
 BROAD_QUERY_FILLER_TOKENS = {
     "after",
@@ -221,7 +225,27 @@ BROAD_QUERY_FILLER_TOKENS = {
 }
 
 OBSOLETE_MEMORY_TOKENS = {"fallback", "sql" + "ite", "legacy"}
+HISTORICAL_QUERY_TOKENS = {
+    "before",
+    "earlier",
+    "historical",
+    "history",
+    "previous",
+    "prior",
+    "reverted",
+    "superseded",
+    "timeline",
+}
 DIRECT_RETRIEVAL_REASONS = {"lexical", "exact", "token_overlap", "entity_overlap", "graph_relation"}
+RELATION_EXPANSION_ANCHOR_REASONS = {"lexical", "exact", "token_overlap", "entity_overlap", "embedding", "reranker"}
+ABSTENTION_POLICY = {
+    "name": "deterministic_dev_threshold_v1",
+    "artifact_sha256": "252341c04b75b951078b348a07b1de50225cafae7e4f399889a7949223c012e3",
+    "minimum_confidence": 0.50,
+    "relation_depth_1_confidence": 0.64,
+    "relation_depth_2_confidence": 0.54,
+    "relation_min_fact_rating": 0.30,
+}
 CONFLICT_POSITIVE_TOKENS = {
     "adopt",
     "allow",
@@ -407,6 +431,7 @@ MEMORY_POISONING_PATTERNS: tuple[dict[str, Any], ...] = (
     },
 )
 ENTITY_STOP_TOKENS = COMMON_QUERY_TOKENS | {
+    "after",
     "agent",
     "agents",
     "benchmark",
@@ -469,18 +494,25 @@ RELATION_TERM_STOP_TOKENS = ENTITY_STOP_TOKENS | {
     "relations",
 }
 
-_GRAPH_VECTOR_AVAILABILITY: dict[str, bool] = {}
+_GRAPH_VECTOR_AVAILABILITY: dict[tuple[str, str, str, str, str, int], bool] = {}
 _GRAPH_SEMANTIC_ITEM_COUNT: dict[str, int] = {}
 _FALKORDB_LITE_CLIENTS: dict[str, Any] = {}
 _FALKORDB_LITE_GRAPH_NAMES: dict[str, set[str]] = {}
 _FALKORDB_LITE_SHUTDOWN_REGISTERED = False
-_EMBEDDING_MODEL_CACHE: dict[tuple[str, str], Any] = {}
-_RERANKER_MODEL_CACHE: dict[tuple[str, str], Any] = {}
+_EMBEDDING_MODEL_CACHE: dict[tuple[str, str, str], Any] = {}
+_RERANKER_MODEL_CACHE: dict[tuple[str, str, str], Any] = {}
+EMBEDDING_TEXT_TEMPLATE_VERSION = "autopsy-passage-v1"
 EMBEDDINGS_CONFIG_DEFAULT = {
     "enabled": True,
     "provider": "sentence_transformers",
     "model": "BAAI/bge-base-en-v1.5",
+    "model_revision": "a5beb1e3e68b9ab74eb54cfd186867f64f240e1a",
     "device": "cpu",
+    "dimension": 768,
+    "similarity_function": "cosine",
+    "on_write": True,
+    "write_failure_policy": "defer",
+    "text_template_version": EMBEDDING_TEXT_TEMPLATE_VERSION,
     "batch_size": 16,
     "candidate_limit": 48,
     "vector_candidate_limit": 64,
@@ -493,6 +525,7 @@ EMBEDDINGS_CONFIG_DEFAULT = {
         "enabled": True,
         "provider": "sentence_transformers",
         "model": "BAAI/bge-reranker-base",
+        "model_revision": "2cfc18c9415c912f9d8155881c133215df768a70",
         "device": "cpu",
         "batch_size": 8,
         "candidate_limit": 24,
@@ -798,22 +831,28 @@ def reranker_provider_available(config: dict[str, Any] | None) -> tuple[bool, st
     return True, None
 
 
-def load_sentence_transformer(model_name: str, device: str):
-    key = (model_name, device)
+def load_sentence_transformer(model_name: str, device: str, revision: str = ""):
+    key = (model_name, revision, device)
     model = _EMBEDDING_MODEL_CACHE.get(key)
     if model is None:
         from sentence_transformers import SentenceTransformer
-        model = SentenceTransformer(model_name, device=device)
+        kwargs = {"device": device}
+        if revision:
+            kwargs["revision"] = revision
+        model = SentenceTransformer(model_name, **kwargs)
         _EMBEDDING_MODEL_CACHE[key] = model
     return model
 
 
-def load_cross_encoder(model_name: str, device: str):
-    key = (model_name, device)
+def load_cross_encoder(model_name: str, device: str, revision: str = ""):
+    key = (model_name, revision, device)
     model = _RERANKER_MODEL_CACHE.get(key)
     if model is None:
         from sentence_transformers import CrossEncoder
-        model = CrossEncoder(model_name, device=device)
+        kwargs = {"device": device}
+        if revision:
+            kwargs["revision"] = revision
+        model = CrossEncoder(model_name, **kwargs)
         _RERANKER_MODEL_CACHE[key] = model
     return model
 
@@ -912,7 +951,7 @@ def run_model_warmup(root_dir: Path | None = None) -> dict[str, Any]:
         append_model("embedding", embedding_model, embedding_device, False, error=f"unsupported provider or missing model: {provider}")
     else:
         try:
-            model = load_sentence_transformer(embedding_model, embedding_device)
+            model = load_sentence_transformer(embedding_model, embedding_device, str(config.get("model_revision") or ""))
             model.encode(
                 ["Autopsy model warmup"],
                 batch_size=1,
@@ -934,7 +973,7 @@ def run_model_warmup(root_dir: Path | None = None) -> dict[str, Any]:
         append_model("reranker", reranker_model, reranker_device, False, error=f"unsupported provider or missing model: {reranker_provider}")
     else:
         try:
-            model = load_cross_encoder(reranker_model, reranker_device)
+            model = load_cross_encoder(reranker_model, reranker_device, str(reranker.get("model_revision") or ""))
             model.predict(
                 [["Autopsy model warmup", "Autopsy retrieval quality warmup document"]],
                 batch_size=1,
@@ -1009,7 +1048,11 @@ def embed_texts_with_provider(texts: list[str], config: dict[str, Any]) -> list[
         raise RuntimeError(f"Unsupported embeddings provider: {provider}")
     if not model_name:
         raise RuntimeError("Embeddings config missing model")
-    model = load_sentence_transformer(model_name, str(config.get("device") or "cpu"))
+    model = load_sentence_transformer(
+        model_name,
+        str(config.get("device") or "cpu"),
+        str(config.get("model_revision") or ""),
+    )
     vectors = model.encode(
         texts,
         batch_size=max(1, int(config.get("batch_size", 16))),
@@ -1018,6 +1061,186 @@ def embed_texts_with_provider(texts: list[str], config: dict[str, Any]) -> list[
         convert_to_numpy=True,
     )
     return [vector.tolist() for vector in vectors]
+
+
+def memory_embedding_text(*, kind: str, label: str, summary: str, detail_content: str) -> str:
+    """Build the passage text used for both write-time and backfill embeddings."""
+    return "\n".join(
+        part.strip()
+        for part in (kind.replace("_", " "), label, summary, detail_content)
+        if part and part.strip()
+    )
+
+
+def prepare_memory_embedding(
+    *,
+    kind: str,
+    label: str,
+    summary: str,
+    detail_content: str,
+    config: dict[str, Any] | None,
+    timestamp: str,
+) -> dict[str, Any]:
+    """Prepare one semantic-item embedding without making memory writes unavailable.
+
+    The default failure policy is deliberately recoverable: a durable memory write
+    succeeds with ``embedding_status=deferred`` and the backfill command can repair
+    it. Installations that require atomic vector coverage may opt into ``error``.
+    """
+    if kind not in SEARCHABLE_KINDS:
+        return {"status": "not_eligible", "vector": None, "provider": "", "model": "", "revision": "", "template": "", "text_sha256": "", "source_updated_at": "", "dimension": 0, "updated_at": "", "error": ""}
+    if not isinstance(config, dict):
+        return {"status": "not_requested", "vector": None, "provider": "", "model": "", "revision": "", "template": "", "text_sha256": "", "source_updated_at": "", "dimension": 0, "updated_at": "", "error": ""}
+    provider = str(config.get("provider") or "").strip().lower()
+    model_name = str(config.get("model") or "").strip()
+    revision = str(config.get("model_revision") or "").strip()
+    template = str(config.get("text_template_version") or EMBEDDING_TEXT_TEMPLATE_VERSION).strip()
+    if not bool(config.get("enabled", True)) or not bool(config.get("on_write", True)):
+        return {"status": "disabled", "vector": None, "provider": provider, "model": model_name, "revision": revision, "template": template, "text_sha256": "", "source_updated_at": "", "dimension": 0, "updated_at": "", "error": ""}
+    text = memory_embedding_text(kind=kind, label=label, summary=summary, detail_content=detail_content)
+    text_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    try:
+        vectors = embed_texts_with_provider([text], config)
+        vector = list(vectors[0]) if vectors else []
+        if not vector:
+            raise RuntimeError("embedding provider returned an empty vector")
+        configured_dimension = int(config.get("dimension") or 0)
+        if configured_dimension and len(vector) != configured_dimension:
+            raise RuntimeError(
+                f"embedding dimension mismatch: configured {configured_dimension}, provider returned {len(vector)}"
+            )
+        return {
+            "status": "ready",
+            "vector": vector,
+            "provider": provider,
+            "model": model_name,
+            "revision": revision,
+            "template": template,
+            "text_sha256": text_sha256,
+            "source_updated_at": timestamp,
+            "dimension": len(vector),
+            "updated_at": timestamp,
+            "error": "",
+        }
+    except Exception as exc:
+        if str(config.get("write_failure_policy") or "defer").strip().lower() == "error":
+            raise
+        return {
+            "status": "deferred",
+            "vector": None,
+            "provider": provider,
+            "model": model_name,
+            "revision": revision,
+            "template": template,
+            "text_sha256": text_sha256,
+            "source_updated_at": timestamp,
+            "dimension": 0,
+            "updated_at": "",
+            "error": summary_snippet(str(exc), limit=500),
+        }
+
+
+def embedding_write_summary(payload: dict[str, Any] | None) -> dict[str, Any]:
+    value = dict(payload or {})
+    return {key: value.get(key) for key in (
+        "status",
+        "provider",
+        "model",
+        "revision",
+        "template",
+        "text_sha256",
+        "dimension",
+        "updated_at",
+        "error",
+    )}
+
+
+def prepare_memory_embedding_batch(
+    records: list[dict[str, Any]],
+    config: dict[str, Any] | None,
+) -> dict[str, dict[str, Any]]:
+    """Prepare embeddings for write records in one model call."""
+    prepared: dict[str, dict[str, Any]] = {}
+    eligible: list[dict[str, Any]] = []
+    for record in records:
+        stable_key = str(record.get("stable_key") or "")
+        if not stable_key:
+            continue
+        kind = str(record.get("kind") or "memory_note")
+        if kind not in SEARCHABLE_KINDS or not isinstance(config, dict) or not bool(config.get("enabled", True)) or not bool(config.get("on_write", True)):
+            prepared[stable_key] = prepare_memory_embedding(
+                kind=kind,
+                label=str(record.get("label") or ""),
+                summary=str(record.get("summary") or ""),
+                detail_content=str(record.get("detail_content") or ""),
+                config=config,
+                timestamp=str(record.get("timestamp") or utc_now_iso()),
+            )
+            continue
+        eligible.append(record)
+    if not eligible:
+        return prepared
+    provider = str((config or {}).get("provider") or "").strip().lower()
+    model_name = str((config or {}).get("model") or "").strip()
+    revision = str((config or {}).get("model_revision") or "").strip()
+    template = str((config or {}).get("text_template_version") or EMBEDDING_TEXT_TEMPLATE_VERSION).strip()
+    embedding_computed_at = utc_now_iso()
+    texts = [
+        memory_embedding_text(
+            kind=str(record.get("kind") or "memory_note"),
+            label=str(record.get("label") or ""),
+            summary=str(record.get("summary") or ""),
+            detail_content=str(record.get("detail_content") or ""),
+        )
+        for record in eligible
+    ]
+    try:
+        vectors = embed_texts_with_provider(texts, config or {})
+        if len(vectors) != len(eligible):
+            raise RuntimeError(f"embedding provider returned {len(vectors)} vectors for {len(eligible)} items")
+        configured_dimension = int((config or {}).get("dimension") or 0)
+        for record, text, vector in zip(eligible, texts, vectors):
+            if configured_dimension and len(vector) != configured_dimension:
+                raise RuntimeError(
+                    f"embedding dimension mismatch: configured {configured_dimension}, provider returned {len(vector)}"
+                )
+            timestamp = str(record.get("timestamp") or utc_now_iso())
+            prepared[str(record["stable_key"])] = {
+                "status": "ready",
+                "vector": list(vector),
+                "provider": provider,
+                "model": model_name,
+                "revision": revision,
+                "template": template,
+                "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                "source_updated_at": timestamp,
+                "dimension": len(vector),
+                # The source timestamp fingerprints the node body. Embedding
+                # provenance records when this vector was actually computed;
+                # restore/backfill must not pretend a new vector is historical.
+                "updated_at": embedding_computed_at,
+                "error": "",
+            }
+    except Exception as exc:
+        if str((config or {}).get("write_failure_policy") or "defer").strip().lower() == "error":
+            raise
+        error = summary_snippet(str(exc), limit=500)
+        for record, text in zip(eligible, texts):
+            timestamp = str(record.get("timestamp") or utc_now_iso())
+            prepared[str(record["stable_key"])] = {
+                "status": "deferred",
+                "vector": None,
+                "provider": provider,
+                "model": model_name,
+                "revision": revision,
+                "template": template,
+                "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                "source_updated_at": timestamp,
+                "dimension": 0,
+                "updated_at": "",
+                "error": error,
+            }
+    return prepared
 
 
 def rerank_candidates(query: str, candidates: list[dict[str, Any]], config: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -1044,7 +1267,11 @@ def rerank_candidates(query: str, candidates: list[dict[str, Any]], config: dict
         )
         for item in shortlist
     ]
-    model = load_cross_encoder(model_name, str(reranker.get("device") or "cpu"))
+    model = load_cross_encoder(
+        model_name,
+        str(reranker.get("device") or "cpu"),
+        str(reranker.get("model_revision") or ""),
+    )
     scores = model.predict(
         [[query, text] for text in texts],
         batch_size=max(1, int(reranker.get("batch_size", 8))),
@@ -1090,6 +1317,211 @@ def filter_low_relevance_candidates(query: str, candidates: list[dict[str, Any]]
             continue
         filtered.append(item)
     return filtered
+
+
+def calibrated_candidate_confidence(
+    query: str,
+    item: dict[str, Any],
+    config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Score retrieval support using a frozen, label-independent dev policy.
+
+    This is intentionally deterministic and heuristic, not a statistical
+    probability estimator. Public benchmark labels never enter the score: it
+    uses only observable retrieval evidence and the query/candidate text.
+    """
+    query_groups = query_token_variant_groups(query, limit=10)
+    item_tokens = set(
+        normalized_tokens(
+            " ".join(
+                str(item.get(field) or "")
+                for field in ("title", "preview", "fact_text", "stable_key")
+            )
+        )
+    )
+    matched = sum(1 for group in query_groups if group & item_tokens)
+    coverage = matched / len(query_groups) if query_groups else 0.0
+    required_matches = lexical_minimum_token_matches(query)
+    reasons = set(item.get("retrieval_reasons") or [])
+    exact_boost = float(item.get("exact_match_boost") or 0.0)
+    entity_overlap = float(item.get("entity_overlap_score") or 0.0)
+    relation_depth = int(item.get("relation_depth") or 0)
+    fact_rating = bounded_float(
+        item.get("fact_rating"),
+        minimum=0.0,
+        maximum=1.0,
+        default=0.5,
+    )
+    embedding_score = item.get("embedding_score")
+    reranker_score = item.get("reranker_score")
+    reranker = reranker_config(config)
+    confidence = min(0.49, coverage * 0.68)
+    signals: list[str] = []
+
+    if not reasons and all(
+        item.get(field) is None
+        for field in ("lexical_score", "embedding_score", "reranker_score", "relationship_score")
+    ):
+        # Preserve compatibility for already-vetted custom adapters that emit a
+        # ranked candidate without channel scores. Built-in fetchers always add
+        # retrieval reasons, so this branch cannot bypass normal abstention.
+        confidence = max(confidence, 0.65)
+        signals.append("prevalidated_adapter_candidate")
+
+    if matched >= required_matches and reasons & {"lexical", "token_overlap"}:
+        confidence = max(confidence, min(0.91, 0.58 + coverage * 0.33))
+        signals.append("lexical_query_coverage")
+    if exact_boost >= 10.0 or "exact" in reasons:
+        confidence = max(confidence, min(0.99, 0.90 + min(exact_boost, 200.0) / 2200.0))
+        signals.append("exact_anchor")
+    if entity_overlap >= 8.0:
+        confidence = max(confidence, min(0.95, 0.72 + entity_overlap / 100.0))
+        signals.append("entity_anchor")
+    if "graph_relation" in reasons:
+        minimum_fact_rating = float(ABSTENTION_POLICY["relation_min_fact_rating"])
+        if fact_rating < minimum_fact_rating:
+            signals.append("low_quality_relation_evidence")
+        elif relation_depth == 1:
+            # The configured maximum is reached only by fully rated facts;
+            # default-rated facts remain usable, while weak edges do not
+            # automatically cross the global abstention threshold.
+            relation_confidence = 0.44 + (0.20 * fact_rating)
+            confidence = max(
+                confidence,
+                min(float(ABSTENTION_POLICY["relation_depth_1_confidence"]), relation_confidence),
+            )
+            signals.append("active_relation_depth_1")
+        elif relation_depth == 2:
+            relation_confidence = 0.47 + (0.07 * fact_rating)
+            confidence = max(
+                confidence,
+                min(float(ABSTENTION_POLICY["relation_depth_2_confidence"]), relation_confidence),
+            )
+            signals.append("active_relation_depth_2")
+        else:
+            confidence = max(confidence, min(0.60, 0.47 + (0.13 * fact_rating)))
+            signals.append("active_relation_match")
+    if reranker_score is not None:
+        semantic_min = float(reranker.get("semantic_only_min_score", 0.12))
+        if float(reranker_score) >= semantic_min:
+            confidence = max(confidence, 0.46)
+            signals.append("reranker_observed")
+        elif not ({"exact", "lexical", "token_overlap", "graph_relation"} & reasons):
+            # A cross-encoder scores the candidate text in isolation and can
+            # therefore reject a legitimate second-hop node whose relevance is
+            # carried by the active graph path.  Anchor gating and lifecycle /
+            # lineage checks already constrain relation expansion; do not let
+            # an isolated-text score erase that independent evidence channel.
+            confidence = min(confidence, 0.35)
+            signals.append("reranker_rejected")
+    elif embedding_score is not None:
+        embedding_min = float(reranker.get("embedding_min_score", 0.62))
+        if float(embedding_score) >= embedding_min:
+            confidence = max(confidence, 0.46)
+            signals.append("embedding_observed")
+
+    return {
+        "policy": ABSTENTION_POLICY["name"],
+        "confidence": round(max(0.0, min(1.0, confidence)), 4),
+        "query_signal_groups": len(query_groups),
+        "matched_signal_groups": matched,
+        "signal_coverage": round(coverage, 4),
+        "relation_fact_rating": fact_rating if "graph_relation" in reasons else None,
+        "signals": sorted(set(signals)),
+    }
+
+
+def apply_calibrated_abstention(
+    query: str,
+    candidates: list[dict[str, Any]],
+    config: dict[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    threshold = float(
+        ((config or {}).get("abstention") or {}).get(
+            "minimum_confidence",
+            ABSTENTION_POLICY["minimum_confidence"],
+        )
+    )
+    semantic_only: list[dict[str, Any]] = []
+    for item in candidates:
+        reasons = set(item.get("retrieval_reasons") or [])
+        if "embedding" in reasons and not (
+            reasons
+            & {"exact", "lexical", "token_overlap", "entity_overlap", "graph_relation", "relation_expansion"}
+        ):
+            semantic_only.append(item)
+    semantic_only.sort(
+        key=lambda item: (
+            -float(item.get("embedding_score") or -1.0),
+            str(item.get("stable_key") or ""),
+        )
+    )
+    semantic_accept_keys: set[str] = set()
+    semantic_margin: float | None = None
+    semantic_accept_reason = ""
+    if semantic_only:
+        reranker = reranker_config(config)
+        embedding_min = float(reranker.get("embedding_min_score", 0.62))
+        top = semantic_only[0]
+        top_key = str(top.get("stable_key") or "")
+        top_score = float(top.get("embedding_score") or 0.0)
+        second_score = float(semantic_only[1].get("embedding_score") or 0.0) if len(semantic_only) > 1 else None
+        semantic_margin = top_score - second_score if second_score is not None else None
+        if len(semantic_only) == 1 and top_score >= max(embedding_min, 0.68):
+            semantic_accept_keys.add(top_key)
+            semantic_accept_reason = "single_high_similarity_candidate"
+        elif extract_entity_tokens(query) and top_score >= embedding_min and semantic_margin is not None and semantic_margin >= 0.08:
+            semantic_accept_keys.add(top_key)
+            semantic_accept_reason = "named_entity_semantic_margin"
+        elif top_score >= embedding_min and semantic_margin is not None and semantic_margin >= 0.12:
+            semantic_accept_keys.add(top_key)
+            semantic_accept_reason = "semantic_margin"
+
+    annotated: list[dict[str, Any]] = []
+    rejected: list[str] = []
+    observed_confidences: list[float] = []
+    for item in candidates:
+        confidence = calibrated_candidate_confidence(query, item, config)
+        normalized = dict(item)
+        stable_key = str(item.get("stable_key") or "")
+        if stable_key in semantic_accept_keys:
+            confidence = dict(confidence)
+            confidence["confidence"] = max(float(confidence["confidence"]), 0.64)
+            confidence["signals"] = sorted(set(confidence.get("signals") or []) | {semantic_accept_reason})
+        normalized["retrieval_confidence"] = confidence["confidence"]
+        normalized["retrieval_confidence_evidence"] = confidence
+        observed_confidences.append(float(confidence["confidence"]))
+        if float(confidence["confidence"]) < threshold:
+            rejected.append(str(item.get("stable_key") or ""))
+            continue
+        annotated.append(normalized)
+    abstained = not annotated
+    reason_codes = []
+    if not candidates:
+        reason_codes.append("no_candidates")
+    elif abstained:
+        reason_codes.append("below_confidence_threshold")
+        if semantic_only:
+            reason_codes.append("ambiguous_or_weak_semantic_evidence")
+    payload = {
+        "policy": ABSTENTION_POLICY["name"],
+        "policy_artifact_id": f"{ABSTENTION_POLICY['name']}:{ABSTENTION_POLICY['artifact_sha256'][:12]}",
+        "development_fixture_sha256": ABSTENTION_POLICY["artifact_sha256"],
+        "threshold_source": "bundled deterministic development cases; public labels excluded",
+        "score_semantics": "heuristic retrieval-support score; not a calibrated probability",
+        "minimum_confidence": threshold,
+        "candidate_count_before": len(candidates),
+        "candidate_count_after": len(annotated),
+        "filtered_count": len(candidates) - len(annotated),
+        "abstained": abstained,
+        "answerability_score": round(max(observed_confidences, default=0.0), 4),
+        "reason_codes": reason_codes,
+        "rejected_stable_keys": rejected,
+        "semantic_candidate_count": len(semantic_only),
+        "semantic_top_margin": round(semantic_margin, 4) if semantic_margin is not None else None,
+        "semantic_accept_reason": semantic_accept_reason or None,
+    }
+    return sort_candidates(annotated), payload
 
 
 def candidate_final_score(item: dict[str, Any]) -> float:
@@ -1412,13 +1844,19 @@ def extract_entity_tokens(value: str) -> list[str]:
     candidates.extend(re.findall(r"\b[\w.-]+/[\w./-]+\b", raw))
     candidates.extend(re.findall(r"\b[A-Za-z][A-Za-z0-9]*(?:[-_.:/][A-Za-z0-9]+)+\b", raw))
     candidates.extend(re.findall(r"\b[A-Za-z]*\d[A-Za-z0-9_-]*\b", raw))
-    for token in re.findall(r"\b[A-Za-z][A-Za-z0-9]*\b", raw):
+    for match in re.finditer(r"\b[A-Za-z][A-Za-z0-9]*\b", raw):
+        token = match.group(0)
         lowered = token.lower()
         if lowered in KNOWN_ENTITY_TOKENS:
             candidates.append(token)
             continue
         if re.search(r"[a-z][A-Z]", token) or re.search(r"[A-Z]{2,}", token):
             candidates.append(token)
+            continue
+        # A capitalized first word is normally sentence grammar (Which, After,
+        # Why), not a named entity. Known systems, camel-case names, acronyms,
+        # paths, and identifiers were already accepted above.
+        if match.start() == 0:
             continue
         if token[:1].isupper() and len(token) >= 3 and lowered not in ENTITY_STOP_TOKENS:
             candidates.append(token)
@@ -1693,13 +2131,37 @@ def classify_query(query: str) -> str:
     tokens = tokenize_query(query)
     if "`" in query or '"' in query or "'" in query:
         return "lexical"
-    if any(sep in query for sep in ("::", "/", "_", "-")) and len(tokens) <= 8:
+    if query_has_structured_identifier(query) and len(tokens) <= 8:
         return "lexical"
     if any(re.search(r"[a-z][A-Z]", token) for token in tokens) and len(tokens) <= 8:
         return "lexical"
     if len(tokens) <= 4:
         return "lexical"
     return "hybrid"
+
+
+def query_has_structured_identifier(query: str) -> bool:
+    """Detect code-like identifiers without treating normal hyphenation as code.
+
+    In particular, phrases such as ``Apple-silicon release build`` stay on the
+    semantic route. Paths, namespace separators, snake_case names, digit-bearing
+    package/build identifiers, and long multi-segment slugs remain lexical.
+    """
+    value = str(query or "")
+    if "::" in value:
+        return True
+    if re.search(r"(?:^|\s|[`'\"])(?:\.{0,2}/|~/|[A-Za-z0-9_.-]+/)[^\s`'\"]+", value):
+        return True
+    if re.search(r"\b[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+\b", value):
+        return True
+    separated = re.findall(r"\b[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+\b", value)
+    for token in separated:
+        parts = token.split("-")
+        if any(char.isdigit() for char in token):
+            return True
+        if len(parts) >= 3 and (len(token) >= 24 or any(part in {"nohit", "sha", "commit", "build"} for part in parts)):
+            return True
+    return False
 
 
 def query_requests_relationship_context(query: str) -> bool:
@@ -1713,6 +2175,13 @@ def escape(value: str) -> str:
 
 def vec_literal(vector: list[float]) -> str:
     return "vecf32([" + ",".join(f"{float(value):.8f}" for value in vector) + "])"
+
+
+def vector_distance_to_similarity(distance: float, similarity_function: str) -> float:
+    normalized = str(similarity_function or "cosine").strip().lower()
+    if normalized == "cosine":
+        return 1.0 - float(distance)
+    return 1.0 / (1.0 + max(0.0, float(distance)))
 
 
 def kind_to_label(kind: str) -> str:
@@ -2584,7 +3053,9 @@ def result_rows(result) -> list[list[Any]]:
 def invalidate_graph_caches(graph) -> None:
     graph_name = getattr(graph, "name", "graph")
     _GRAPH_SEMANTIC_ITEM_COUNT.pop(graph_name, None)
-    _GRAPH_VECTOR_AVAILABILITY.pop(graph_name, None)
+    for cache_key in tuple(_GRAPH_VECTOR_AVAILABILITY):
+        if cache_key[0] == graph_name:
+            _GRAPH_VECTOR_AVAILABILITY.pop(cache_key, None)
 
 
 def semantic_item_count(graph) -> int:
@@ -2618,13 +3089,19 @@ def should_use_recent_token_overlap_scan(item_count: int, config: dict[str, Any]
     return item_count > token_overlap_scan_max_items(config) and token_overlap_recent_scan_items(config) > 0
 
 
-def fetch_node_lexical(graph, query: str, *, limit: int) -> tuple[list[dict[str, Any]], float]:
+def fetch_node_lexical(graph, query: str, *, limit: int, as_of: str | None = None) -> tuple[list[dict[str, Any]], float]:
     parsed = sanitize_query_for_fts(query)
+    normalized_as_of = normalize_as_of_timestamp(as_of)
+    read_time = lifecycle_read_timestamp(normalized_as_of)
     started = time.perf_counter()
     result = graph.query(
         """
         CALL db.idx.fulltext.queryNodes('SemanticItem', $query)
         YIELD node, score
+        WHERE coalesce(node.source_kind, '') <> 'graph_episode'
+          AND NOT coalesce(node.stable_key, '') STARTS WITH 'turn-outcome:'
+          AND ($as_of = '' OR coalesce(node.updated_at, node.created_at, '') <= $as_of)
+          AND (coalesce(node.expired_at, '') = '' OR coalesce(node.expired_at, '') > $read_time)
         RETURN
           node.entity_id,
           node.stable_key,
@@ -2638,7 +3115,12 @@ def fetch_node_lexical(graph, query: str, *, limit: int) -> tuple[list[dict[str,
           score
         LIMIT $limit
         """,
-        params={"query": parsed, "limit": max(limit * 4, 24)},
+        params={
+            "query": parsed,
+            "limit": max(limit * 4, 24),
+            "as_of": normalized_as_of,
+            "read_time": read_time,
+        },
     )
     elapsed = time.perf_counter() - started
     items = []
@@ -2697,10 +3179,12 @@ def fetch_node_lexical(graph, query: str, *, limit: int) -> tuple[list[dict[str,
     return items, elapsed
 
 
-def fetch_exact_text_candidates(graph, query: str, *, limit: int) -> tuple[list[dict[str, Any]], float]:
+def fetch_exact_text_candidates(graph, query: str, *, limit: int, as_of: str | None = None) -> tuple[list[dict[str, Any]], float]:
     normalized = query.strip().lower()
     if not normalized:
         return [], 0.0
+    normalized_as_of = normalize_as_of_timestamp(as_of)
+    read_time = lifecycle_read_timestamp(normalized_as_of)
     started = time.perf_counter()
     result = graph.query(
         """
@@ -2709,6 +3193,10 @@ def fetch_exact_text_candidates(graph, query: str, *, limit: int) -> tuple[list[
             toLower(coalesce(node.label, '')) CONTAINS $query
             OR toLower(coalesce(node.stable_key, '')) CONTAINS $query
         )
+          AND coalesce(node.source_kind, '') <> 'graph_episode'
+          AND NOT coalesce(node.stable_key, '') STARTS WITH 'turn-outcome:'
+          AND ($as_of = '' OR coalesce(node.updated_at, node.created_at, '') <= $as_of)
+          AND (coalesce(node.expired_at, '') = '' OR coalesce(node.expired_at, '') > $read_time)
         RETURN
           node.entity_id,
           node.stable_key,
@@ -2720,7 +3208,12 @@ def fetch_exact_text_candidates(graph, query: str, *, limit: int) -> tuple[list[
           coalesce(node.expired_at, '')
         LIMIT $limit
         """,
-        params={"query": normalized, "limit": max(limit * 4, 24)},
+        params={
+            "query": normalized,
+            "limit": max(limit * 4, 24),
+            "as_of": normalized_as_of,
+            "read_time": read_time,
+        },
     )
     elapsed = time.perf_counter() - started
     items = []
@@ -2798,9 +3291,13 @@ def fetch_relationship_matches(
         MATCH (source:MemoryNode)-[relationship]->(target:MemoryNode)
         WHERE coalesce(relationship.fact_text, '') <> ''
           AND ($as_of = '' OR coalesce(relationship.updated_at, relationship.created_at, '') <= $as_of)
+          AND ($as_of = '' OR coalesce(source.updated_at, source.created_at, '') <= $as_of)
+          AND ($as_of = '' OR coalesce(target.updated_at, target.created_at, '') <= $as_of)
           AND (coalesce(relationship.valid_at, '') = '' OR coalesce(relationship.valid_at, '') <= $read_time)
           AND (coalesce(relationship.invalid_at, '') = '' OR coalesce(relationship.invalid_at, '') > $read_time)
           AND (coalesce(relationship.expired_at, '') = '' OR coalesce(relationship.expired_at, '') > $read_time)
+          AND (coalesce(source.expired_at, '') = '' OR coalesce(source.expired_at, '') > $read_time)
+          AND (coalesce(target.expired_at, '') = '' OR coalesce(target.expired_at, '') > $read_time)
           AND ($min_fact_rating < 0.0 OR coalesce(relationship.fact_rating, 0.5) >= $min_fact_rating)
         WITH source, target, relationship, score
         ORDER BY score DESC
@@ -2931,6 +3428,197 @@ def fetch_relationship_matches(
     return relationship_hits, filter_weak_lexical_hits(query, rerank_lexical_hits(query, list(candidates.values()))), elapsed
 
 
+def fetch_relation_expansion(
+    graph,
+    query: str,
+    anchors: list[dict[str, Any]],
+    *,
+    limit: int,
+    as_of: str | None = None,
+    min_fact_rating: float | None = None,
+    max_depth: int = 2,
+    config: dict[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], float]:
+    """Expand active semantic fact edges from direct retrieval anchors.
+
+    Expansion is deliberately bounded to two hops. Each hop is independently
+    lifecycle-filtered in the database, scores decay with depth, and endpoint
+    stable keys remain available for scope and read-guard enforcement.
+    """
+    direct_anchors = []
+    seen_anchor_keys: set[str] = set()
+    reranker = reranker_config(config)
+    embedding_min = float(reranker.get("embedding_min_score", 0.62))
+    semantic_reranker_min = float(reranker.get("semantic_only_min_score", 0.12))
+    for item in anchors:
+        reasons = set(item.get("retrieval_reasons") or [])
+        stable_key = str(item.get("stable_key") or "").strip()
+        if not stable_key or stable_key in seen_anchor_keys or not (reasons & RELATION_EXPANSION_ANCHOR_REASONS):
+            continue
+        has_surface_anchor = bool(reasons & {"exact", "lexical", "token_overlap", "entity_overlap"})
+        if not has_surface_anchor and float(item.get("embedding_score") or 0.0) < embedding_min:
+            continue
+        if (
+            not has_surface_anchor
+            and item.get("reranker_score") is not None
+            and float(item.get("reranker_score") or 0.0) < semantic_reranker_min
+        ):
+            continue
+        seen_anchor_keys.add(stable_key)
+        direct_anchors.append(item)
+        if len(direct_anchors) >= min(max(2, limit), 5):
+            break
+    if not direct_anchors or max_depth < 1:
+        return [], [], 0.0
+
+    normalized_as_of = normalize_as_of_timestamp(as_of)
+    read_time = lifecycle_read_timestamp(normalized_as_of)
+    normalized_min_fact_rating = normalize_fact_rating(min_fact_rating)
+    min_rating_filter = -1.0 if normalized_min_fact_rating is None else normalized_min_fact_rating
+    started = time.perf_counter()
+    relationship_hits: list[dict[str, Any]] = []
+    relationship_seen: set[tuple[str, str, str, str]] = set()
+    candidates: dict[str, dict[str, Any]] = {}
+    frontier_to_roots = {
+        str(item.get("stable_key") or ""): {str(item.get("stable_key") or "")}
+        for item in direct_anchors
+    }
+    visited_depth: dict[str, int] = {key: 0 for key in frontier_to_roots}
+
+    for depth in range(1, min(2, max_depth) + 1):
+        frontier_keys = sorted(frontier_to_roots)
+        if not frontier_keys:
+            break
+        result = graph.query(
+            """
+            MATCH (anchor:MemoryNode)-[fact:FACT_EDGE]-(neighbor:MemoryNode)
+            WHERE anchor.stable_key IN $anchor_keys
+              AND neighbor.stable_key <> anchor.stable_key
+              AND ($as_of = '' OR coalesce(fact.updated_at, fact.created_at, '') <= $as_of)
+              AND ($as_of = '' OR coalesce(anchor.updated_at, anchor.created_at, '') <= $as_of)
+              AND ($as_of = '' OR coalesce(neighbor.updated_at, neighbor.created_at, '') <= $as_of)
+              AND (coalesce(fact.valid_at, '') = '' OR coalesce(fact.valid_at, '') <= $read_time)
+              AND (coalesce(fact.invalid_at, '') = '' OR coalesce(fact.invalid_at, '') > $read_time)
+              AND (coalesce(fact.expired_at, '') = '' OR coalesce(fact.expired_at, '') > $read_time)
+              AND (coalesce(anchor.expired_at, '') = '' OR coalesce(anchor.expired_at, '') > $read_time)
+              AND (coalesce(neighbor.expired_at, '') = '' OR coalesce(neighbor.expired_at, '') > $read_time)
+              AND ($min_fact_rating < 0.0 OR coalesce(fact.fact_rating, 0.5) >= $min_fact_rating)
+            RETURN
+              anchor.stable_key,
+              neighbor.entity_id,
+              neighbor.stable_key,
+              neighbor.kind,
+              neighbor.label,
+              coalesce(neighbor.summary, ''),
+              coalesce(neighbor.updated_at, neighbor.created_at, ''),
+              coalesce(neighbor.source_kind, ''),
+              coalesce(neighbor.expired_at, ''),
+              coalesce(fact.relation, ''),
+              coalesce(fact.predicate, ''),
+              coalesce(fact.fact_text, ''),
+              coalesce(fact.updated_at, fact.created_at, ''),
+              coalesce(fact.valid_at, ''),
+              coalesce(fact.invalid_at, ''),
+              coalesce(fact.expired_at, ''),
+              coalesce(fact.fact_rating, 0.5),
+              CASE WHEN fact.from_entity_id = anchor.entity_id THEN anchor.stable_key ELSE neighbor.stable_key END,
+              CASE WHEN fact.from_entity_id = anchor.entity_id THEN neighbor.stable_key ELSE anchor.stable_key END
+            ORDER BY coalesce(fact.fact_rating, 0.5) DESC, coalesce(fact.updated_at, fact.created_at, '') DESC
+            LIMIT $row_limit
+            """,
+            params={
+                "anchor_keys": frontier_keys,
+                "as_of": normalized_as_of,
+                "read_time": read_time,
+                "min_fact_rating": min_rating_filter,
+                "row_limit": max(limit * 24, 96),
+            },
+        )
+        next_frontier: dict[str, set[str]] = {}
+        for row in result_rows(result):
+            anchor_key = str(row[0] or "")
+            stable_key = str(row[2] or "")
+            kind = str(row[3] or "")
+            source_kind = str(row[7] or "")
+            if kind not in SEARCHABLE_KINDS or not stable_key:
+                continue
+            if stable_key.startswith("turn-outcome:") or source_kind == "graph_episode":
+                continue
+            roots = set(frontier_to_roots.get(anchor_key) or {anchor_key})
+            previous_depth = visited_depth.get(stable_key)
+            if previous_depth is None or depth < previous_depth:
+                visited_depth[stable_key] = depth
+            if depth < min(2, max_depth) and stable_key not in seen_anchor_keys:
+                next_frontier.setdefault(stable_key, set()).update(roots)
+
+            relation = str(row[9] or "")
+            predicate = str(row[10] or relation)
+            fact_text = str(row[11] or "")
+            source_stable_key = str(row[17] or "")
+            target_stable_key = str(row[18] or "")
+            fact_rating = bounded_float(row[16], minimum=0.0, maximum=1.0, default=0.5)
+            relationship_key = (source_stable_key, target_stable_key, relation, fact_text)
+            if relationship_key not in relationship_seen:
+                relationship_seen.add(relationship_key)
+                relationship_hits.append(
+                    {
+                        "fact_text": fact_text,
+                        "relation": relation,
+                        "predicate": predicate,
+                        "score": round((8.0 * (0.65 ** (depth - 1))) * (0.5 + fact_rating * 0.5), 4),
+                        "depth": depth,
+                        "source_stable_key": source_stable_key,
+                        "target_stable_key": target_stable_key,
+                        "source_label": "",
+                        "target_label": "",
+                        "updated_at": str(row[12] or ""),
+                        "valid_at": str(row[13] or ""),
+                        "invalid_at": str(row[14] or ""),
+                        "expired_at": str(row[15] or ""),
+                        "fact_rating": fact_rating,
+                        "retrieval_reason": f"relation_depth_{depth}",
+                    }
+                )
+
+            relation_score = (8.0 * (0.65 ** (depth - 1))) * (0.5 + fact_rating * 0.5)
+            title = str(row[4] or "")
+            summary = str(row[5] or "")
+            existing = candidates.get(stable_key)
+            if existing is None:
+                candidates[stable_key] = {
+                    "entity_id": int(row[1]),
+                    "stable_key": stable_key,
+                    "kind": kind,
+                    "title": title,
+                    "preview": summary[:280],
+                    "fact_text": fact_text,
+                    "fact_rating": fact_rating,
+                    "updated_at": str(row[6] or ""),
+                    "activity_at": str(row[6] or ""),
+                    "source_kind": source_kind,
+                    "expired_at": str(row[8] or ""),
+                    "relationship_score": relation_score,
+                    "relation_depth": depth,
+                    "relation_anchor_stable_keys": sorted(roots),
+                    "retrieval_reasons": ["graph_relation", "relation_expansion", f"relation_depth_{depth}"],
+                    "rank": len(candidates),
+                }
+            else:
+                existing["relationship_score"] = max(float(existing.get("relationship_score") or 0.0), relation_score)
+                existing["relation_depth"] = min(int(existing.get("relation_depth") or depth), depth)
+                existing["relation_anchor_stable_keys"] = sorted(
+                    set(existing.get("relation_anchor_stable_keys") or []) | roots
+                )
+                existing["retrieval_reasons"] = sorted(
+                    set(existing.get("retrieval_reasons") or [])
+                    | {"graph_relation", "relation_expansion", f"relation_depth_{depth}"}
+                )
+        frontier_to_roots = next_frontier
+
+    elapsed = time.perf_counter() - started
+    return relationship_hits, sort_candidates(list(candidates.values())), elapsed
+
+
 def fetch_relationship_lexical(
     graph,
     query: str,
@@ -2971,16 +3659,51 @@ def filter_relationship_hits_for_answer_context(
     return filtered
 
 
-def fetch_entity_overlap_candidates(graph, query: str, *, limit: int) -> tuple[list[dict[str, Any]], float]:
+def dedupe_relationship_hits(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    for hit in hits:
+        key = (
+            str(hit.get("source_stable_key") or ""),
+            str(hit.get("target_stable_key") or ""),
+            str(hit.get("relation") or ""),
+            str(hit.get("fact_text") or ""),
+        )
+        current = deduped.get(key)
+        if current is None:
+            deduped[key] = dict(hit)
+            continue
+        if float(hit.get("score") or 0.0) > float(current.get("score") or 0.0):
+            current["score"] = hit.get("score")
+        depths = [int(value) for value in (current.get("depth"), hit.get("depth")) if value not in (None, "")]
+        if depths:
+            current["depth"] = min(depths)
+    return sorted(
+        deduped.values(),
+        key=lambda hit: (
+            int(hit.get("depth") or 99),
+            -float(hit.get("score") or 0.0),
+            str(hit.get("source_stable_key") or ""),
+            str(hit.get("target_stable_key") or ""),
+        ),
+    )
+
+
+def fetch_entity_overlap_candidates(graph, query: str, *, limit: int, as_of: str | None = None) -> tuple[list[dict[str, Any]], float]:
     entities = extract_entity_tokens(query)
     if not entities:
         return [], 0.0
     parsed = sanitize_query_for_fts(" ".join(entities[:8]))
+    normalized_as_of = normalize_as_of_timestamp(as_of)
+    read_time = lifecycle_read_timestamp(normalized_as_of)
     started = time.perf_counter()
     result = graph.query(
         """
         CALL db.idx.fulltext.queryNodes('SemanticItem', $query)
         YIELD node, score
+        WHERE coalesce(node.source_kind, '') <> 'graph_episode'
+          AND NOT coalesce(node.stable_key, '') STARTS WITH 'turn-outcome:'
+          AND ($as_of = '' OR coalesce(node.updated_at, node.created_at, '') <= $as_of)
+          AND (coalesce(node.expired_at, '') = '' OR coalesce(node.expired_at, '') > $read_time)
         RETURN
           node.entity_id,
           node.stable_key,
@@ -2993,7 +3716,12 @@ def fetch_entity_overlap_candidates(graph, query: str, *, limit: int) -> tuple[l
           score
         LIMIT $limit
         """,
-        params={"query": parsed, "limit": max(limit * 6, 48)},
+        params={
+            "query": parsed,
+            "limit": max(limit * 6, 48),
+            "as_of": normalized_as_of,
+            "read_time": read_time,
+        },
     )
     elapsed = time.perf_counter() - started
     items: list[dict[str, Any]] = []
@@ -3048,6 +3776,7 @@ def fetch_token_overlap_candidates(
     *,
     limit: int,
     recent_scan_limit: int | None = None,
+    as_of: str | None = None,
 ) -> tuple[list[dict[str, Any]], float]:
     token_groups = query_token_variant_groups(query, limit=10)
     if not token_groups:
@@ -3056,7 +3785,13 @@ def fetch_token_overlap_candidates(
     min_token_hits = 2 if token_limit <= 3 else 3
     clauses = []
     score_parts = []
-    params: dict[str, Any] = {"limit": max(limit * 24, 240)}
+    normalized_as_of = normalize_as_of_timestamp(as_of)
+    read_time = lifecycle_read_timestamp(normalized_as_of)
+    params: dict[str, Any] = {
+        "limit": max(limit * 24, 240),
+        "as_of": normalized_as_of,
+        "read_time": read_time,
+    }
     for index, variants in enumerate(token_groups):
         param_names = []
         for variant_index, token in enumerate(sorted(variants)):
@@ -3073,6 +3808,10 @@ def fetch_token_overlap_candidates(
         result = graph.query(
             f"""
             MATCH (node:SemanticItem)
+            WHERE coalesce(node.source_kind, '') <> 'graph_episode'
+              AND NOT coalesce(node.stable_key, '') STARTS WITH 'turn-outcome:'
+              AND ($as_of = '' OR coalesce(node.updated_at, node.created_at, '') <= $as_of)
+              AND (coalesce(node.expired_at, '') = '' OR coalesce(node.expired_at, '') > $read_time)
             WITH node
             ORDER BY coalesce(node.updated_at, node.created_at) DESC
             LIMIT $scan_limit
@@ -3097,7 +3836,11 @@ def fetch_token_overlap_candidates(
         result = graph.query(
             f"""
             MATCH (node:SemanticItem)
-            WHERE {' OR '.join(f'({clause})' for clause in clauses)}
+            WHERE ({' OR '.join(f'({clause})' for clause in clauses)})
+              AND coalesce(node.source_kind, '') <> 'graph_episode'
+              AND NOT coalesce(node.stable_key, '') STARTS WITH 'turn-outcome:'
+              AND ($as_of = '' OR coalesce(node.updated_at, node.created_at, '') <= $as_of)
+              AND (coalesce(node.expired_at, '') = '' OR coalesce(node.expired_at, '') > $read_time)
             WITH node, {score_expression} AS token_hits
             WHERE token_hits >= $min_token_hits
             RETURN
@@ -3146,56 +3889,116 @@ def fetch_token_overlap_candidates(
     return filter_weak_lexical_hits(query, rerank_lexical_hits(query, items)), elapsed
 
 
-def fetch_vector_candidates(graph, tool, query: str, config: dict[str, Any], *, limit: int) -> tuple[list[dict[str, Any]], float]:
+def fetch_vector_candidates(
+    graph,
+    tool,
+    query: str,
+    config: dict[str, Any],
+    *,
+    limit: int,
+    as_of: str | None = None,
+) -> tuple[list[dict[str, Any]], float]:
     provider_ok, _ = tool.embedding_provider_available(config)
-    if not provider_ok:
+    if not provider_ok or not check_runtime_vector_index(graph, config):
         return [], 0.0
     graph_name = getattr(graph, "name", "graph")
-    has_vectors = _GRAPH_VECTOR_AVAILABILITY.get(graph_name)
+    embedding_provider = str(config.get("provider") or "").strip().lower()
+    embedding_model = str(config.get("model") or "").strip()
+    embedding_revision = str(config.get("model_revision") or "").strip()
+    embedding_template = str(config.get("text_template_version") or EMBEDDING_TEXT_TEMPLATE_VERSION).strip()
+    embedding_dimension = int(config.get("dimension") or 0)
+    profile_params = {
+        "embedding_provider": embedding_provider,
+        "embedding_model": embedding_model,
+        "embedding_revision": embedding_revision,
+        "embedding_template": embedding_template,
+        "embedding_dimension": embedding_dimension,
+    }
+    availability_key = (
+        graph_name,
+        embedding_provider,
+        embedding_model,
+        embedding_revision,
+        embedding_template,
+        embedding_dimension,
+    )
+    has_vectors = _GRAPH_VECTOR_AVAILABILITY.get(availability_key)
     if has_vectors is None:
         try:
             probe = graph.query(
                 """
                 MATCH (node:SemanticItem)
                 WHERE node.embedding IS NOT NULL
+                  AND coalesce(node.embedding_status, '') = 'ready'
+                  AND coalesce(node.embedding_provider, '') = $embedding_provider
+                  AND coalesce(node.embedding_model, '') = $embedding_model
+                  AND coalesce(node.embedding_model_revision, '') = $embedding_revision
+                  AND coalesce(node.embedding_text_template, '') = $embedding_template
+                  AND coalesce(node.embedding_dimension, 0) = $embedding_dimension
+                  AND coalesce(node.embedding_source_updated_at, '') = coalesce(node.updated_at, node.created_at, '')
                 RETURN count(node)
                 LIMIT 1
-                """
+                """,
+                params=profile_params,
             )
             rows = result_rows(probe)
             has_vectors = bool(rows and int(rows[0][0] or 0) > 0)
         except Exception:
             has_vectors = False
-        _GRAPH_VECTOR_AVAILABILITY[graph_name] = has_vectors
+        _GRAPH_VECTOR_AVAILABILITY[availability_key] = has_vectors
     if not has_vectors:
         return [], 0.0
-    vector = tool.embed_texts_with_provider([query], config)[0]
+    query_text = f"{str(config.get('query_prefix') or '')}{query}"
+    vector = tool.embed_texts_with_provider([query_text], config)[0]
     if not vector:
         return [], 0.0
     started = time.perf_counter()
     try:
+        normalized_as_of = normalize_as_of_timestamp(as_of)
+        read_time = lifecycle_read_timestamp(normalized_as_of)
         candidate_limit = max(limit * 4, int(config.get("vector_candidate_limit") or config.get("candidate_limit") or 48))
         result = graph.query(
             f"""
             CALL db.idx.vector.queryNodes('SemanticItem', 'embedding', $limit, {vec_literal(vector)})
             YIELD node, score
+            WHERE coalesce(node.source_kind, '') <> 'graph_episode'
+              AND NOT coalesce(node.stable_key, '') STARTS WITH 'turn-outcome:'
+              AND coalesce(node.embedding_status, '') = 'ready'
+              AND coalesce(node.embedding_provider, '') = $embedding_provider
+              AND coalesce(node.embedding_model, '') = $embedding_model
+              AND coalesce(node.embedding_model_revision, '') = $embedding_revision
+              AND coalesce(node.embedding_text_template, '') = $embedding_template
+              AND coalesce(node.embedding_dimension, 0) = $embedding_dimension
+              AND coalesce(node.embedding_source_updated_at, '') = coalesce(node.updated_at, node.created_at, '')
+              AND ($as_of = '' OR coalesce(node.updated_at, node.created_at, '') <= $as_of)
+              AND (coalesce(node.expired_at, '') = '' OR coalesce(node.expired_at, '') > $read_time)
             RETURN
               node.entity_id,
               node.stable_key,
               node.kind,
               node.label,
               node.summary,
-              node.updated_at,
+              coalesce(node.updated_at, node.created_at, ''),
               coalesce(node.source_kind, ''),
               coalesce(node.expired_at, ''),
-              score
+              score,
+              coalesce(node.embedding_status, ''),
+              coalesce(node.embedding_provider, ''),
+              coalesce(node.embedding_model, ''),
+              coalesce(node.embedding_model_revision, ''),
+              coalesce(node.embedding_text_template, ''),
+              coalesce(node.embedding_dimension, 0),
+              coalesce(node.embedding_source_updated_at, '')
             """,
             params={
                 "limit": candidate_limit,
+                "as_of": normalized_as_of,
+                "read_time": read_time,
+                **profile_params,
             },
         )
     except Exception:
-        _GRAPH_VECTOR_AVAILABILITY[graph_name] = False
+        _GRAPH_VECTOR_AVAILABILITY[availability_key] = False
         return [], 0.0
     elapsed = time.perf_counter() - started
     items = []
@@ -3209,6 +4012,20 @@ def fetch_vector_candidates(graph, tool, query: str, config: dict[str, Any], *, 
         source_kind = str(row[6] or "")
         if source_kind == "graph_episode":
             continue
+        node_updated_at = str(row[5] or "")
+        if (
+            str(row[9] or "") != "ready"
+            or str(row[10] or "") != embedding_provider
+            or str(row[11] or "") != embedding_model
+            or str(row[12] or "") != embedding_revision
+            or str(row[13] or "") != embedding_template
+            or int(row[14] or 0) != embedding_dimension
+            or str(row[15] or "") != node_updated_at
+        ):
+            continue
+        distance = float(row[8])
+        similarity_function = str(config.get("similarity_function") or "cosine").strip().lower()
+        embedding_score = vector_distance_to_similarity(distance, similarity_function)
         items.append(
             {
                 "entity_id": int(row[0]),
@@ -3216,11 +4033,12 @@ def fetch_vector_candidates(graph, tool, query: str, config: dict[str, Any], *, 
                 "kind": kind,
                 "title": str(row[3] or ""),
                 "preview": str(row[4] or "")[:280],
-                "updated_at": str(row[5] or ""),
-                "activity_at": str(row[5] or ""),
+                "updated_at": node_updated_at,
+                "activity_at": node_updated_at,
                 "source_kind": source_kind,
                 "expired_at": str(row[7] or ""),
-                "embedding_score": float(row[8]),
+                "embedding_distance": distance,
+                "embedding_score": embedding_score,
                 "retrieval_reasons": ["embedding"],
                 "rank": rank,
             }
@@ -7934,6 +8752,8 @@ def as_of_temporal_payload(as_of: str | None, *, before_count: int = 0, after_co
         "as_of": normalized,
         "active": True,
         "mode": "conservative_updated_at_filter",
+        "state_reconstruction": False,
+        "limitation": "In-place pre-update bodies are not materialized; inspect history for prior snapshots.",
         "candidate_count_before": before_count,
         "candidate_count_after": after_count,
         "filtered_count": max(0, before_count - after_count),
@@ -8108,6 +8928,110 @@ def item_active_for_read(item: dict[str, Any], as_of: str | None = None) -> bool
 
 def filter_items_for_read_lifecycle(items: list[dict[str, Any]], as_of: str | None = None) -> list[dict[str, Any]]:
     return [item for item in items if item_active_for_read(item, as_of)]
+
+
+def query_requests_historical_memory(query: str) -> bool:
+    lowered = str(query or "").strip().lower()
+    tokens = set(normalized_tokens(lowered))
+    if tokens & HISTORICAL_QUERY_TOKENS:
+        return True
+    return any(
+        phrase in lowered
+        for phrase in (
+            "at the time",
+            "used to",
+            "what changed",
+            "before the change",
+            "prior version",
+            "previous version",
+        )
+    )
+
+
+def fetch_active_lineage_invalidations(
+    graph,
+    stable_keys: list[str],
+    *,
+    as_of: str | None = None,
+) -> dict[str, list[dict[str, str]]]:
+    keys = sorted({str(key or "").strip() for key in stable_keys if str(key or "").strip()})
+    if not keys or not callable(getattr(graph, "query", None)):
+        return {}
+    normalized_as_of = normalize_as_of_timestamp(as_of)
+    read_time = lifecycle_read_timestamp(normalized_as_of)
+    result = graph.query(
+        """
+        MATCH (invalidator:MemoryNode)-[fact:FACT_EDGE]->(obsolete:MemoryNode)
+        WHERE obsolete.stable_key IN $stable_keys
+          AND coalesce(fact.relation, '') IN $relations
+          AND ($as_of = '' OR coalesce(fact.updated_at, fact.created_at, '') <= $as_of)
+          AND ($as_of = '' OR coalesce(invalidator.updated_at, invalidator.created_at, '') <= $as_of)
+          AND (coalesce(fact.valid_at, '') = '' OR coalesce(fact.valid_at, '') <= $read_time)
+          AND (coalesce(fact.invalid_at, '') = '' OR coalesce(fact.invalid_at, '') > $read_time)
+          AND (coalesce(fact.expired_at, '') = '' OR coalesce(fact.expired_at, '') > $read_time)
+          AND (coalesce(invalidator.expired_at, '') = '' OR coalesce(invalidator.expired_at, '') > $read_time)
+        RETURN
+          obsolete.stable_key,
+          invalidator.stable_key,
+          coalesce(fact.relation, ''),
+          coalesce(fact.updated_at, fact.created_at, '')
+        ORDER BY coalesce(fact.updated_at, fact.created_at, '') DESC
+        LIMIT $limit
+        """,
+        params={
+            "stable_keys": keys,
+            "relations": list(TEMPORAL_INVALIDATION_RELATIONS),
+            "as_of": normalized_as_of,
+            "read_time": read_time,
+            "limit": max(len(keys) * 6, 48),
+        },
+    )
+    invalidations: dict[str, list[dict[str, str]]] = {}
+    for row in result_rows(result):
+        stable_key = str(row[0] or "")
+        if not stable_key:
+            continue
+        invalidations.setdefault(stable_key, []).append(
+            {
+                "invalidator_stable_key": str(row[1] or ""),
+                "relation": str(row[2] or ""),
+                "event_time": str(row[3] or ""),
+            }
+        )
+    return invalidations
+
+
+def filter_items_by_lineage(
+    items: list[dict[str, Any]],
+    invalidations: dict[str, list[dict[str, str]]],
+) -> list[dict[str, Any]]:
+    if not invalidations:
+        return items
+    return [
+        item
+        for item in items
+        if str(item.get("stable_key") or item.get("stableKey") or "") not in invalidations
+    ]
+
+
+def lineage_filter_payload(
+    *,
+    historical_query: bool,
+    invalidations: dict[str, list[dict[str, str]]],
+    before_count: int,
+    after_count: int,
+    as_of: str | None,
+) -> dict[str, Any]:
+    return {
+        "policy": "current_read_lineage_v1",
+        "active": not historical_query,
+        "historical_query": historical_query,
+        "as_of": normalize_as_of_timestamp(as_of),
+        "candidate_count_before": before_count,
+        "candidate_count_after": after_count,
+        "filtered_count": max(0, before_count - after_count),
+        "invalidated_stable_keys": sorted(invalidations) if not historical_query else [],
+    }
 
 
 def lifecycle_filter_payload(as_of: str | None, *, before_count: int = 0, after_count: int = 0) -> dict[str, Any]:
@@ -8376,13 +9300,24 @@ def create_memory_node(
     origin: str,
     tags: list[str] | tuple[str, ...] | str | None = None,
     metadata: Any = None,
-) -> None:
+    embedding_config: dict[str, Any] | None = None,
+    prepared_embedding: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     label_clause = labels_clause(node_labels_for_kind(kind))
     normalized_tags = normalize_tag_filters(tags)
     normalized_metadata = normalize_memory_metadata(metadata)
     memory_tags = serialize_memory_tags(normalized_tags)
     memory_metadata = serialize_memory_metadata(normalized_metadata)
     search_text = memory_search_text(kind=kind, label=label, summary=summary, detail_content=detail_content, tags=normalized_tags, metadata=normalized_metadata)
+    embedding = dict(prepared_embedding) if isinstance(prepared_embedding, dict) else prepare_memory_embedding(
+        kind=kind,
+        label=label,
+        summary=summary,
+        detail_content=detail_content,
+        config=embedding_config,
+        timestamp=updated_at,
+    )
+    embedding_expression = "vecf32($embedding)" if embedding.get("vector") else "null"
     graph.query(
         f"""
         CREATE ({label_clause} {{
@@ -8400,7 +9335,17 @@ def create_memory_node(
             created_at: $created_at,
             updated_at: $updated_at,
             origin: $origin,
-            embedding: null
+            embedding: {embedding_expression},
+            embedding_status: $embedding_status,
+            embedding_provider: $embedding_provider,
+            embedding_model: $embedding_model,
+            embedding_model_revision: $embedding_model_revision,
+            embedding_text_template: $embedding_text_template,
+            embedding_text_sha256: $embedding_text_sha256,
+            embedding_source_updated_at: $embedding_source_updated_at,
+            embedding_dimension: $embedding_dimension,
+            embedding_updated_at: $embedding_updated_at,
+            embedding_error: $embedding_error
         }})
         """,
         params={
@@ -8418,8 +9363,21 @@ def create_memory_node(
             "created_at": created_at,
             "updated_at": updated_at,
             "origin": origin,
+            "embedding": embedding.get("vector") or [],
+            "embedding_status": str(embedding.get("status") or ""),
+            "embedding_provider": str(embedding.get("provider") or ""),
+            "embedding_model": str(embedding.get("model") or ""),
+            "embedding_model_revision": str(embedding.get("revision") or ""),
+            "embedding_text_template": str(embedding.get("template") or ""),
+            "embedding_text_sha256": str(embedding.get("text_sha256") or ""),
+            "embedding_source_updated_at": str(embedding.get("source_updated_at") or ""),
+            "embedding_dimension": int(embedding.get("dimension") or 0),
+            "embedding_updated_at": str(embedding.get("updated_at") or ""),
+            "embedding_error": str(embedding.get("error") or ""),
         },
     )
+    invalidate_graph_caches(graph)
+    return embedding
 
 
 def create_structural_edge(
@@ -8624,16 +9582,41 @@ def update_memory_node(
     origin: str,
     tags: list[str] | tuple[str, ...] | str | None = None,
     metadata: Any = None,
-) -> None:
+    embedding_config: dict[str, Any] | None = None,
+    prepared_embedding: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     existing = lookup_node_by_stable_key(graph, stable_key) if tags is None or metadata is None else None
     normalized_tags = normalize_tag_filters(tags if tags is not None else (existing or {}).get("memory_tags", ""))
     normalized_metadata = normalize_memory_metadata(metadata if metadata is not None else (existing or {}).get("metadata", {}))
     memory_tags = serialize_memory_tags(normalized_tags)
     memory_metadata = serialize_memory_metadata(normalized_metadata)
     search_text = memory_search_text(kind=kind, label=label, summary=summary, detail_content=detail_content, tags=normalized_tags, metadata=normalized_metadata)
+    embedding = dict(prepared_embedding) if isinstance(prepared_embedding, dict) else prepare_memory_embedding(
+        kind=kind,
+        label=label,
+        summary=summary,
+        detail_content=detail_content,
+        config=embedding_config,
+        timestamp=updated_at,
+    )
+    embedding_assignments = ""
+    if embedding_config is not None:
+        embedding_expression = "vecf32($embedding)" if embedding.get("vector") else "null"
+        embedding_assignments = f""",
+            node.embedding = {embedding_expression},
+            node.embedding_status = $embedding_status,
+            node.embedding_provider = $embedding_provider,
+            node.embedding_model = $embedding_model,
+            node.embedding_model_revision = $embedding_model_revision,
+            node.embedding_text_template = $embedding_text_template,
+            node.embedding_text_sha256 = $embedding_text_sha256,
+            node.embedding_source_updated_at = $embedding_source_updated_at,
+            node.embedding_dimension = $embedding_dimension,
+            node.embedding_updated_at = $embedding_updated_at,
+            node.embedding_error = $embedding_error"""
     graph.query(
-        """
-        MATCH (node:MemoryNode {stable_key: $stable_key})
+        f"""
+        MATCH (node:MemoryNode {{stable_key: $stable_key}})
         SET node.kind = $kind,
             node.label = $label,
             node.summary = $summary,
@@ -8644,7 +9627,7 @@ def update_memory_node(
             node.search_text = $search_text,
             node.source_kind = $source_kind,
             node.updated_at = $updated_at,
-            node.origin = $origin
+            node.origin = $origin{embedding_assignments}
         """,
         params={
             "stable_key": stable_key,
@@ -8659,8 +9642,21 @@ def update_memory_node(
             "source_kind": source_kind,
             "updated_at": updated_at,
             "origin": origin,
+            "embedding": embedding.get("vector") or [],
+            "embedding_status": str(embedding.get("status") or ""),
+            "embedding_provider": str(embedding.get("provider") or ""),
+            "embedding_model": str(embedding.get("model") or ""),
+            "embedding_model_revision": str(embedding.get("revision") or ""),
+            "embedding_text_template": str(embedding.get("template") or ""),
+            "embedding_text_sha256": str(embedding.get("text_sha256") or ""),
+            "embedding_source_updated_at": str(embedding.get("source_updated_at") or ""),
+            "embedding_dimension": int(embedding.get("dimension") or 0),
+            "embedding_updated_at": str(embedding.get("updated_at") or ""),
+            "embedding_error": str(embedding.get("error") or ""),
         },
     )
+    invalidate_graph_caches(graph)
+    return embedding
 
 
 def upsert_memory_node(
@@ -8677,6 +9673,8 @@ def upsert_memory_node(
     origin: str,
     tags: list[str] | tuple[str, ...] | str | None = None,
     metadata: Any = None,
+    embedding_config: dict[str, Any] | None = None,
+    prepared_embedding: dict[str, Any] | None = None,
 ) -> int:
     existing = lookup_node_by_stable_key(graph, stable_key)
     if existing is not None:
@@ -8693,6 +9691,8 @@ def upsert_memory_node(
             origin=origin,
             tags=tags,
             metadata=metadata,
+            embedding_config=embedding_config,
+            prepared_embedding=prepared_embedding,
         )
         return int(existing["entity_id"])
     entity_id = next_entity_id(graph)
@@ -8711,6 +9711,8 @@ def upsert_memory_node(
         origin=origin,
         tags=tags,
         metadata=metadata,
+        embedding_config=embedding_config,
+        prepared_embedding=prepared_embedding,
     )
     return entity_id
 
@@ -9097,6 +10099,7 @@ def import_semantic_memory_payload(
     workspace: dict[str, Any],
     documents: list[dict[str, Any]],
     entries: list[dict[str, Any]],
+    embedding_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     timestamp = utc_now_iso()
     origin = "falkor"
@@ -9123,6 +10126,7 @@ def import_semantic_memory_payload(
             source_kind="memory_doc",
             timestamp=timestamp,
             origin=origin,
+            embedding_config=embedding_config,
         )
         if repository_key:
             upsert_structural_edge(graph, from_stable_key=stable_key, to_stable_key=repository_key, relation="about", timestamp=timestamp, origin=origin)
@@ -9143,6 +10147,7 @@ def import_semantic_memory_payload(
                 source_kind="memory_doc",
                 timestamp=timestamp,
                 origin=origin,
+                embedding_config=embedding_config,
             )
             upsert_structural_edge(graph, from_stable_key=section_key, to_stable_key=stable_key, relation="part_of", timestamp=timestamp, origin=origin)
             if repository_key:
@@ -9172,6 +10177,7 @@ def import_semantic_memory_payload(
             timestamp=timestamp,
             origin=origin,
             tags=tags,
+            embedding_config=embedding_config,
         )
         if repository_key:
             upsert_structural_edge(graph, from_stable_key=stable_key, to_stable_key=repository_key, relation="about", timestamp=timestamp, origin=origin)
@@ -9334,6 +10340,7 @@ def build_import_session_payload(
     max_events: int = 200,
     dry_run: bool = False,
     repository_root_path: str | None = None,
+    embedding_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     source_path = Path(path).expanduser().resolve(strict=False)
     if not source_path.exists() or not source_path.is_file():
@@ -9399,6 +10406,24 @@ def build_import_session_payload(
         return payload
 
     origin = "session_import"
+    embedding_records = [{
+        "stable_key": session_key,
+        "kind": "timeline",
+        "label": session_title,
+        "summary": summary_snippet(detail, limit=280),
+        "detail_content": detail,
+        "timestamp": timestamp,
+    }]
+    for event, event_payload in zip(events, event_payloads):
+        embedding_records.append({
+            "stable_key": str(event_payload["stable_key"]),
+            "kind": "timeline_event",
+            "label": str(event_payload["title"]),
+            "summary": str(event_payload["summary"]),
+            "detail_content": session_event_detail(session_key, source_path, event),
+            "timestamp": timestamp,
+        })
+    prepared_embeddings = prepare_memory_embedding_batch(embedding_records, embedding_config)
     workspace_key = ensure_workspace_node(graph, workspace, timestamp=timestamp, origin=origin)
     upsert_memory_node(
         graph,
@@ -9411,6 +10436,8 @@ def build_import_session_payload(
         source_kind=source_label,
         timestamp=timestamp,
         origin=origin,
+        embedding_config=embedding_config,
+        prepared_embedding=prepared_embeddings.get(session_key),
     )
     graph.query(
         """
@@ -9454,6 +10481,8 @@ def build_import_session_payload(
             source_kind=source_label,
             timestamp=timestamp,
             origin=origin,
+            embedding_config=embedding_config,
+            prepared_embedding=prepared_embeddings.get(event_key),
         )
         graph.query(
             """
@@ -9668,6 +10697,7 @@ def build_consolidate_session_payload(
     title: str = "",
     max_events: int = 80,
     write: bool = False,
+    embedding_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if lookup_node_by_stable_key(graph, stable_key) is None:
         payload = blocked_missing_memory_item_payload_for_graph(graph, stable_key=stable_key, operation="consolidate_session")
@@ -9721,6 +10751,7 @@ def build_consolidate_session_payload(
         source_kind="session_consolidation",
         timestamp=timestamp,
         origin=origin,
+        embedding_config=embedding_config,
     )
     upsert_structural_edge(graph, from_stable_key=str(draft["stable_key"]), to_stable_key=workspace_key, relation="belongs_to", timestamp=timestamp, origin=origin)
     repository_keys: set[str] = set()
@@ -9849,6 +10880,7 @@ def create_graph_note_payload(
     namespaces: list[str] | tuple[str, ...] | str | None = None,
     entity_scopes: Any = None,
     metadata: Any = None,
+    embedding_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     created_at = utc_now_iso()
     stable_key = f"graph-note:{hashlib.sha1(f'{title}|{created_at}|{time.time_ns()}'.encode('utf-8')).hexdigest()[:32]}"
@@ -9865,7 +10897,7 @@ def create_graph_note_payload(
     normalized_tags = memory_tags_with_namespaces_and_entity_scopes(tags, namespaces, entity_scopes)
     normalized_metadata = memory_metadata_with_namespaces_and_entity_scopes(metadata, namespaces, entity_scopes)
 
-    create_memory_node(
+    embedding_write = create_memory_node(
         graph,
         entity_id=note_id,
         kind=kind,
@@ -9880,6 +10912,7 @@ def create_graph_note_payload(
         origin="falkor",
         tags=normalized_tags,
         metadata=normalized_metadata,
+        embedding_config=embedding_config,
     )
     create_memory_node(
         graph,
@@ -9927,6 +10960,7 @@ def create_graph_note_payload(
     create_structural_edge(graph, from_entity_id=episode_id, to_entity_id=note_id, relation="captures", timestamp=created_at, origin="falkor")
     invalidate_graph_caches(graph)
     payload = build_graph_item_detail_payload(graph, tool=tool, workspace=workspace, stable_key=stable_key)
+    payload["embedding_write"] = embedding_write_summary(embedding_write)
     payload["history_event"] = record_memory_history_event(
         graph,
         target_stable_key=stable_key,
@@ -9951,6 +10985,7 @@ def update_graph_item_payload(
     entity_scopes: Any = None,
     metadata: Any = None,
     thread_id: str | None = None,
+    embedding_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     existing = fetch_item(graph, stable_key)
     if core_memory_block_read_only(existing):
@@ -9963,35 +10998,20 @@ def update_graph_item_payload(
     normalized_entity_scopes = merge_entity_scope_filters(existing_scopes, entity_scopes)
     normalized_tags = memory_tags_with_namespaces_and_entity_scopes(existing_tags, namespaces, normalized_entity_scopes)
     normalized_metadata = memory_metadata_with_namespaces_and_entity_scopes(existing_metadata, namespaces, normalized_entity_scopes)
-    graph.query(
-        """
-        MATCH (node:MemoryNode {stable_key: $stable_key})
-        SET node.kind = $kind,
-            node.label = $label,
-            node.summary = $summary,
-            node.detail_content = $detail_content,
-            node.confidence = $confidence,
-            node.source_kind = $source_kind,
-            node.memory_tags = $memory_tags,
-            node.memory_metadata = $memory_metadata,
-            node.search_text = $search_text,
-            node.updated_at = $updated_at,
-            node.origin = $origin
-        """,
-        params={
-            "stable_key": stable_key,
-            "kind": kind,
-            "label": title,
-            "summary": summary,
-            "detail_content": content,
-            "confidence": float(existing.get("confidence") or 1.0),
-            "source_kind": str(existing.get("source_kind") or "graph_note"),
-            "memory_tags": serialize_memory_tags(normalized_tags),
-            "memory_metadata": serialize_memory_metadata(normalized_metadata),
-            "search_text": memory_search_text(kind=kind, label=title, summary=summary, detail_content=content, tags=normalized_tags, metadata=normalized_metadata),
-            "updated_at": created_at,
-            "origin": "falkor",
-        },
+    embedding_write = update_memory_node(
+        graph,
+        stable_key=stable_key,
+        kind=kind,
+        label=title,
+        summary=summary,
+        detail_content=content,
+        confidence=float(existing.get("confidence") or 1.0),
+        source_kind=str(existing.get("source_kind") or "graph_note"),
+        updated_at=created_at,
+        origin="falkor",
+        tags=normalized_tags,
+        metadata=normalized_metadata,
+        embedding_config=embedding_config,
     )
     workspace_key, repository_key, thread_key = extract_context_links(existing)
     requested_thread_id = str(thread_id or "").strip()
@@ -10039,6 +11059,7 @@ def update_graph_item_payload(
     create_structural_edge(graph, from_entity_id=episode_id, to_entity_id=existing["entity_id"], relation="updates", timestamp=created_at, origin="falkor")
     invalidate_graph_caches(graph)
     payload = build_graph_item_detail_payload(graph, tool=tool, workspace=workspace, stable_key=stable_key)
+    payload["embedding_write"] = embedding_write_summary(embedding_write)
     payload["history_event"] = record_memory_history_event(
         graph,
         target_stable_key=stable_key,
@@ -10541,8 +11562,10 @@ def short_hits(items: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any
                 "entity_overlap_score": item.get("entity_overlap_score"),
                 "entity_matches": item.get("entity_matches"),
                 "relationship_score": item.get("relationship_score"),
+                "relation_depth": item.get("relation_depth"),
                 "hybrid_score": item.get("hybrid_score"),
                 "reranker_score": item.get("reranker_score"),
+                "retrieval_confidence": item.get("retrieval_confidence"),
                 "usage_rank_multiplier": item.get("usage_rank_multiplier"),
                 "usage_rank_score": item.get("usage_rank_score"),
             }
@@ -10565,14 +11588,24 @@ def load_workspace_and_config(args: argparse.Namespace):
     return FalkorToolShim, workspace, config
 
 
-def ensure_runtime_indexes(graph) -> None:
+def ensure_runtime_indexes(graph, config: dict[str, Any] | None = None) -> None:
     statements = [
-        "CREATE INDEX ON :MemoryNode(entity_id)",
-        "CREATE INDEX ON :MemoryNode(stable_key)",
-        "CREATE INDEX ON :MemoryNode(kind)",
-        "CREATE FULLTEXT INDEX ON :SemanticItem(label, summary, detail_content, search_text)",
-        "CREATE FULLTEXT INDEX ON :FACT_EDGE(fact_text, relation, predicate)",
+        "CREATE INDEX FOR (node:MemoryNode) ON (node.entity_id)",
+        "CREATE INDEX FOR (node:MemoryNode) ON (node.stable_key)",
+        "CREATE INDEX FOR (node:MemoryNode) ON (node.kind)",
+        "CREATE FULLTEXT INDEX FOR (node:SemanticItem) ON (node.label, node.summary, node.detail_content, node.search_text)",
+        "CREATE FULLTEXT INDEX FOR ()-[fact:FACT_EDGE]-() ON (fact.fact_text, fact.relation, fact.predicate)",
     ]
+    embeddings = config if isinstance(config, dict) else EMBEDDINGS_CONFIG_DEFAULT
+    if bool(embeddings.get("enabled", True)):
+        dimension = max(1, int(embeddings.get("dimension") or EMBEDDINGS_CONFIG_DEFAULT["dimension"]))
+        similarity = str(embeddings.get("similarity_function") or "cosine").strip().lower()
+        if similarity not in {"cosine", "euclidean"}:
+            similarity = "cosine"
+        statements.append(
+            "CREATE VECTOR INDEX FOR (node:SemanticItem) ON (node.embedding) "
+            f"OPTIONS {{dimension:{dimension}, similarityFunction:'{similarity}', M:32, efConstruction:200, efRuntime:64}}"
+        )
     for statement in statements:
         try:
             graph.query(statement)
@@ -10580,12 +11613,334 @@ def ensure_runtime_indexes(graph) -> None:
             pass
 
 
-def check_runtime_index_probe(graph) -> bool:
+def runtime_index_inventory(graph) -> list[dict[str, Any]]:
     try:
-        graph.query("CALL db.idx.fulltext.queryNodes('SemanticItem', 'probe') YIELD node RETURN count(node) LIMIT 1")
-        return True
+        rows = result_rows(graph.query("CALL db.indexes()"))
     except Exception:
+        return []
+    indexes: list[dict[str, Any]] = []
+    for row in rows:
+        if len(row) < 8:
+            continue
+        indexes.append(
+            {
+                "label": str(row[0] or ""),
+                "properties": [str(value) for value in list(row[1] or [])],
+                "types": dict(row[2] or {}) if isinstance(row[2], dict) else row[2],
+                "options": dict(row[3] or {}) if isinstance(row[3], dict) else row[3],
+                "entity_type": str(row[6] or ""),
+                "status": str(row[7] or ""),
+            }
+        )
+    return indexes
+
+
+def runtime_index_has_type(
+    graph,
+    *,
+    label: str,
+    property_name: str,
+    index_type: str,
+    entity_type: str = "NODE",
+) -> bool:
+    expected_type = index_type.strip().upper()
+    expected_entity_type = entity_type.strip().upper()
+    for index in runtime_index_inventory(graph):
+        if index.get("label") != label or str(index.get("entity_type") or "").upper() != expected_entity_type:
+            continue
+        if property_name not in set(index.get("properties") or []):
+            continue
+        types = index.get("types")
+        observed: set[str] = set()
+        if isinstance(types, dict):
+            value = types.get(property_name)
+            if isinstance(value, (list, tuple, set)):
+                observed.update(str(item).upper() for item in value)
+            elif value is not None:
+                observed.add(str(value).upper())
+        elif isinstance(types, (list, tuple, set)):
+            observed.update(str(item).upper() for item in types)
+        else:
+            observed.add(str(types).upper())
+        if expected_type in observed and str(index.get("status") or "").upper() in {"OPERATIONAL", "READY"}:
+            return True
+    return False
+
+
+def check_runtime_index_probe(graph) -> bool:
+    return runtime_index_has_type(
+        graph,
+        label="SemanticItem",
+        property_name="search_text",
+        index_type="FULLTEXT",
+        entity_type="NODE",
+    ) and runtime_index_has_type(
+        graph,
+        label="FACT_EDGE",
+        property_name="fact_text",
+        index_type="FULLTEXT",
+        entity_type="RELATIONSHIP",
+    )
+
+
+def runtime_vector_index_profile(graph) -> dict[str, Any] | None:
+    for index in runtime_index_inventory(graph):
+        if index.get("label") != "SemanticItem" or str(index.get("entity_type") or "").upper() != "NODE":
+            continue
+        types = index.get("types")
+        property_types = types.get("embedding") if isinstance(types, dict) else []
+        observed = {str(value).upper() for value in list(property_types or [])}
+        if "VECTOR" not in observed:
+            continue
+        options = index.get("options")
+        property_options = options.get("embedding") if isinstance(options, dict) else {}
+        return {
+            "dimension": int((property_options or {}).get("dimension") or 0),
+            "similarity_function": str((property_options or {}).get("similarityFunction") or "").lower(),
+            "status": str(index.get("status") or ""),
+        }
+    return None
+
+
+def check_runtime_vector_index(graph, config: dict[str, Any] | None = None) -> bool:
+    if not runtime_index_has_type(
+        graph,
+        label="SemanticItem",
+        property_name="embedding",
+        index_type="VECTOR",
+        entity_type="NODE",
+    ):
         return False
+    if not isinstance(config, dict):
+        return True
+    profile = runtime_vector_index_profile(graph) or {}
+    return int(profile.get("dimension") or 0) == int(config.get("dimension") or 0) and str(
+        profile.get("similarity_function") or ""
+    ).lower() == str(config.get("similarity_function") or "cosine").lower()
+
+
+def build_embedding_status_payload(graph, config: dict[str, Any]) -> dict[str, Any]:
+    provider = str(config.get("provider") or "").strip().lower()
+    model_name = str(config.get("model") or "").strip()
+    revision = str(config.get("model_revision") or "").strip()
+    template = str(config.get("text_template_version") or EMBEDDING_TEXT_TEMPLATE_VERSION).strip()
+    dimension = int(config.get("dimension") or 0)
+    total = int(scalar_query(graph, "MATCH (node:SemanticItem) RETURN count(node)") or 0)
+    embedded = int(
+        scalar_query(graph, "MATCH (node:SemanticItem) WHERE node.embedding IS NOT NULL RETURN count(node)") or 0
+    )
+    current = int(
+        scalar_query(
+            graph,
+            """
+            MATCH (node:SemanticItem)
+            WHERE node.embedding IS NOT NULL
+              AND coalesce(node.embedding_model, '') = $model
+              AND coalesce(node.embedding_provider, '') = $provider
+              AND coalesce(node.embedding_model_revision, '') = $revision
+              AND coalesce(node.embedding_text_template, '') = $template
+              AND coalesce(node.embedding_dimension, 0) = $dimension
+              AND coalesce(node.embedding_status, '') = 'ready'
+              AND coalesce(node.embedding_source_updated_at, '') = coalesce(node.updated_at, node.created_at, '')
+            RETURN count(node)
+            """,
+            params={"provider": provider, "model": model_name, "revision": revision, "template": template, "dimension": dimension},
+        )
+        or 0
+    )
+    deferred = int(
+        scalar_query(
+            graph,
+            "MATCH (node:SemanticItem) WHERE coalesce(node.embedding_status, '') = 'deferred' RETURN count(node)",
+        )
+        or 0
+    )
+    return {
+        "enabled": bool(config.get("enabled", True)),
+        "on_write": bool(config.get("on_write", True)),
+        "provider": provider,
+        "model": model_name,
+        "model_revision": revision,
+        "text_template_version": template,
+        "dimension": dimension,
+        "similarity_function": str(config.get("similarity_function") or "cosine"),
+        "index_ready": check_runtime_vector_index(graph, config),
+        "index_profile": runtime_vector_index_profile(graph),
+        "eligible_items": total,
+        "embedded_items": embedded,
+        "current_items": current,
+        "missing_items": max(0, total - embedded),
+        "stale_items": max(0, embedded - current),
+        "deferred_items": deferred,
+        "coverage": (embedded / total) if total else 1.0,
+        "current_coverage": (current / total) if total else 1.0,
+    }
+
+
+def backfill_memory_embeddings(
+    graph,
+    config: dict[str, Any],
+    *,
+    batch_size: int | None = None,
+    limit: int = 0,
+    force: bool = False,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    started = time.perf_counter()
+    ensure_runtime_indexes(graph, config)
+    before = build_embedding_status_payload(graph, config)
+    if not bool(before.get("index_ready")):
+        return {
+            "status": "blocked",
+            "reason": "vector_index_profile_mismatch",
+            "error": "SemanticItem.embedding vector index is missing or does not match the configured dimension/similarity profile.",
+            "before": before,
+            "after": before,
+            "processed": 0,
+            "updated": 0,
+            "failed": 0,
+            "dry_run": dry_run,
+            "seconds": time.perf_counter() - started,
+        }
+    provider_ok, provider_error = embedding_provider_available(config)
+    if not bool(config.get("enabled", True)) or not provider_ok:
+        return {
+            "status": "blocked",
+            "reason": "embedding_provider_unavailable",
+            "error": provider_error or "embeddings are disabled",
+            "before": before,
+            "after": before,
+            "processed": 0,
+            "updated": 0,
+            "failed": 0,
+            "dry_run": dry_run,
+            "seconds": time.perf_counter() - started,
+        }
+
+    provider = str(config.get("provider") or "").strip().lower()
+    model_name = str(config.get("model") or "").strip()
+    revision = str(config.get("model_revision") or "").strip()
+    template = str(config.get("text_template_version") or EMBEDDING_TEXT_TEMPLATE_VERSION).strip()
+    dimension = int(config.get("dimension") or 0)
+    effective_batch_size = max(1, int(batch_size or config.get("batch_size") or 16))
+    remaining = max(0, int(limit))
+    cursor = ""
+    processed = 0
+    updated = 0
+    failures: list[dict[str, str]] = []
+    while True:
+        fetch_limit = effective_batch_size if remaining == 0 else min(effective_batch_size, remaining)
+        selection = "true" if force else """(
+            node.embedding IS NULL
+            OR coalesce(node.embedding_model, '') <> $model
+            OR coalesce(node.embedding_provider, '') <> $provider
+            OR coalesce(node.embedding_model_revision, '') <> $revision
+            OR coalesce(node.embedding_text_template, '') <> $template
+            OR coalesce(node.embedding_dimension, 0) <> $dimension
+            OR coalesce(node.embedding_status, '') <> 'ready'
+            OR coalesce(node.embedding_source_updated_at, '') <> coalesce(node.updated_at, node.created_at, '')
+        )"""
+        rows = result_rows(
+            graph.query(
+                f"""
+                MATCH (node:SemanticItem)
+                WHERE node.stable_key > $cursor AND {selection}
+                RETURN node.stable_key, node.kind, node.label, coalesce(node.summary, ''), coalesce(node.detail_content, ''), coalesce(node.updated_at, node.created_at, '')
+                ORDER BY node.stable_key
+                LIMIT $limit
+                """,
+                params={"cursor": cursor, "provider": provider, "model": model_name, "revision": revision, "template": template, "dimension": dimension, "limit": fetch_limit},
+            )
+        )
+        if not rows:
+            break
+        cursor = str(rows[-1][0] or cursor)
+        processed += len(rows)
+        if dry_run:
+            if remaining:
+                remaining -= len(rows)
+                if remaining <= 0:
+                    break
+            continue
+        texts = [
+            memory_embedding_text(
+                kind=str(row[1] or "memory_note"),
+                label=str(row[2] or ""),
+                summary=str(row[3] or ""),
+                detail_content=str(row[4] or ""),
+            )
+            for row in rows
+        ]
+        timestamp = utc_now_iso()
+        try:
+            vectors = embed_texts_with_provider(texts, config)
+            if len(vectors) != len(rows):
+                raise RuntimeError(f"embedding provider returned {len(vectors)} vectors for {len(rows)} items")
+            update_rows = []
+            for row, vector in zip(rows, vectors):
+                if dimension and len(vector) != dimension:
+                    raise RuntimeError(
+                        f"embedding dimension mismatch for {row[0]}: configured {dimension}, provider returned {len(vector)}"
+                    )
+                text_sha256 = hashlib.sha256(texts[len(update_rows)].encode("utf-8")).hexdigest()
+                update_rows.append({
+                    "stable_key": str(row[0]),
+                    "embedding": vector,
+                    "expected_updated_at": str(row[5] or ""),
+                    "text_sha256": text_sha256,
+                })
+            update_result = graph.query(
+                """
+                UNWIND $rows AS row
+                MATCH (node:SemanticItem {stable_key: row.stable_key})
+                WHERE coalesce(node.updated_at, node.created_at, '') = row.expected_updated_at
+                SET node.embedding = vecf32(row.embedding),
+                    node.embedding_status = 'ready',
+                    node.embedding_provider = $provider,
+                    node.embedding_model = $model,
+                    node.embedding_model_revision = $revision,
+                    node.embedding_text_template = $template,
+                    node.embedding_text_sha256 = row.text_sha256,
+                    node.embedding_dimension = $dimension,
+                    node.embedding_updated_at = $timestamp,
+                    node.embedding_source_updated_at = row.expected_updated_at,
+                    node.embedding_error = ''
+                RETURN collect(node.stable_key)
+                """,
+                params={"rows": update_rows, "provider": provider, "model": model_name, "revision": revision, "template": template, "dimension": dimension, "timestamp": timestamp},
+            )
+            updated_keys = {
+                str(value)
+                for value in list((result_rows(update_result) or [[[]]])[0][0] or [])
+            }
+            updated += len(updated_keys)
+            if len(updated_keys) != len(update_rows):
+                failures.extend(
+                    {"stable_key": str(row["stable_key"]), "error": "concurrent content update; embedding CAS skipped"}
+                    for row in update_rows
+                    if str(row["stable_key"]) not in updated_keys
+                )
+        except Exception as exc:
+            error = summary_snippet(str(exc), limit=500)
+            failures.extend({"stable_key": str(row[0]), "error": error} for row in rows)
+        if remaining:
+            remaining -= len(rows)
+            if remaining <= 0:
+                break
+    invalidate_graph_caches(graph)
+    after = build_embedding_status_payload(graph, config)
+    return {
+        "status": "dry_run" if dry_run else ("complete" if not failures else "partial"),
+        "before": before,
+        "after": after,
+        "processed": processed,
+        "updated": updated,
+        "failed": len(failures),
+        "failures": failures[:50],
+        "force": force,
+        "dry_run": dry_run,
+        "seconds": time.perf_counter() - started,
+    }
 
 
 def build_sync_payload(
@@ -10597,7 +11952,7 @@ def build_sync_payload(
 ) -> dict[str, Any]:
     started = time.perf_counter()
     workspace_sync = sync_workspace_payload(graph, workspace=workspace)
-    ensure_runtime_indexes(graph)
+    ensure_runtime_indexes(graph, config)
     invalidate_graph_caches(graph)
     stats = build_graph_stats_payload(graph)
     vector_count = int(scalar_query(graph, "MATCH (node:SemanticItem) WHERE node.embedding IS NOT NULL RETURN count(node)") or 0)
@@ -12590,7 +13945,90 @@ def filter_relationship_hits_by_metadata(graph, hits: list[dict[str, Any]], filt
     return [
         hit
         for hit in hits
-        if str(hit.get("source_stable_key") or "") in allowed or str(hit.get("target_stable_key") or "") in allowed
+        if {
+            str(hit.get("source_stable_key") or ""),
+            str(hit.get("target_stable_key") or ""),
+        } - {""} <= allowed
+    ]
+
+
+def filter_relationship_hits_by_endpoint_lifecycle(
+    graph,
+    hits: list[dict[str, Any]],
+    *,
+    as_of: str | None = None,
+) -> list[dict[str, Any]]:
+    if not hits:
+        return []
+    endpoint_keys = sorted(
+        {
+            str(hit.get(field) or "").strip()
+            for hit in hits
+            for field in ("source_stable_key", "target_stable_key")
+            if str(hit.get(field) or "").strip()
+        }
+    )
+    if not endpoint_keys:
+        return []
+    result = graph.query(
+        """
+        MATCH (node:MemoryNode)
+        WHERE node.stable_key IN $stable_keys
+        RETURN
+          node.stable_key,
+          coalesce(node.updated_at, node.created_at, ''),
+          coalesce(node.expired_at, ''),
+          coalesce(node.source_kind, ''),
+          coalesce(node.kind, '')
+        """,
+        params={"stable_keys": endpoint_keys},
+    )
+    endpoints = {
+        str(row[0] or ""): {
+            "stable_key": str(row[0] or ""),
+            "updated_at": str(row[1] or ""),
+            "expired_at": str(row[2] or ""),
+            "source_kind": str(row[3] or ""),
+            "kind": str(row[4] or ""),
+        }
+        for row in result_rows(result)
+        if str(row[0] or "")
+    }
+    visible = {
+        key
+        for key, item in endpoints.items()
+        if item_visible_as_of(item, as_of)
+        and item_active_for_read(item, as_of)
+        and item.get("source_kind") != "graph_episode"
+        and not key.startswith("turn-outcome:")
+    }
+    return [
+        hit
+        for hit in hits
+        if {
+            str(hit.get("source_stable_key") or ""),
+            str(hit.get("target_stable_key") or ""),
+        } - {""} <= visible
+    ]
+
+
+def filter_relationship_hits_by_lineage(
+    hits: list[dict[str, Any]],
+    invalidations: dict[str, list[dict[str, str]]],
+) -> list[dict[str, Any]]:
+    if not invalidations:
+        return hits
+    invalidated = set(invalidations)
+    return [
+        hit
+        for hit in hits
+        if not (
+            {
+                str(hit.get("source_stable_key") or ""),
+                str(hit.get("target_stable_key") or ""),
+            }
+            & invalidated
+        )
     ]
 
 
@@ -12865,9 +14303,9 @@ def build_consult_payload(
         )
 
     item_count = semantic_item_count(graph)
-    exact_items, exact_elapsed = fetch_exact_text_candidates(graph, query, limit=search_limit)
-    lexical_items, lexical_elapsed = fetch_node_lexical(graph, query, limit=search_limit)
-    entity_items, entity_elapsed = fetch_entity_overlap_candidates(graph, query, limit=search_limit)
+    exact_items, exact_elapsed = fetch_exact_text_candidates(graph, query, limit=search_limit, as_of=normalized_as_of)
+    lexical_items, lexical_elapsed = fetch_node_lexical(graph, query, limit=search_limit, as_of=normalized_as_of)
+    entity_items, entity_elapsed = fetch_entity_overlap_candidates(graph, query, limit=search_limit, as_of=normalized_as_of)
     relationship_hits: list[dict[str, Any]] = []
     relationship_candidate_items: list[dict[str, Any]] = []
     relationship_elapsed = 0.0
@@ -12876,7 +14314,12 @@ def build_consult_payload(
     token_overlap_skipped_reason: str | None = None
     token_overlap_mode = "skipped"
     if should_use_token_overlap_scan(item_count, config):
-        token_overlap_items, token_overlap_elapsed = fetch_token_overlap_candidates(graph, query, limit=search_limit)
+        token_overlap_items, token_overlap_elapsed = fetch_token_overlap_candidates(
+            graph,
+            query,
+            limit=search_limit,
+            as_of=normalized_as_of,
+        )
         token_overlap_mode = "full"
     elif should_use_recent_token_overlap_scan(item_count, config):
         recent_scan_limit = token_overlap_recent_scan_items(config)
@@ -12885,6 +14328,7 @@ def build_consult_payload(
             query,
             limit=search_limit,
             recent_scan_limit=recent_scan_limit,
+            as_of=normalized_as_of,
         )
         token_overlap_mode = "recent"
         token_overlap_skipped_reason = (
@@ -12913,6 +14357,15 @@ def build_consult_payload(
         for item in source_items:
             merge_candidate_item(deduped, item)
     lexical_items = filter_weak_lexical_hits(query, rerank_lexical_hits(query, list(deduped.values())))
+    historical_query = query_requests_historical_memory(query)
+    direct_lineage_invalidations: dict[str, list[dict[str, str]]] = {}
+    if not historical_query:
+        direct_lineage_invalidations = fetch_active_lineage_invalidations(
+            graph,
+            [str(item.get("stable_key") or "") for item in lexical_items],
+            as_of=normalized_as_of,
+        )
+        lexical_items = filter_items_by_lineage(lexical_items, direct_lineage_invalidations)
     should_fetch_relationships = query_requests_relationship_context(query) or (
         bool(extract_entity_tokens(query)) and not lexical_results_are_strong(lexical_items, limit=limit, config=config)
     )
@@ -12952,10 +14405,15 @@ def build_consult_payload(
             hybrid_skipped_reason = "lexical_fast_path"
         elif not lexical_items and query_has_unlikely_identifier(query):
             hybrid_skipped_reason = "no_lexical_anchor_for_identifier_query"
-        elif not lexical_items and not extract_entity_tokens(query) and not query_requests_relationship_context(query):
-            hybrid_skipped_reason = "no_direct_anchor_for_semantic_query"
         else:
-            vector_items, vector_elapsed = fetch_vector_candidates(graph, tool, query, config, limit=search_limit)
+            vector_items, vector_elapsed = fetch_vector_candidates(
+                graph,
+                tool,
+                query,
+                config,
+                limit=search_limit,
+                as_of=normalized_as_of,
+            )
             vector_items = apply_query_sensitive_scoring(query, vector_items)
             vector_items = filter_candidates_by_metadata(graph, vector_items, filters)
             temporal_candidate_count_before += len(vector_items)
@@ -12967,14 +14425,36 @@ def build_consult_payload(
             if not reranker_enabled_for_current_process(config):
                 hybrid_skipped_reason = "reranker_disabled_for_cli"
                 merged_items = apply_query_sensitive_scoring(query, merged_items)
-            elif len(merged_items) >= rerank_min_candidates:
+            elif len(merged_items) >= rerank_min_candidates or bool(vector_items):
                 started = time.perf_counter()
                 merged_items = tool.rerank_candidates(query, merged_items, config)
-                merged_items = tool.filter_low_relevance_candidates(query, merged_items, config)
                 reranked_elapsed = time.perf_counter() - started
             else:
                 hybrid_skipped_reason = "too_few_candidates_for_rerank"
                 merged_items = apply_query_sensitive_scoring(query, merged_items)
+
+    relation_expansion_skipped_reason: str | None = None
+    try:
+        expanded_relationship_hits, expanded_relation_items, expansion_elapsed = fetch_relation_expansion(
+            graph,
+            query,
+            merged_items,
+            limit=search_limit,
+            as_of=normalized_as_of,
+            min_fact_rating=normalized_min_fact_rating,
+            max_depth=2,
+            config=config,
+        )
+        relationship_elapsed += expansion_elapsed
+        relationship_hits.extend(expanded_relationship_hits)
+        for item in expanded_relation_items:
+            merge_candidate_item(deduped, item)
+        relationship_candidate_items = sort_candidates(
+            relationship_candidate_items + expanded_relation_items
+        )
+        merged_items = merge_candidates(merged_items, expanded_relation_items, limit=limit)
+    except Exception as exc:
+        relation_expansion_skipped_reason = summary_snippet(str(exc), limit=240) or type(exc).__name__
 
     exact_items = filter_candidates_by_metadata(graph, exact_items, filters)
     lexical_items = filter_candidates_by_metadata(graph, lexical_items, filters)
@@ -12997,7 +14477,60 @@ def build_consult_payload(
     relationship_candidate_items = filter_items_for_read_lifecycle(relationship_candidate_items, normalized_as_of)
     vector_items = filter_items_for_read_lifecycle(vector_items, normalized_as_of)
     merged_items = filter_items_for_read_lifecycle(merged_items, normalized_as_of)
-    relationship_hits = filter_relationship_hits_by_min_fact_rating(relationship_hits, normalized_min_fact_rating)
+    relationship_candidate_deduped: dict[str, dict[str, Any]] = {}
+    for item in relationship_candidate_items:
+        merge_candidate_item(relationship_candidate_deduped, item)
+    relationship_candidate_items = sort_candidates(list(relationship_candidate_deduped.values()))
+    relationship_hits = dedupe_relationship_hits(
+        filter_relationship_hits_by_min_fact_rating(relationship_hits, normalized_min_fact_rating)
+    )
+    relationship_hits = filter_relationship_hits_by_metadata(graph, relationship_hits, filters)
+    relationship_hits = filter_relationship_hits_by_endpoint_lifecycle(
+        graph,
+        relationship_hits,
+        as_of=normalized_as_of,
+    )
+
+    lineage_candidate_count_before = len(merged_items)
+    lineage_invalidations: dict[str, list[dict[str, str]]] = {}
+    if not historical_query:
+        lineage_keys = {
+            str(item.get("stable_key") or "")
+            for items in (
+                exact_items,
+                lexical_items,
+                entity_items,
+                token_overlap_items,
+                relationship_candidate_items,
+                vector_items,
+                merged_items,
+            )
+            for item in items
+            if str(item.get("stable_key") or "")
+        }
+        lineage_keys.update(
+            str(hit.get(field) or "")
+            for hit in relationship_hits
+            for field in ("source_stable_key", "target_stable_key")
+            if str(hit.get(field) or "")
+        )
+        lineage_invalidations = fetch_active_lineage_invalidations(
+            graph,
+            sorted(lineage_keys),
+            as_of=normalized_as_of,
+        )
+        for stable_key, records in direct_lineage_invalidations.items():
+            lineage_invalidations.setdefault(stable_key, []).extend(records)
+        exact_items = filter_items_by_lineage(exact_items, lineage_invalidations)
+        lexical_items = filter_items_by_lineage(lexical_items, lineage_invalidations)
+        entity_items = filter_items_by_lineage(entity_items, lineage_invalidations)
+        token_overlap_items = filter_items_by_lineage(token_overlap_items, lineage_invalidations)
+        relationship_candidate_items = filter_items_by_lineage(relationship_candidate_items, lineage_invalidations)
+        vector_items = filter_items_by_lineage(vector_items, lineage_invalidations)
+        merged_items = filter_items_by_lineage(merged_items, lineage_invalidations)
+        relationship_hits = filter_relationship_hits_by_lineage(relationship_hits, lineage_invalidations)
+    lineage_candidate_count_after = len(merged_items)
+
     temporal_candidate_count_after = (
         len(exact_items)
         + len(lexical_items)
@@ -13008,27 +14541,42 @@ def build_consult_payload(
     )
     lifecycle_candidate_count_after = temporal_candidate_count_after
     lifecycle_candidate_count_before = max(lifecycle_candidate_count_before, lifecycle_candidate_count_after)
-    relationship_hits = filter_relationship_hits_by_metadata(graph, relationship_hits, filters)
-    ranking_usage_by_key = fetch_memory_usage(
-        graph,
-        [str(item.get("stable_key") or "") for item in merged_items],
-    )
-    merged_items = apply_usage_adaptive_ranking(merged_items, ranking_usage_by_key)
+    merged_items, abstention_payload = apply_calibrated_abstention(query, merged_items, config)
+    if normalized_as_of:
+        ranking_usage_by_key: dict[str, dict[str, Any]] = {}
+        usage_ranking_payload = {
+            "policy": MEMORY_USAGE_RANKING_POLICY,
+            "active": False,
+            "reason": "disabled_for_as_of_snapshot",
+        }
+        merged_items = sort_candidates(merged_items)
+    else:
+        ranking_usage_by_key = fetch_memory_usage(
+            graph,
+            [str(item.get("stable_key") or "") for item in merged_items],
+        )
+        merged_items = apply_usage_adaptive_ranking(merged_items, ranking_usage_by_key)
+        usage_ranking_payload = {
+            "policy": MEMORY_USAGE_RANKING_POLICY,
+            "active": True,
+            "reason": "current_read",
+        }
     hits = short_hits(merged_items, limit=limit)
     lexical_side_hits = short_hits(lexical_items, limit=limit)
     entity_side_hits = short_hits(entity_items, limit=limit)
     relationship_side_hits = short_hits(relationship_candidate_items, limit=limit)
     vector_side_hits = short_hits(vector_items, limit=limit)
+    relationship_hits = filter_relationship_hits_for_answer_context(relationship_hits, hits)
     read_guard = build_memory_read_guard_payload(
         graph,
         hits + lexical_side_hits + entity_side_hits + relationship_side_hits + vector_side_hits,
     )
+    read_guard = augment_read_guard_with_relationship_hits(read_guard, relationship_hits)
     hits = filter_items_by_read_guard(hits, read_guard)
     lexical_side_hits = filter_items_by_read_guard(lexical_side_hits, read_guard)
     entity_side_hits = filter_items_by_read_guard(entity_side_hits, read_guard)
     relationship_side_hits = filter_items_by_read_guard(relationship_side_hits, read_guard)
     vector_side_hits = filter_items_by_read_guard(vector_side_hits, read_guard)
-    relationship_hits = filter_relationship_hits_for_answer_context(relationship_hits, hits)
     relationship_hits = filter_relationship_hits_by_read_guard(relationship_hits, read_guard)
     access_log = record_memory_access(
         graph,
@@ -13036,7 +14584,11 @@ def build_consult_payload(
         source="consult",
         query=query,
     )
-    usage_by_key = fetch_memory_usage(graph, [str(hit.get("stable_key") or "") for hit in hits])
+    usage_by_key = (
+        {}
+        if normalized_as_of
+        else fetch_memory_usage(graph, [str(hit.get("stable_key") or "") for hit in hits])
+    )
     attach_usage_to_items(hits, usage_by_key)
     side_channel_candidates = (
         lexical_side_hits
@@ -13078,6 +14630,7 @@ def build_consult_payload(
             "token_overlap_mode": token_overlap_mode,
             "token_overlap_skipped_reason": token_overlap_skipped_reason,
             "hybrid_skipped_reason": hybrid_skipped_reason,
+            "relation_expansion_skipped_reason": relation_expansion_skipped_reason,
             "filters": filters,
             "filter_candidate_limit": search_limit,
             "min_fact_rating": normalized_min_fact_rating,
@@ -13091,6 +14644,15 @@ def build_consult_payload(
                 before_count=lifecycle_candidate_count_before,
                 after_count=lifecycle_candidate_count_after,
             ),
+            "lineage": lineage_filter_payload(
+                historical_query=historical_query,
+                invalidations=lineage_invalidations,
+                before_count=lineage_candidate_count_before,
+                after_count=lineage_candidate_count_after,
+                as_of=normalized_as_of,
+            ),
+            "abstention": abstention_payload,
+            "usage_adaptive_ranking": usage_ranking_payload,
         },
         "telemetry": {
             "access": access_log,
@@ -13969,6 +15531,7 @@ def materialize_derived_observation(
     tool,
     workspace: dict[str, Any],
     draft: dict[str, Any],
+    embedding_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     stable_key = str(draft.get("stable_key") or "").strip()
     if not stable_key:
@@ -14008,6 +15571,7 @@ def materialize_derived_observation(
         origin="falkor",
         tags=tags,
         metadata=metadata,
+        embedding_config=embedding_config,
     )
     workspace_key = ensure_workspace_node(graph, workspace, timestamp=timestamp, origin="falkor")
     if workspace_key:
@@ -14108,6 +15672,7 @@ def build_observe_payload(
     title: str = "",
     write: bool = False,
     write_if_stale: bool = False,
+    embedding_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     seed_key = str(stable_key or "").strip()
     if lookup_node_by_stable_key(graph, seed_key) is None:
@@ -14193,6 +15758,7 @@ def build_observe_payload(
             tool=tool,
             workspace=workspace,
             draft=draft,
+            embedding_config=embedding_config,
         )
         if isinstance(write_payload, dict):
             written_item = write_payload.get("item") if isinstance(write_payload.get("item"), dict) else None
@@ -14306,9 +15872,11 @@ def fetch_context_lineage(graph, stable_keys: list[str], *, limit: int = 80, as_
         WHERE center.stable_key IN $stable_keys
           AND coalesce(fact.relation, '') IN $relations
           AND ($as_of = '' OR coalesce(fact.updated_at, fact.created_at, '') <= $as_of)
+          AND ($as_of = '' OR coalesce(invalidator.updated_at, invalidator.created_at, '') <= $as_of)
           AND (coalesce(fact.valid_at, '') = '' OR coalesce(fact.valid_at, '') <= $read_time)
           AND (coalesce(fact.invalid_at, '') = '' OR coalesce(fact.invalid_at, '') > $read_time)
           AND (coalesce(fact.expired_at, '') = '' OR coalesce(fact.expired_at, '') > $read_time)
+          AND (coalesce(invalidator.expired_at, '') = '' OR coalesce(invalidator.expired_at, '') > $read_time)
         RETURN
           center.stable_key,
           fact.relation,
@@ -14336,9 +15904,11 @@ def fetch_context_lineage(graph, stable_keys: list[str], *, limit: int = 80, as_
         WHERE center.stable_key IN $stable_keys
           AND coalesce(fact.relation, '') IN $relations
           AND ($as_of = '' OR coalesce(fact.updated_at, fact.created_at, '') <= $as_of)
+          AND ($as_of = '' OR coalesce(target.updated_at, target.created_at, '') <= $as_of)
           AND (coalesce(fact.valid_at, '') = '' OR coalesce(fact.valid_at, '') <= $read_time)
           AND (coalesce(fact.invalid_at, '') = '' OR coalesce(fact.invalid_at, '') > $read_time)
           AND (coalesce(fact.expired_at, '') = '' OR coalesce(fact.expired_at, '') > $read_time)
+          AND (coalesce(target.expired_at, '') = '' OR coalesce(target.expired_at, '') > $read_time)
         RETURN
           center.stable_key,
           fact.relation,
@@ -16640,7 +18210,7 @@ def benchmark_precision_abstention(graph, *, tool, workspace: dict[str, Any], co
             "seconds": round(elapsed, 3),
         }
     )
-    relationship_noise_query = "memory layer relations"
+    relationship_noise_query = f"relations {marker}"
     payload, elapsed, error = timed_call(
         lambda: build_consult_payload(
             graph,
@@ -18140,11 +19710,12 @@ def build_benchmark_payload(
     skip_write_probe: bool,
 ) -> dict[str, Any]:
     started = time.perf_counter()
-    ensure_runtime_indexes(graph)
+    ensure_runtime_indexes(graph, config)
     sync_payload = build_sync_payload(graph, tool=tool, workspace=workspace, config=config) if include_sync else None
     stats = build_graph_stats_payload(graph)
     samples = sample_semantic_items(graph, max(1, sample_size))
     embedding_available, embedding_error = embedding_provider_available(config)
+    embedding_status = build_embedding_status_payload(graph, config)
     reranker_available, reranker_error = reranker_provider_available(config)
     diagnostics_payload = build_diagnostics_command_payload(argparse.Namespace(log="all", limit=1))
     diagnostic_logs = diagnostics_payload.get("logs") if isinstance(diagnostics_payload, dict) else {}
@@ -18177,6 +19748,21 @@ def build_benchmark_payload(
             "passed": embedding_available,
             "provider": str(config.get("provider") or ""),
             "error": embedding_error,
+        },
+        {
+            "name": "embedding_index_profile_matches_config",
+            "passed": bool(embedding_status.get("index_ready")),
+            "profile": embedding_status.get("index_profile"),
+            "configured_dimension": embedding_status.get("dimension"),
+            "configured_similarity_function": embedding_status.get("similarity_function"),
+        },
+        {
+            "name": "semantic_embeddings_are_current",
+            "passed": int(embedding_status.get("current_items") or 0) == int(embedding_status.get("eligible_items") or 0),
+            "coverage": embedding_status.get("current_coverage"),
+            "current_items": embedding_status.get("current_items"),
+            "eligible_items": embedding_status.get("eligible_items"),
+            "stale_items": embedding_status.get("stale_items"),
         },
         {
             "name": "reranker_provider_configured",
@@ -18246,6 +19832,7 @@ def _open_workspace_graph_once(args: argparse.Namespace):
         graph_name_base=args.graph_name,
         lite_path=resolved_lite_path(args),
     )
+    ensure_runtime_indexes(graph, config)
     return tool, workspace, config, graph
 
 
@@ -18599,7 +20186,7 @@ def current_write_thread_id(explicit_thread_id: str | None = None) -> str | None
 
 
 def cmd_import_session(args: argparse.Namespace) -> None:
-    tool, workspace, _config, graph = open_workspace_graph(args)
+    tool, workspace, config, graph = open_workspace_graph(args)
     payload = build_import_session_payload(
         graph,
         tool=tool,
@@ -18610,6 +20197,7 @@ def cmd_import_session(args: argparse.Namespace) -> None:
         max_events=int(getattr(args, "max_events", 200) or 200),
         dry_run=bool(getattr(args, "dry_run", False)),
         repository_root_path=repository_scope_path_from_args(args),
+        embedding_config=config,
     )
     if not bool(getattr(args, "dry_run", False)) and str((payload.get("workflow") or {}).get("status") or "") == "ok":
         attach_write_ack_after_write(payload, graph, stable_key=payload_written_stable_key(payload), operation="import_session")
@@ -18618,7 +20206,7 @@ def cmd_import_session(args: argparse.Namespace) -> None:
 
 
 def cmd_consolidate_session(args: argparse.Namespace) -> None:
-    tool, workspace, _config, graph = open_workspace_graph(args)
+    tool, workspace, config, graph = open_workspace_graph(args)
     payload = build_consolidate_session_payload(
         graph,
         tool=tool,
@@ -18628,6 +20216,7 @@ def cmd_consolidate_session(args: argparse.Namespace) -> None:
         title=str(getattr(args, "title", "") or ""),
         max_events=int(getattr(args, "max_events", 80) or 80),
         write=bool(getattr(args, "write", False)),
+        embedding_config=config,
     )
     if payload.get("blocked"):
         print(json.dumps(payload, indent=2))
@@ -18639,7 +20228,7 @@ def cmd_consolidate_session(args: argparse.Namespace) -> None:
 
 
 def cmd_observe(args: argparse.Namespace) -> None:
-    tool, workspace, _config, graph = open_workspace_graph(args)
+    tool, workspace, config, graph = open_workspace_graph(args)
     payload = build_observe_payload(
         graph,
         tool=tool,
@@ -18650,6 +20239,7 @@ def cmd_observe(args: argparse.Namespace) -> None:
         title=str(getattr(args, "title", "") or ""),
         write=bool(getattr(args, "write", False)),
         write_if_stale=bool(getattr(args, "write_if_stale", False)),
+        embedding_config=config,
     )
     if payload.get("blocked"):
         print(json.dumps(payload, indent=2))
@@ -18792,6 +20382,12 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
 
     payload = run_with_stale_falkordb_lite_retries(args, operation)
     print(json.dumps(payload, indent=2))
+
+
+def cmd_evaluate(args: argparse.Namespace) -> None:
+    from autopsy_memory.evaluation.command import handle_evaluate
+
+    handle_evaluate(args)
 
 
 NOTE_KIND_ALIASES = {
@@ -19819,9 +21415,53 @@ def filter_items_by_read_guard(items: list[dict[str, Any]], read_guard: dict[str
     return [item for item in items if str(item.get("stable_key") or item.get("stableKey") or "") not in blocked_keys]
 
 
+def relationship_read_guard_key(hit: dict[str, Any]) -> str:
+    payload = "\n".join(
+        str(hit.get(key) or "")
+        for key in ("source_stable_key", "target_stable_key", "relation", "predicate", "fact_text")
+    )
+    return f"relation-fact:{hashlib.sha256(payload.encode('utf-8')).hexdigest()[:24]}"
+
+
+def augment_read_guard_with_relationship_hits(
+    read_guard: dict[str, Any],
+    relationship_hits: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not relationship_hits:
+        return read_guard
+    blocked_relationships: list[dict[str, Any]] = []
+    for hit in relationship_hits:
+        guard_key = relationship_read_guard_key(hit)
+        blocked = memory_read_guard_scan_item(
+            {
+                "stable_key": guard_key,
+                "kind": "relation_fact",
+                "title": f"{hit.get('source_label') or hit.get('source_stable_key') or 'memory'} {hit.get('relation') or 'related_to'} {hit.get('target_label') or hit.get('target_stable_key') or 'memory'}",
+                "content": str(hit.get("fact_text") or ""),
+            }
+        )
+        if blocked:
+            blocked_relationships.append(blocked)
+    if not blocked_relationships:
+        return read_guard
+    payload = dict(read_guard or {})
+    blocked_items = list(payload.get("blocked_items") or []) + blocked_relationships
+    payload["enabled"] = True
+    payload["policy"] = str(payload.get("policy") or "unsafe_memory_read_guard_v1")
+    payload["blocked_relationship_keys"] = [item["stable_key"] for item in blocked_relationships]
+    payload["blocked_items"] = blocked_items
+    payload["blocked_count"] = len(blocked_items)
+    return payload
+
+
 def filter_relationship_hits_by_read_guard(relationship_hits: list[dict[str, Any]], read_guard: dict[str, Any] | None) -> list[dict[str, Any]]:
     blocked_keys = read_guard_blocked_keys(read_guard)
-    if not blocked_keys:
+    blocked_relationship_keys = {
+        str(key)
+        for key in list((read_guard or {}).get("blocked_relationship_keys") or [])
+        if str(key)
+    }
+    if not blocked_keys and not blocked_relationship_keys:
         return relationship_hits
     filtered = []
     for hit in relationship_hits:
@@ -19831,6 +21471,8 @@ def filter_relationship_hits_by_read_guard(relationship_hits: list[dict[str, Any
             str(hit.get("stable_key") or ""),
         }
         if endpoints & blocked_keys:
+            continue
+        if relationship_read_guard_key(hit) in blocked_relationship_keys:
             continue
         filtered.append(hit)
     return filtered
@@ -19904,7 +21546,7 @@ def create_requested_fact_relations(graph, *, source_stable_key: str, args: argp
 
 
 def cmd_create_note(args: argparse.Namespace) -> None:
-    tool, workspace, _config, graph = open_workspace_graph(args)
+    tool, workspace, config, graph = open_workspace_graph(args)
     command_kind = normalize_note_kind(getattr(args, "command", None))
     requested_kind = str(getattr(args, "kind", "") or "").strip()
     outcome = str(getattr(args, "outcome", "") or "").strip()
@@ -19949,8 +21591,10 @@ def cmd_create_note(args: argparse.Namespace) -> None:
         namespaces=list(getattr(args, "namespace", None) or []),
         entity_scopes=entity_scopes_from_args(args),
         metadata=list(getattr(args, "metadata", None) or []),
+        embedding_config=config,
     )
     stable_key = payload_item_stable_key(payload)
+    embedding_write = payload.get("embedding_write")
     if stable_key:
         relations = create_requested_fact_relations_from_specs(
             graph,
@@ -19961,6 +21605,8 @@ def cmd_create_note(args: argparse.Namespace) -> None:
         if relations:
             payload = build_graph_item_detail_payload(graph, tool=tool, workspace=workspace, stable_key=stable_key)
             payload["created_relations"] = relations
+            if embedding_write is not None:
+                payload["embedding_write"] = embedding_write
     attach_write_ack_after_write(payload, graph, stable_key=stable_key, operation="create")
     payload["write_quality"] = write_quality
     refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
@@ -19969,7 +21615,7 @@ def cmd_create_note(args: argparse.Namespace) -> None:
 
 
 def cmd_update_item(args: argparse.Namespace) -> None:
-    tool, workspace, _config, graph = open_workspace_graph(args)
+    tool, workspace, config, graph = open_workspace_graph(args)
     title, content = note_text_from_args(args)
     kind = normalize_note_kind(getattr(args, "kind", None), fallback="memory_note")
     source = lookup_node_by_stable_key(graph, str(args.stable_key))
@@ -20011,12 +21657,14 @@ def cmd_update_item(args: argparse.Namespace) -> None:
         entity_scopes=entity_scopes_from_args(args) if entity_scope_args_present(args) else None,
         metadata=list(getattr(args, "metadata", None)) if getattr(args, "metadata", None) is not None else None,
         thread_id=current_write_thread_id(getattr(args, "thread_id", None)),
+        embedding_config=config,
     )
     if payload.get("blocked"):
         payload["write_quality"] = write_quality
         print(json.dumps(payload, indent=2))
         return
     if relation_specs:
+        embedding_write = payload.get("embedding_write")
         payload["created_relations"] = create_requested_fact_relations_from_specs(
             graph,
             source_stable_key=args.stable_key,
@@ -20026,6 +21674,8 @@ def cmd_update_item(args: argparse.Namespace) -> None:
         payload = build_graph_item_detail_payload(graph, tool=tool, workspace=workspace, stable_key=args.stable_key) | {
             "created_relations": payload["created_relations"]
         }
+        if embedding_write is not None:
+            payload["embedding_write"] = embedding_write
     attach_write_ack_after_write(payload, graph, stable_key=args.stable_key, operation="update")
     payload["write_quality"] = write_quality
     refresh_activity_snapshot(graph, tool=tool, workspace=workspace)
@@ -20613,6 +22263,7 @@ def restore_memory_payload(
     dry_run: bool,
     replace: bool,
     include_operational: bool,
+    embedding_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     schema_version = payload.get("schema_version")
     if schema_version != 1:
@@ -20680,6 +22331,20 @@ def restore_memory_payload(
         for key in sorted(existing_keys):
             delete_graph_item_payload(graph, stable_key=key, record_history=False)
 
+    prepared_embeddings = prepare_memory_embedding_batch(
+        [
+            {
+                "stable_key": item["stable_key"],
+                "kind": item["kind"],
+                "label": item["title"],
+                "summary": item["summary"],
+                "detail_content": item["content"],
+                "timestamp": item["timestamp"],
+            }
+            for item in items
+        ],
+        embedding_config,
+    )
     created_items = 0
     updated_items = 0
     for item in items:
@@ -20697,6 +22362,8 @@ def restore_memory_payload(
             origin="restore",
             tags=item.get("tags") or [],
             metadata=item.get("metadata") or {},
+            embedding_config=embedding_config,
+            prepared_embedding=prepared_embeddings.get(item["stable_key"]),
         )
         if item.get("expired_at") or item.get("expiration_reason") or item.get("pinned_at") or item.get("pin_label") or item.get("pin_reason"):
             graph.query(
@@ -20896,7 +22563,7 @@ def cmd_restore(args: argparse.Namespace) -> None:
         ))
         return
     try:
-        _tool, workspace, _config, graph = open_workspace_graph_checked(args)
+        _tool, workspace, config, graph = open_workspace_graph_checked(args)
     except Exception as exc:
         if bool(getattr(args, "dry_run", False)):
             print(json.dumps(
@@ -20913,7 +22580,7 @@ def cmd_restore(args: argparse.Namespace) -> None:
             return
         print(json.dumps(falkor_start_failure_payload(args, exc), indent=2))
         raise SystemExit(1)
-    ensure_runtime_indexes(graph)
+    ensure_runtime_indexes(graph, config)
     report = restore_memory_payload(
         graph,
         workspace=workspace,
@@ -20922,6 +22589,7 @@ def cmd_restore(args: argparse.Namespace) -> None:
         dry_run=bool(getattr(args, "dry_run", False)),
         replace=bool(getattr(args, "replace", False)),
         include_operational=bool(getattr(args, "include_operational", False)),
+        embedding_config=config,
     )
     if not bool(getattr(args, "dry_run", False)) and str((report.get("workflow") or {}).get("status") or "") == "ok":
         attach_auto_backup_after_write(report, graph, workspace, reason="restore")
@@ -21935,8 +23603,8 @@ def build_embedded_snapshot_repair_payload(args: argparse.Namespace) -> dict[str
         "message": "Stale embedded snapshot files were moved into a repair bundle. The original guard was not lowered in place.",
     }
     if restore_backup:
-        _tool, restore_workspace, _config, graph = _open_workspace_graph_once(args)
-        ensure_runtime_indexes(graph)
+        _tool, restore_workspace, config, graph = _open_workspace_graph_once(args)
+        ensure_runtime_indexes(graph, config)
         restore_payload = load_restore_json(restore_backup)
         restore_report = restore_memory_payload(
             graph,
@@ -21946,6 +23614,7 @@ def build_embedded_snapshot_repair_payload(args: argparse.Namespace) -> dict[str
             dry_run=False,
             replace=False,
             include_operational=bool(getattr(args, "include_operational", False)),
+            embedding_config=config,
         )
         payload["restore"] = restore_report
         payload["workflow"] = {
@@ -22227,10 +23896,11 @@ def build_diagnostics_command_payload(args: argparse.Namespace) -> dict[str, Any
 def build_health_payload(args: argparse.Namespace) -> dict[str, Any]:
     started = time.perf_counter()
     tool, workspace, config, graph = open_workspace_graph(args)
-    ensure_runtime_indexes(graph)
+    ensure_runtime_indexes(graph, config)
     stats = build_graph_stats_payload(graph)
     vector_count = int(scalar_query(graph, "MATCH (node:SemanticItem) WHERE node.embedding IS NOT NULL RETURN count(node)") or 0)
     index_ok = check_runtime_index_probe(graph)
+    embedding_status = build_embedding_status_payload(graph, config)
     checks = [
         python_version_check(),
         installed_autopsy_command_check(),
@@ -22253,7 +23923,14 @@ def build_health_payload(args: argparse.Namespace) -> dict[str, Any]:
     item_count = int(stats.get("itemCount") or 0)
     backup_health = backup_freshness_status(backup, item_count=item_count)
     graph_ok = scalar_query(graph, "MATCH (node) RETURN count(node) LIMIT 1") is not None and index_ok
-    ok = required_ok and graph_ok and bool(backup_health.get("ok"))
+    embeddings_ready = (
+        not bool(config.get("enabled", True))
+        or (
+            bool(embedding_status.get("index_ready"))
+            and int(embedding_status.get("current_items") or 0) == int(embedding_status.get("eligible_items") or 0)
+        )
+    )
+    ok = required_ok and graph_ok and embeddings_ready and bool(backup_health.get("ok"))
     diagnostics = build_diagnostics_payload()
     return {
         "ok": ok,
@@ -22274,6 +23951,9 @@ def build_health_payload(args: argparse.Namespace) -> dict[str, Any]:
             "indexes_ready": index_ok,
             "graph_ready": graph_ok,
             "embeddings_configured": bool(config.get("enabled", True)),
+            "embeddings_ready": embeddings_ready,
+            "embedding_index_ready": bool(embedding_status.get("index_ready")),
+            "embedding_current_coverage": float(embedding_status.get("current_coverage") or 0.0),
             "reranker_configured": bool(reranker_config(config).get("enabled", False)),
             "init_managed_targets": managed_targets,
             "init_target_count": len(init_targets),
@@ -22283,6 +23963,7 @@ def build_health_payload(args: argparse.Namespace) -> dict[str, Any]:
         },
         "init_targets": init_targets,
         "backup": backup,
+        "embeddings": embedding_status,
         "backup_health": backup_health,
         "diagnostics": diagnostics,
         "paths": {
@@ -22295,8 +23976,8 @@ def build_health_payload(args: argparse.Namespace) -> dict[str, Any]:
         "workflow": {
             "status": "ok" if ok else "needs_attention",
             "complete": ok,
-            "next_step": "done" if ok else "inspect_failed_checks_or_backup",
-            "message": "Autopsy memory health checks passed." if ok else "Autopsy memory health found required checks or backup freshness issues that need attention.",
+            "next_step": "done" if ok else ("run_embeddings_backfill" if not embeddings_ready else "inspect_failed_checks_or_backup"),
+            "message": "Autopsy memory health checks passed." if ok else "Autopsy memory health found required runtime, index, embedding-coverage, or backup checks that need attention.",
         },
         "timings": {"health_s": round(time.perf_counter() - started, 3)},
     }
@@ -23111,6 +24792,32 @@ def cmd_model_warmup(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def cmd_embeddings(args: argparse.Namespace) -> None:
+    _tool, workspace, config, graph = open_workspace_graph(args)
+    ensure_runtime_indexes(graph, config)
+    action = str(getattr(args, "embeddings_action", "") or "")
+    if action == "status":
+        print(json.dumps({"status": "ok", "workspace": workspace_payload(workspace), **build_embedding_status_payload(graph, config)}, indent=2))
+        return
+    if action == "backfill":
+        payload = backfill_memory_embeddings(
+            graph,
+            config,
+            batch_size=getattr(args, "batch_size", None),
+            limit=int(getattr(args, "limit", 0) or 0),
+            force=bool(getattr(args, "force", False)),
+            dry_run=bool(getattr(args, "dry_run", False)),
+        )
+        payload["workspace"] = workspace_payload(workspace)
+        if not bool(getattr(args, "dry_run", False)) and payload.get("status") in {"complete", "partial"}:
+            attach_auto_backup_after_write(payload, graph, workspace, reason="embedding_backfill")
+        print(json.dumps(payload, indent=2))
+        if payload.get("status") in {"blocked", "partial"}:
+            raise SystemExit(1)
+        return
+    fail(f"unknown embeddings action: {action}", 2)
+
+
 def cmd_menubar(args: argparse.Namespace) -> None:
     if sys.platform != "darwin":
         raise SystemExit("The native Autopsy menu bar app is only supported on macOS.")
@@ -23229,6 +24936,7 @@ def build_parser() -> argparse.ArgumentParser:
             consult=cmd_consult,
             search=cmd_search,
             benchmark=cmd_benchmark,
+            evaluate=cmd_evaluate,
             audit=cmd_audit,
             export=cmd_export,
             backup=cmd_backup,
@@ -23241,6 +24949,7 @@ def build_parser() -> argparse.ArgumentParser:
             shared_server=cmd_shared_server,
             menubar=cmd_menubar,
             model_warmup=cmd_model_warmup,
+            embeddings=cmd_embeddings,
             create_note=cmd_create_note,
             update_item=cmd_update_item,
             delete_item=cmd_delete_item,

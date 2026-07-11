@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/naveenshaji/autopsy/main/src/autopsy_memory/evaluation/schemas/report-v1.schema.json",
+  "title": "Autopsy external evaluation report v1",
+  "type": "object",
+  "required": ["schema", "evaluation", "status", "started_at", "completed_at", "dataset", "configuration", "runtime", "adapter", "cost", "metrics", "artifacts"],
+  "properties": {
+    "schema": {"const": "autopsy-external-evaluation/v1"},
+    "evaluation": {"const": "external-retrieval"},
+    "status": {"enum": ["complete", "completed_with_errors"]},
+    "started_at": {"type": "string", "format": "date-time"},
+    "completed_at": {"type": "string", "format": "date-time"},
+    "comparable_run": {"type": "boolean"},
+    "qualification": {"type": "object"},
+    "dataset": {"type": "object"},
+    "configuration": {"type": "object"},
+    "runtime": {"type": "object"},
+    "adapter": {"type": "object"},
+    "cost": {"type": "object"},
+    "retrieval_channel_counts": {"type": "object"},
+    "ranking_instability_cases": {"type": "integer", "minimum": 0},
+    "leakage_audit": {"type": "object"},
+    "ingestion": {"type": "object"},
+    "metrics": {"type": "object"},
+    "case_errors": {"type": "array"},
+    "artifacts": {"type": "object"},
+    "timings": {"type": "object"},
+    "latency_profiles_seconds": {"type": "object"},
+    "limitations": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": false
+}

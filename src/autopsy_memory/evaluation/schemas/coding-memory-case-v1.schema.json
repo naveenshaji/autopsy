@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/naveenshaji/autopsy/main/src/autopsy_memory/evaluation/schemas/coding-memory-case-v1.schema.json",
+  "title": "Autopsy coding-memory evaluation case v1",
+  "type": "object",
+  "required": ["schema", "case_id", "category", "query", "documents", "relevant_document_ids"],
+  "properties": {
+    "schema": {"const": "autopsy-coding-memory-case/v1"},
+    "case_id": {"type": "string", "minLength": 1},
+    "corpus_id": {"type": "string"},
+    "category": {"type": "string", "minLength": 1},
+    "query": {"type": "string", "minLength": 1},
+    "expected_abstain": {"type": "boolean"},
+    "answer": {"type": ["string", "number", "boolean", "null"]},
+    "as_of": {"type": "string"},
+    "relevant_document_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "forbidden_document_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "documents": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "text"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "title": {"type": "string"},
+          "text": {"type": "string"},
+          "timestamp": {"type": "string"},
+          "expired_at": {"type": "string"},
+          "session_id": {"type": "string"},
+          "metadata": {"type": "object"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "relations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source_id", "target_id", "relation"],
+        "properties": {
+          "source_id": {"type": "string"},
+          "target_id": {"type": "string"},
+          "relation": {"type": "string"},
+          "fact_text": {"type": "string"},
+          "valid_at": {"type": "string"},
+          "invalid_at": {"type": "string"},
+          "expired_at": {"type": "string"},
+          "fact_rating": {"type": "number", "minimum": 0, "maximum": 1}
+        },
+        "additionalProperties": false
+      }
+    },
+    "metadata": {"type": "object"}
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["expected_abstain"],
+        "properties": {"expected_abstain": {"const": true}}
+      },
+      "then": {"properties": {"relevant_document_ids": {"maxItems": 0}}},
+      "else": {"properties": {"relevant_document_ids": {"minItems": 1}}}
+    }
+  ],
+  "additionalProperties": false
+}

@@ -1,4 +1,4 @@
-# Benchmarks
+# Internal Benchmark
 
 Autopsy has an internal benchmark gate:
 
@@ -8,7 +8,8 @@ autopsy benchmark --sample-size 5 --include-sync
 
 The gate measures:
 
-- operational health
+- operational health, verified node/relationship full-text indexes, matching
+  vector-index profile, and complete current embedding coverage
 - top-1 recall
 - inspection accuracy
 - precision and abstention
@@ -22,6 +23,19 @@ The gate measures:
 - Falkor-native sync/graph health and embedded CLI shutdown-detach behavior
 
 This is a product regression gate, not a public leaderboard.
+
+Its recall probes deliberately query sampled item titles, its scale-readiness
+probe exercises the lexical fast path, and its negative probes use synthetic
+no-hit markers. Those checks are useful for catching broken indexes, routing,
+and fail-open behavior, but they are easy smoke tests—not evidence of general
+retrieval quality or statistical abstention calibration. Only the external
+suite below may support comparative quality claims.
+
+For public-dataset retrieval evaluation, use `autopsy evaluate`. The external
+suite uses pinned LoCoMo and LongMemEval-S artifacts, held-out evidence labels,
+isolated stores, deterministic selection, raw prediction logs, independent
+rescoring, latency percentiles, and explicit vector-coverage qualification.
+See [External Evaluation](external-evaluation.md).
 
 ## Public-Style Benchmark Requirements
 
@@ -38,15 +52,14 @@ A credible public benchmark needs:
 - write and update correctness checks
 - hardware and cost disclosure
 
-## Practical Plan
+## Implemented External Suite
 
-Start with a bounded benchmark before attempting a huge public dataset:
+The external suite now implements the public corpus, relevance, abstention,
+temporal, deterministic-selection, latency, provenance, and scoring portions of
+this contract. The controlled coding-memory fixture adds cross-repo isolation,
+supersession, reversion, multi-hop, expiration, and poisoning cases.
 
-1. Build a synthetic corpus of 10k to 100k memories with known labels and relations.
-2. Add a smaller real-world corpus from public issue/PR histories.
-3. Create held-out queries for recall, abstention, relation traversal, and temporal correctness.
-4. Include governed-memory cases for duplicate facts, relationless outcomes, invalid source-predicate-target relation writes, opposing current facts, tag-isolated memory containers, user/agent/app/run/group entity-scope partitions, cognitive memory-type filters for semantic/episodic/procedural/observation layers, memory-poisoning payloads, sensitive-memory exposure, write-time unsafe-memory rejection and bypass behavior, read-time unsafe-memory quarantine, temporal as-of reads, old/new memory history, soft-expired memories, pinned core memories that enter context without retrieval hits, structured memory-block labels/limits/read-only guards, derived observations with explicit evidence keys, stale observation fingerprints, superseded/reverted records, expired fact edges, low-rated relation facts filtered from context, weak activation/retention scores, useful/not-useful feedback, access-frequency reinforcement, bounded usage/feedback ranking decay, session transcript replay, session-to-semantic consolidation, and repair recommendations.
-5. Measure p50/p95/p99 latency for status, consult, context, audit, item, timeline, neighbors, writes, and benchmark sync.
-6. Publish the harness, seed, hardware profile, and scoring script.
-
-This keeps cost controlled while still testing the behaviors that matter for agent memory.
+Scale seeding beyond the public datasets remains separate work. Extraction and
+answer generation now have explicit `extracted-retrieval` and `common-answer`
+tracks; their metrics and artifacts remain separate and must not be inferred
+from a `raw-retrieval` report.
