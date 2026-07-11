@@ -11463,6 +11463,8 @@ class AutopsyCLIContractTests(unittest.TestCase):
             cli.deterministic_lexical_match_score("the and is", title="Unrelated"),
             1.0,
         )
+        self.assertEqual(cli.bounded_fulltext_candidate_limit(10, 1000), 1000)
+        self.assertEqual(cli.bounded_fulltext_candidate_limit(10, 0), 40)
 
     def test_vector_candidates_reorder_equal_distances_by_stable_identity(self):
         config = dict(cli.EMBEDDINGS_CONFIG_DEFAULT)

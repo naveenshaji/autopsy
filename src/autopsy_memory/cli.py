@@ -516,6 +516,7 @@ EMBEDDINGS_CONFIG_DEFAULT = {
     "batch_size": 16,
     "candidate_limit": 48,
     "vector_candidate_limit": 64,
+    "fulltext_candidate_limit": 1000,
     "token_overlap_scan_max_items": 2000,
     "token_overlap_recent_scan_items": 1200,
     "fast_lexical_min_hits": 3,
@@ -3125,7 +3126,18 @@ def should_use_recent_token_overlap_scan(item_count: int, config: dict[str, Any]
     return item_count > token_overlap_scan_max_items(config) and token_overlap_recent_scan_items(config) > 0
 
 
-def fetch_node_lexical(graph, query: str, *, limit: int, as_of: str | None = None) -> tuple[list[dict[str, Any]], float]:
+def bounded_fulltext_candidate_limit(limit: int, configured_limit: int | None = None) -> int:
+    return max(max(1, int(limit)) * 4, 24, max(0, int(configured_limit or 0)))
+
+
+def fetch_node_lexical(
+    graph,
+    query: str,
+    *,
+    limit: int,
+    candidate_limit: int | None = None,
+    as_of: str | None = None,
+) -> tuple[list[dict[str, Any]], float]:
     parsed = sanitize_query_for_fts(query)
     normalized_as_of = normalize_as_of_timestamp(as_of)
     read_time = lifecycle_read_timestamp(normalized_as_of)
@@ -3156,7 +3168,7 @@ def fetch_node_lexical(graph, query: str, *, limit: int, as_of: str | None = Non
         """,
         params={
             "query": parsed,
-            "limit": max(limit * 4, 24),
+            "limit": bounded_fulltext_candidate_limit(limit, candidate_limit),
             "as_of": normalized_as_of,
             "read_time": read_time,
         },
@@ -3749,7 +3761,14 @@ def dedupe_relationship_hits(hits: list[dict[str, Any]]) -> list[dict[str, Any]]
     )
 
 
-def fetch_entity_overlap_candidates(graph, query: str, *, limit: int, as_of: str | None = None) -> tuple[list[dict[str, Any]], float]:
+def fetch_entity_overlap_candidates(
+    graph,
+    query: str,
+    *,
+    limit: int,
+    candidate_limit: int | None = None,
+    as_of: str | None = None,
+) -> tuple[list[dict[str, Any]], float]:
     entities = extract_entity_tokens(query)
     if not entities:
         return [], 0.0
@@ -3782,7 +3801,7 @@ def fetch_entity_overlap_candidates(graph, query: str, *, limit: int, as_of: str
         """,
         params={
             "query": parsed,
-            "limit": max(limit * 6, 48),
+            "limit": bounded_fulltext_candidate_limit(limit, candidate_limit),
             "as_of": normalized_as_of,
             "read_time": read_time,
         },
@@ -14408,8 +14427,23 @@ def build_consult_payload(
 
     item_count = semantic_item_count(graph)
     exact_items, exact_elapsed = fetch_exact_text_candidates(graph, query, limit=search_limit, as_of=normalized_as_of)
-    lexical_items, lexical_elapsed = fetch_node_lexical(graph, query, limit=search_limit, as_of=normalized_as_of)
-    entity_items, entity_elapsed = fetch_entity_overlap_candidates(graph, query, limit=search_limit, as_of=normalized_as_of)
+    configured_fulltext_limit = int(
+        config.get("fulltext_candidate_limit", EMBEDDINGS_CONFIG_DEFAULT["fulltext_candidate_limit"])
+    )
+    lexical_items, lexical_elapsed = fetch_node_lexical(
+        graph,
+        query,
+        limit=search_limit,
+        candidate_limit=configured_fulltext_limit,
+        as_of=normalized_as_of,
+    )
+    entity_items, entity_elapsed = fetch_entity_overlap_candidates(
+        graph,
+        query,
+        limit=search_limit,
+        candidate_limit=configured_fulltext_limit,
+        as_of=normalized_as_of,
+    )
     relationship_hits: list[dict[str, Any]] = []
     relationship_candidate_items: list[dict[str, Any]] = []
     relationship_elapsed = 0.0

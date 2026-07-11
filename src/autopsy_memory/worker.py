@@ -52,6 +52,7 @@ EMBEDDINGS_CONFIG_DEFAULT = {
     'text_template_version': 'autopsy-passage-v1',
     'batch_size': 16,
     'candidate_limit': 48,
+    'fulltext_candidate_limit': 1000,
     'reranker': {
         'enabled': True,
         'provider': 'sentence_transformers',
