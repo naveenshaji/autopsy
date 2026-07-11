@@ -384,9 +384,17 @@ content.
 ## Semantic Qualification
 
 The report distinguishes a requested route from the channels that actually
-contributed. At present, Autopsy's normal memory write path stores
-`embedding: null`. A `hybrid` or `auto` run with zero vector coverage therefore
-sets:
+contributed. Autopsy now attempts a pinned embedding for every eligible normal
+memory write and records the provider, model revision, text-template version,
+source-content hash, source timestamp, dimension, and status with the vector.
+The default write-failure policy is recoverable: if the provider is unavailable,
+the memory write succeeds with `embedding_status: deferred`, and `autopsy
+embeddings backfill` can repair it later. `autopsy embeddings status` and
+`autopsy health` report current-profile coverage and vector-index drift.
+
+Enabling embeddings is not enough to qualify a semantic result. A `hybrid` or
+`auto` run with incomplete current-profile vector coverage or without observed
+embedding retrieval still sets:
 
 ```json
 {
@@ -396,7 +404,9 @@ sets:
 ```
 
 It does not silently present lexical fallback as semantic retrieval. A lexical
-run remains a valid lexical evaluation.
+run remains a valid lexical evaluation. The isolated Autopsy evaluation adapter
+batch-embeds its frozen corpus through the same versioned backfill path and
+reports both evaluated vector coverage and the channels that contributed.
 
 ## Independent Rescoring
 
@@ -480,7 +490,10 @@ Do not publish one opaque composite score. Publish:
 4. Vector coverage and semantic qualification.
 5. All per-category retrieval and abstention metrics.
 6. Error, exclusion, and unresolved-evidence counts.
-7. Prediction JSONL and its SHA-256 digest.
+7. Aggregate reports and the withheld prediction JSONL's SHA-256 digest. Publish
+   row-level predictions or scores only in a separate dataset-licensed release
+   after privacy and license review; they reproduce benchmark queries,
+   identifiers, and per-case judgments.
 8. Hardware and latency percentiles.
 
 Keep LoCoMo, LongMemEval-S, LongMemEval oracle, and any future LongMemEval-M

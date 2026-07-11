@@ -1,0 +1,401 @@
+{
+  "counts": {
+    "abstention_scored_cases": 1980,
+    "cases": 1986,
+    "exclusions": {
+      "no_resolvable_source_evidence": 4,
+      "unresolved_source_evidence": 2
+    },
+    "retrieval_scored_cases": 1534,
+    "unscored_retrieval_cases": 6
+  },
+  "dataset": {
+    "bytes": 2805274,
+    "dataset": "locomo",
+    "expected_sha256": "79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4",
+    "license": "CC-BY-NC-4.0",
+    "sha256": "79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4",
+    "version": "git-3eb6f2c585f5e1699204e3c3bdf7adc5c28cb376"
+  },
+  "integrity": {
+    "independent_metric_equality": true,
+    "prediction_integrity": {
+      "coverage": 1.0,
+      "dataset_cases": 1986,
+      "full_dataset_complete": true,
+      "matched": 1986,
+      "missing_dataset_cases": 0,
+      "provided": 1986,
+      "unknown_case_count": 0,
+      "valid": true
+    },
+    "source_predictions_sha256": "05830edc5e66b463b8735f4d61387c51d6fb256472ad305da6af9e680ee810eb",
+    "source_run_sha256": "6dca125b86f81acfcc8dd106d3ca44bfad8973db451e55354226c3f20ca37f38",
+    "source_score_sha256": "f316a25208822117d6f6a5e35362fe9dd50b7a86eaaf652c908e3a36559fd6fb",
+    "transformation": {
+      "excluded_classes": [
+        "absolute-and-local-paths",
+        "answers-and-generated-text",
+        "case-identifiers-and-labels",
+        "dataset-conversation-and-query-text",
+        "ranked-relevant-and-forbidden-source-identifiers"
+      ],
+      "id": "autopsy-aggregate-allowlist/v1",
+      "sanitized_sha256_location": "MANIFEST.json"
+    }
+  },
+  "leakage_audit": {
+    "answers_ingested": 0,
+    "documents_with_exact_query_text": 0,
+    "documents_with_query_as_exact_title": 0,
+    "judgments_ingested": 0,
+    "prohibited_gold_metadata_documents": 0,
+    "questions_ingested": 0,
+    "source_metadata_fields_stripped": 0
+  },
+  "metrics": {
+    "abstention": {
+      "f1": 0.0,
+      "false_negative": 446,
+      "false_positive": 1,
+      "precision": 0.0,
+      "recall": 0.0,
+      "scored_cases": 1980,
+      "true_negative": 1533,
+      "true_positive": 0
+    },
+    "by_category": {
+      "adversarial-abstention": {
+        "abstention": {
+          "f1": 0.0,
+          "false_negative": 446,
+          "false_positive": 0,
+          "precision": 0.0,
+          "recall": 0.0,
+          "scored_cases": 446,
+          "true_negative": 0,
+          "true_positive": 0
+        },
+        "cases": 446,
+        "metrics": {
+          "forbidden_exposure@1": 0.0,
+          "forbidden_exposure@10": 0.0,
+          "forbidden_exposure@5": 0.0
+        }
+      },
+      "multi-hop": {
+        "abstention": {
+          "f1": 0.0,
+          "false_negative": 0,
+          "false_positive": 1,
+          "precision": 0.0,
+          "recall": 0.0,
+          "scored_cases": 280,
+          "true_negative": 279,
+          "true_positive": 0
+        },
+        "cases": 282,
+        "metrics": {
+          "evidence_recall@1": 0.059975513730212975,
+          "evidence_recall@10": 0.271643848528247,
+          "evidence_recall@5": 0.18981729892914104,
+          "forbidden_exposure@1": 0.0,
+          "forbidden_exposure@10": 0.0,
+          "forbidden_exposure@5": 0.0,
+          "mrr@10": 0.2639044784580499,
+          "ndcg@1": 0.17142857142857143,
+          "ndcg@10": 0.20931712521275034,
+          "ndcg@5": 0.17804537803908965,
+          "recall_all@1": 0.0,
+          "recall_all@10": 0.09285714285714286,
+          "recall_all@5": 0.05,
+          "recall_any@1": 0.17142857142857143,
+          "recall_any@10": 0.49642857142857144,
+          "recall_any@5": 0.37857142857142856,
+          "upstream_longmemeval_ndcg@1": 0.17142857142857143,
+          "upstream_longmemeval_ndcg@10": 0.2004483967411608,
+          "upstream_longmemeval_ndcg@5": 0.17327489430306195
+        }
+      },
+      "open-domain": {
+        "abstention": {
+          "f1": 0.0,
+          "false_negative": 0,
+          "false_positive": 0,
+          "precision": 0.0,
+          "recall": 0.0,
+          "scored_cases": 92,
+          "true_negative": 92,
+          "true_positive": 0
+        },
+        "cases": 96,
+        "metrics": {
+          "evidence_recall@1": 0.0894075021312873,
+          "evidence_recall@10": 0.24765558397271953,
+          "evidence_recall@5": 0.19602514919011083,
+          "forbidden_exposure@1": 0.0,
+          "forbidden_exposure@10": 0.0,
+          "forbidden_exposure@5": 0.0,
+          "mrr@10": 0.2080745341614907,
+          "ndcg@1": 0.14130434782608695,
+          "ndcg@10": 0.18202161104038497,
+          "ndcg@5": 0.16515272058991232,
+          "recall_all@1": 0.05434782608695652,
+          "recall_all@10": 0.16304347826086957,
+          "recall_all@5": 0.11956521739130435,
+          "recall_any@1": 0.14130434782608695,
+          "recall_any@10": 0.358695652173913,
+          "recall_any@5": 0.29347826086956524,
+          "upstream_longmemeval_ndcg@1": 0.14130434782608695,
+          "upstream_longmemeval_ndcg@10": 0.19031040470567062,
+          "upstream_longmemeval_ndcg@5": 0.17333706471757002
+        }
+      },
+      "single-hop": {
+        "abstention": {
+          "f1": 0.0,
+          "false_negative": 0,
+          "false_positive": 0,
+          "precision": 0.0,
+          "recall": 0.0,
+          "scored_cases": 841,
+          "true_negative": 841,
+          "true_positive": 0
+        },
+        "cases": 841,
+        "metrics": {
+          "evidence_recall@1": 0.3386841062227507,
+          "evidence_recall@10": 0.6224732461355529,
+          "evidence_recall@5": 0.5416171224732461,
+          "forbidden_exposure@1": 0.0,
+          "forbidden_exposure@10": 0.0,
+          "forbidden_exposure@5": 0.0,
+          "mrr@10": 0.4363107034331767,
+          "ndcg@1": 0.34720570749108204,
+          "ndcg@10": 0.4770708705695808,
+          "ndcg@5": 0.451085981935131,
+          "recall_all@1": 0.33174791914387636,
+          "recall_all@10": 0.6123662306777645,
+          "recall_all@5": 0.5291319857312723,
+          "recall_any@1": 0.34720570749108204,
+          "recall_any@10": 0.6313912009512486,
+          "recall_any@5": 0.5529131985731273,
+          "upstream_longmemeval_ndcg@1": 0.34720570749108204,
+          "upstream_longmemeval_ndcg@10": 0.5213924840535908,
+          "upstream_longmemeval_ndcg@5": 0.49412327003620926
+        }
+      },
+      "temporal": {
+        "abstention": {
+          "f1": 0.0,
+          "false_negative": 0,
+          "false_positive": 0,
+          "precision": 0.0,
+          "recall": 0.0,
+          "scored_cases": 321,
+          "true_negative": 321,
+          "true_positive": 0
+        },
+        "cases": 321,
+        "metrics": {
+          "evidence_recall@1": 0.3029595015576324,
+          "evidence_recall@10": 0.6586188992731049,
+          "evidence_recall@5": 0.5610072689511942,
+          "forbidden_exposure@1": 0.0,
+          "forbidden_exposure@10": 0.0,
+          "forbidden_exposure@5": 0.0,
+          "mrr@10": 0.44645576818474014,
+          "ndcg@1": 0.32710280373831774,
+          "ndcg@10": 0.4861996591125309,
+          "ndcg@5": 0.45383115396897583,
+          "recall_all@1": 0.2834890965732087,
+          "recall_all@10": 0.6230529595015576,
+          "recall_all@5": 0.5295950155763239,
+          "recall_any@1": 0.32710280373831774,
+          "recall_any@10": 0.6915887850467289,
+          "recall_any@5": 0.5950155763239875,
+          "upstream_longmemeval_ndcg@1": 0.32710280373831774,
+          "upstream_longmemeval_ndcg@10": 0.544231353419615,
+          "upstream_longmemeval_ndcg@5": 0.5109524989253932
+        }
+      }
+    },
+    "overall": {
+      "evidence_recall@1": 0.26538589789691747,
+      "evidence_recall@10": 0.5435210286701865,
+      "evidence_recall@5": 0.4607343486042914,
+      "forbidden_exposure@1": 0.0,
+      "forbidden_exposure@10": 0.0,
+      "forbidden_exposure@5": 0.0,
+      "mrr@10": 0.39327621531011364,
+      "ndcg@1": 0.2985658409387223,
+      "ndcg@10": 0.4124129569748536,
+      "ndcg@5": 0.38467396830293576,
+      "recall_all@1": 0.24445893089960888,
+      "recall_all@10": 0.49282920469361147,
+      "recall_all@5": 0.4172099087353325,
+      "recall_any@1": 0.2985658409387223,
+      "recall_any@10": 0.6029986962190352,
+      "recall_any@5": 0.5143415906127771,
+      "upstream_longmemeval_ndcg@1": 0.2985658409387223,
+      "upstream_longmemeval_ndcg@10": 0.4477336713541154,
+      "upstream_longmemeval_ndcg@5": 0.41984185307325744
+    }
+  },
+  "protocol": {
+    "adapter_config_sha256": "ee68762fa46c8cc29c6ae886650b10be595eec762a009668eb5404f9c6c10891",
+    "granularity": "turn",
+    "k_values": [
+      1,
+      5,
+      10
+    ],
+    "repetitions": 2,
+    "representation": "audited",
+    "route": "hybrid",
+    "temporal_policy": "dataset",
+    "track": "raw-retrieval"
+  },
+  "qualification": {
+    "code_provenance_qualified": true,
+    "forbidden_memory_gate_passed": true,
+    "full_dataset": true,
+    "metric_cutoffs_qualified": true,
+    "model_revision_qualified": true,
+    "no_case_errors": true,
+    "official_dataset_artifact": true,
+    "passed": true,
+    "ranking_stability_qualified": true,
+    "requested_route_qualified": true,
+    "required_metric_cutoffs": [
+      1,
+      5,
+      10
+    ],
+    "semantic_route_qualified": true,
+    "upstream_representation_qualified": true,
+    "upstream_temporal_policy_qualified": true
+  },
+  "release": {
+    "name": "autopsy-raw-retrieval-v1",
+    "source_commit": "a22c3c7b9946a7fa8a1cdb2c6dd0f50d9b58e71f",
+    "source_tree_sha256": "9275fa06416d09615255df7b8c3af48d8f25410c8c74ad9fe98d3ef50dfb5e1a"
+  },
+  "retrieval_channel_counts": {
+    "embedding": 12,
+    "entity_overlap": 19697,
+    "lexical": 19771,
+    "reranker": 13,
+    "token_overlap": 11727,
+    "usage_adaptive_rank": 19772
+  },
+  "row": {
+    "dataset": "locomo",
+    "name": "locomo-autopsy",
+    "system": "autopsy"
+  },
+  "runtime": {
+    "autopsy_source_version": "0.1.30",
+    "autopsy_version": "0.1.30",
+    "cpu_count": 16,
+    "dependency_versions": {
+      "falkordb": "1.6.1",
+      "falkordblite": "0.10.0",
+      "redis": "7.4.1",
+      "sentence-transformers": "5.6.0"
+    },
+    "git_commit": "a22c3c7b9946a7fa8a1cdb2c6dd0f50d9b58e71f",
+    "git_dirty": false,
+    "machine": "arm64",
+    "platform": "macOS-27.0-arm64-arm-64bit",
+    "process_peak_rss_bytes": 41189376,
+    "processor": "Apple M3 Max",
+    "python": "3.12.13",
+    "source_tree_sha256": "9275fa06416d09615255df7b8c3af48d8f25410c8c74ad9fe98d3ef50dfb5e1a",
+    "total_memory_bytes": 51539607552
+  },
+  "schema": "autopsy-publication-aggregate-result/v1",
+  "source_timestamps": {
+    "run_completed_at": "2026-07-11T11:03:22.437705+00:00",
+    "run_started_at": "2026-07-11T10:21:15.521667+00:00",
+    "score_scored_at": "2026-07-11T11:03:39.297822+00:00"
+  },
+  "system": {
+    "adapter_id": "autopsy",
+    "config_sha256": "ee68762fa46c8cc29c6ae886650b10be595eec762a009668eb5404f9c6c10891",
+    "cost": {
+      "currency": "USD",
+      "external_api_calls": 0,
+      "external_api_cost_usd": 0.0
+    },
+    "embedding": {
+      "eligible_items": 5882,
+      "embedded_items": 5882,
+      "model": "BAAI/bge-base-en-v1.5",
+      "revision": "a5beb1e3e68b9ab74eb54cfd186867f64f240e1a",
+      "vector_coverage": 1.0
+    },
+    "execution": {
+      "local": true,
+      "mode": "local-in-process",
+      "network_required": false,
+      "remote": false
+    },
+    "implementation": "autopsy-isolated-direct-v1",
+    "package_pin": {
+      "installed_distribution_version": "0.1.30",
+      "name": "autopsy-memory",
+      "version": "0.1.30"
+    },
+    "qualifier": "native-hybrid-raw-evidence-retrieval",
+    "reranker": {
+      "model": "BAAI/bge-reranker-base",
+      "revision": "2cfc18c9415c912f9d8155881c133215df768a70"
+    },
+    "restrictions": {
+      "access_telemetry_recorded": false,
+      "query_state_mode": "static-read"
+    },
+    "retrieval_family": "hybrid",
+    "semantic": true,
+    "source_pin": {
+      "kind": "source-tree-sha256",
+      "sha256": "9275fa06416d09615255df7b8c3af48d8f25410c8c74ad9fe98d3ef50dfb5e1a"
+    }
+  },
+  "timing": {
+    "ingestion": {
+      "characters": 994189,
+      "characters_per_second": 8225.011296477318,
+      "corpora": 10,
+      "documents": 5882,
+      "documents_per_second": 48.662293030680864,
+      "seconds": 120.87387654115446
+    },
+    "latency_profiles_seconds": {
+      "first_measured_after_warmups": {
+        "mean": 0.6023402725833384,
+        "p50": 0.5139121455140412,
+        "p95": 1.113600926939398,
+        "p99": 1.5782283348962682,
+        "samples": 1986
+      },
+      "subsequent_repetitions": {
+        "mean": 0.5995007730252087,
+        "p50": 0.5102492499863729,
+        "p95": 1.1090483751613647,
+        "p99": 1.5923159812693493,
+        "samples": 1986
+      }
+    },
+    "latency_seconds": {
+      "mean": 0.6009205228042735,
+      "p50": 0.5121956772054546,
+      "p95": 1.1088660260720644,
+      "p99": 1.5872629043762578
+    },
+    "total": {
+      "total_seconds": 2526.889494625153
+    }
+  }
+}

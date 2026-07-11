@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "judgments": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "case_handle": { "minLength": 1, "type": "string" },
+          "correct": { "type": "boolean" }
+        },
+        "required": ["case_handle", "correct"],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "schema": { "const": "autopsy-codex-judge-output/v1" }
+  },
+  "required": ["schema", "judgments"],
+  "type": "object"
+}

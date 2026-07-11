@@ -36,3 +36,9 @@ canonical pinned Mem0 OSS bootstrap assets live in the wheel under
 `src/autopsy_memory/evaluation/competitors/mem0/`; the
 [`competitors/mem0/`](competitors/mem0/) directory is a source-checkout
 convenience wrapper.
+
+Publication bundles are separately gated and aggregate-only. The
+[`publication/raw-retrieval-v1/`](publication/raw-retrieval-v1/) scaffold defines the claim
+language, same-commit comparison gate, attribution requirements, and safe
+release layout; public benchmark data and query-bearing artifacts remain
+outside the repository.

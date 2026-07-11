@@ -1,0 +1,158 @@
+{
+  "builder": {
+    "name": "build_release.py",
+    "sha256": "a77446ad435f5cdc88236d861936d23ed7ddc2504ab5d8cdb71cfa74a71fa3ac",
+    "standard_library_only": true
+  },
+  "dataset_artifacts_redistributed": false,
+  "output_artifacts": [
+    {
+      "bytes": 8712,
+      "relative_file": "ATTRIBUTION.md",
+      "sha256": "9becc96a598af8addecf980bf37fc363257d1cd3fe8e23ce8273245dc9b7dd22"
+    },
+    {
+      "bytes": 10635,
+      "relative_file": "README.md",
+      "sha256": "5350637ca779a4de00a95e57fb3e1420e581fabfaea8f9f9c3666d18d1962c16"
+    },
+    {
+      "bytes": 12987,
+      "relative_file": "aggregate/locomo-autopsy.json",
+      "sha256": "4cf80cbc1764a5007d0939815734a703e008666265ec1ddc53857cfef3011338"
+    },
+    {
+      "bytes": 12540,
+      "relative_file": "aggregate/locomo-builtin-bm25.json",
+      "sha256": "fd2d7d880f27a95ef9c193bbb12634486841122f28e4014534f648c975d90419"
+    },
+    {
+      "bytes": 14111,
+      "relative_file": "aggregate/locomo-mem0-oss-raw.json",
+      "sha256": "bff80c612f75bf9a1dba4432b01e2e2af404d472198cd639c2357606d4300ef7"
+    },
+    {
+      "bytes": 14827,
+      "relative_file": "aggregate/longmemeval-s-autopsy.json",
+      "sha256": "29c41608fa6c9fa7e1f640523209d0f8dadb702e8248875732e25e921ba3e057"
+    },
+    {
+      "bytes": 13990,
+      "relative_file": "aggregate/longmemeval-s-builtin-bm25.json",
+      "sha256": "607837203a9d9c0d6d5cf4c11b094ed08627ff26a5b7751a11649ddf90f23d5b"
+    },
+    {
+      "bytes": 15795,
+      "relative_file": "aggregate/longmemeval-s-mem0-oss-raw.json",
+      "sha256": "ae80cf721ca79ddcb8e3ca9336f31e4d1cfa00cddeed819eaa9314d47dacc1c0"
+    },
+    {
+      "bytes": 15295,
+      "relative_file": "schemas/aggregate-result-v1.schema.json",
+      "sha256": "8aeab524782975f28f28854f01c2b13b90a479b56eb9e885b64cdb1a7e0a109d"
+    }
+  ],
+  "release": {
+    "name": "autopsy-raw-retrieval-v1",
+    "source_commit": "a22c3c7b9946a7fa8a1cdb2c6dd0f50d9b58e71f",
+    "source_tree_sha256": "9275fa06416d09615255df7b8c3af48d8f25410c8c74ad9fe98d3ef50dfb5e1a"
+  },
+  "rows": [
+    {
+      "dataset": "locomo",
+      "name": "locomo-autopsy",
+      "sanitized_aggregate": {
+        "bytes": 12987,
+        "relative_file": "aggregate/locomo-autopsy.json",
+        "sha256": "4cf80cbc1764a5007d0939815734a703e008666265ec1ddc53857cfef3011338"
+      },
+      "source_artifacts": {
+        "predictions_sha256": "05830edc5e66b463b8735f4d61387c51d6fb256472ad305da6af9e680ee810eb",
+        "run_sha256": "6dca125b86f81acfcc8dd106d3ca44bfad8973db451e55354226c3f20ca37f38",
+        "score_sha256": "f316a25208822117d6f6a5e35362fe9dd50b7a86eaaf652c908e3a36559fd6fb"
+      },
+      "system": "autopsy"
+    },
+    {
+      "dataset": "locomo",
+      "name": "locomo-builtin-bm25",
+      "sanitized_aggregate": {
+        "bytes": 12540,
+        "relative_file": "aggregate/locomo-builtin-bm25.json",
+        "sha256": "fd2d7d880f27a95ef9c193bbb12634486841122f28e4014534f648c975d90419"
+      },
+      "source_artifacts": {
+        "predictions_sha256": "d9196f6519d6f668e7a8b857559474969121076ab7b63ebb7982f464637fcd00",
+        "run_sha256": "b4eaf719efb2d0e991dda965882c20f6fc8e1228b6ed65bff684e0bb892dea7f",
+        "score_sha256": "9074c6e60ccc764d1309762c950fa8542f85e30b6273f3649c825de7d95c5afc"
+      },
+      "system": "builtin-bm25"
+    },
+    {
+      "dataset": "locomo",
+      "name": "locomo-mem0-oss-raw",
+      "sanitized_aggregate": {
+        "bytes": 14111,
+        "relative_file": "aggregate/locomo-mem0-oss-raw.json",
+        "sha256": "bff80c612f75bf9a1dba4432b01e2e2af404d472198cd639c2357606d4300ef7"
+      },
+      "source_artifacts": {
+        "predictions_sha256": "550fc1ac9cc613407c336c0bbf69b7e6cf8f49cd84e240ca013893d4ffc9e0cf",
+        "run_sha256": "f8d778dfba84082f3cbe1893f0dda16609fe27356b483f8c085fde925828a7df",
+        "score_sha256": "1a13dee1a52e31e07294159da8da6636ca9c74c8b8c53dbbbb756241bbf89c6d"
+      },
+      "system": "mem0-oss-raw"
+    },
+    {
+      "dataset": "longmemeval-s",
+      "name": "longmemeval-s-autopsy",
+      "sanitized_aggregate": {
+        "bytes": 14827,
+        "relative_file": "aggregate/longmemeval-s-autopsy.json",
+        "sha256": "29c41608fa6c9fa7e1f640523209d0f8dadb702e8248875732e25e921ba3e057"
+      },
+      "source_artifacts": {
+        "predictions_sha256": "96f84f29565878c6db4702ef633cb00d9ed7ed84c18a5c60cee5cf5691ed4ec7",
+        "run_sha256": "b56f533ae66e42b5b48eaa60a45eb45742e1af67126ea22de967af19dd390ff1",
+        "score_sha256": "902cd59f3812ab7418e2d3675dd15080cbe9023f51584f01f08b11609ac67618"
+      },
+      "system": "autopsy"
+    },
+    {
+      "dataset": "longmemeval-s",
+      "name": "longmemeval-s-builtin-bm25",
+      "sanitized_aggregate": {
+        "bytes": 13990,
+        "relative_file": "aggregate/longmemeval-s-builtin-bm25.json",
+        "sha256": "607837203a9d9c0d6d5cf4c11b094ed08627ff26a5b7751a11649ddf90f23d5b"
+      },
+      "source_artifacts": {
+        "predictions_sha256": "940c230842dee82479b31a0fdee2a59e10df113b5a8a8aa1d3e0dae89597df85",
+        "run_sha256": "c154508ffb84f9f0694bfd7058d165219fe8910dc7baa06eb46240585c72e514",
+        "score_sha256": "ea85369c7e83ebd0dac18162eae382bdadcc59ad9e4d60a47600dfd4a8d8bb9c"
+      },
+      "system": "builtin-bm25"
+    },
+    {
+      "dataset": "longmemeval-s",
+      "name": "longmemeval-s-mem0-oss-raw",
+      "sanitized_aggregate": {
+        "bytes": 15795,
+        "relative_file": "aggregate/longmemeval-s-mem0-oss-raw.json",
+        "sha256": "ae80cf721ca79ddcb8e3ca9336f31e4d1cfa00cddeed819eaa9314d47dacc1c0"
+      },
+      "source_artifacts": {
+        "predictions_sha256": "924375c7ae74a7ad6664365cf89da027354ffb1d8b3c2150aaf72be87027d4ab",
+        "run_sha256": "8c4e1e7aec3d6aecfd1e9f00556f8c4813be5bb0bbf6e78c95cd632ebc1cc58f",
+        "score_sha256": "bc531eabe72bfa6ab96238f1391f64a9ee0cb437c5e45ff15488c790abf2f0e7"
+      },
+      "system": "mem0-oss-raw"
+    }
+  ],
+  "schema": "autopsy-publication-manifest/v1",
+  "transformation": {
+    "id": "autopsy-aggregate-allowlist/v1",
+    "policy": "fixed-field-allowlist; no input artifact is rewritten or copied",
+    "row_level_artifacts_redistributed": false
+  }
+}

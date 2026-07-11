@@ -1,0 +1,354 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://autopsy-memory.dev/schemas/publication/aggregate-result-v1.schema.json",
+  "title": "Autopsy aggregate-only public retrieval result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "release",
+    "row",
+    "dataset",
+    "protocol",
+    "system",
+    "runtime",
+    "qualification",
+    "counts",
+    "metrics",
+    "timing",
+    "retrieval_channel_counts",
+    "leakage_audit",
+    "source_timestamps",
+    "integrity"
+  ],
+  "properties": {
+    "schema": {"const": "autopsy-publication-aggregate-result/v1"},
+    "release": {"$ref": "#/$defs/release"},
+    "row": {"$ref": "#/$defs/row"},
+    "dataset": {"$ref": "#/$defs/dataset"},
+    "protocol": {"$ref": "#/$defs/protocol"},
+    "system": {"$ref": "#/$defs/system"},
+    "runtime": {"$ref": "#/$defs/runtime"},
+    "qualification": {"$ref": "#/$defs/qualification"},
+    "counts": {"$ref": "#/$defs/counts"},
+    "metrics": {"$ref": "#/$defs/metrics"},
+    "timing": {"$ref": "#/$defs/timing"},
+    "retrieval_channel_counts": {"$ref": "#/$defs/numericMap"},
+    "leakage_audit": {"$ref": "#/$defs/nonnegativeIntegerMap"},
+    "source_timestamps": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_completed_at", "run_started_at", "score_scored_at"],
+      "properties": {
+        "run_completed_at": {"type": "string", "format": "date-time"},
+        "run_started_at": {"type": "string", "format": "date-time"},
+        "score_scored_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "integrity": {"$ref": "#/$defs/integrity"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "modelRevision": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
+    "nonnegativeNumber": {"type": "number", "minimum": 0},
+    "nonnegativeInteger": {"type": "integer", "minimum": 0},
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "source_commit", "source_tree_sha256"],
+      "properties": {
+        "name": {"const": "autopsy-raw-retrieval-v1"},
+        "source_commit": {"$ref": "#/$defs/commit"},
+        "source_tree_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dataset", "name", "system"],
+      "properties": {
+        "dataset": {"enum": ["locomo", "longmemeval-s"]},
+        "name": {"type": "string", "pattern": "^(locomo|longmemeval-s)-(autopsy|builtin-bm25|mem0-oss-raw)$"},
+        "system": {"enum": ["autopsy", "builtin-bm25", "mem0-oss-raw"]}
+      }
+    },
+    "dataset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bytes", "dataset", "expected_sha256", "license", "sha256", "version"],
+      "properties": {
+        "bytes": {"type": "integer", "minimum": 1},
+        "dataset": {"enum": ["locomo", "longmemeval-s"]},
+        "expected_sha256": {"$ref": "#/$defs/sha256"},
+        "license": {"enum": ["CC-BY-NC-4.0", "MIT"]},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "version": {"type": "string"}
+      }
+    },
+    "protocol": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["adapter_config_sha256", "granularity", "k_values", "repetitions", "representation", "route", "temporal_policy", "track"],
+      "properties": {
+        "adapter_config_sha256": {"$ref": "#/$defs/sha256"},
+        "granularity": {"enum": ["turn", "session"]},
+        "k_values": {"type": "array", "minItems": 3, "maxItems": 3, "uniqueItems": true, "items": {"type": "integer", "minimum": 1}},
+        "repetitions": {"type": "integer", "minimum": 2},
+        "representation": {"enum": ["audited", "upstream"]},
+        "route": {"enum": ["hybrid", "lexical"]},
+        "temporal_policy": {"const": "dataset"},
+        "track": {"const": "raw-retrieval"}
+      }
+    },
+    "packagePin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {"type": "string"},
+        "version": {"type": "string"},
+        "required_version": {"type": "string"},
+        "installed_distribution_version": {"type": "string"},
+        "embedding_model": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "revision"],
+          "properties": {"name": {"type": "string"}, "revision": {"$ref": "#/$defs/modelRevision"}}
+        },
+        "runtime_dependencies": {"type": "object", "additionalProperties": {"type": "string"}}
+      }
+    },
+    "pinDigest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "sha256"],
+      "properties": {"kind": {"type": "string"}, "sha256": {"$ref": "#/$defs/sha256"}}
+    },
+    "sourcePin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {"type": "string"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "commit": {"$ref": "#/$defs/commit"},
+        "tag": {"type": "string"},
+        "repository": {"type": "string", "pattern": "^https://"},
+        "adapter_sha256": {"$ref": "#/$defs/sha256"},
+        "worker_sha256": {"$ref": "#/$defs/sha256"},
+        "adapter_bundle": {"$ref": "#/$defs/pinDigest"},
+        "bootstrap_assets": {"$ref": "#/$defs/pinDigest"}
+      },
+      "anyOf": [{"required": ["sha256"]}, {"required": ["commit"]}]
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["local", "mode", "network_required", "remote"],
+      "properties": {
+        "local": {"const": true},
+        "mode": {"type": "string"},
+        "network_required": {"const": false},
+        "remote": {"const": false},
+        "bootstrap_network_required": {"type": "boolean"},
+        "external_service_credentials_required": {"type": "boolean"},
+        "initial_model_download_network_required": {"type": "boolean"},
+        "runtime_offline_enforced": {"type": "boolean"}
+      }
+    },
+    "cost": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["currency", "external_api_calls", "external_api_cost_usd"],
+      "properties": {
+        "currency": {"const": "USD"},
+        "external_api_calls": {"const": 0},
+        "external_api_cost_usd": {"const": 0}
+      }
+    },
+    "embedding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eligible_items", "embedded_items", "model", "revision", "vector_coverage"],
+      "properties": {
+        "eligible_items": {"type": "integer", "minimum": 1},
+        "embedded_items": {"type": "integer", "minimum": 1},
+        "model": {"type": "string"},
+        "revision": {"$ref": "#/$defs/modelRevision"},
+        "vector_coverage": {"const": 1.0}
+      }
+    },
+    "reranker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "revision"],
+      "properties": {"model": {"type": "string"}, "revision": {"$ref": "#/$defs/modelRevision"}}
+    },
+    "system": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["adapter_id", "config_sha256", "cost", "execution", "implementation", "package_pin", "qualifier", "retrieval_family", "semantic", "source_pin", "restrictions"],
+      "properties": {
+        "adapter_id": {"enum": ["autopsy", "builtin-bm25", "mem0-oss-raw"]},
+        "config_sha256": {"$ref": "#/$defs/sha256"},
+        "cost": {"$ref": "#/$defs/cost"},
+        "execution": {"$ref": "#/$defs/execution"},
+        "implementation": {"type": "string"},
+        "package_pin": {"$ref": "#/$defs/packagePin"},
+        "qualifier": {"type": "string"},
+        "retrieval_family": {"type": "string"},
+        "semantic": {"type": "boolean"},
+        "source_pin": {"$ref": "#/$defs/sourcePin"},
+        "embedding": {"$ref": "#/$defs/embedding"},
+        "reranker": {"$ref": "#/$defs/reranker"},
+        "restrictions": {"type": "object", "additionalProperties": {"type": ["boolean", "string"]}}
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["autopsy_source_version", "autopsy_version", "cpu_count", "dependency_versions", "git_commit", "git_dirty", "machine", "platform", "process_peak_rss_bytes", "processor", "python", "source_tree_sha256", "total_memory_bytes"],
+      "properties": {
+        "autopsy_source_version": {"type": "string"},
+        "autopsy_version": {"type": "string"},
+        "cpu_count": {"type": "integer", "minimum": 1},
+        "dependency_versions": {"type": "object", "additionalProperties": {"type": "string"}},
+        "git_commit": {"$ref": "#/$defs/commit"},
+        "git_dirty": {"const": false},
+        "machine": {"type": "string"},
+        "platform": {"type": "string"},
+        "process_peak_rss_bytes": {"type": "integer", "minimum": 1},
+        "processor": {"type": "string"},
+        "python": {"type": "string"},
+        "source_tree_sha256": {"$ref": "#/$defs/sha256"},
+        "total_memory_bytes": {"type": "integer", "minimum": 1}
+      }
+    },
+    "qualification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["passed", "code_provenance_qualified", "forbidden_memory_gate_passed", "full_dataset", "metric_cutoffs_qualified", "model_revision_qualified", "no_case_errors", "official_dataset_artifact", "ranking_stability_qualified", "requested_route_qualified", "semantic_route_qualified", "upstream_representation_qualified", "upstream_temporal_policy_qualified", "required_metric_cutoffs"],
+      "properties": {
+        "passed": {"const": true},
+        "code_provenance_qualified": {"const": true},
+        "forbidden_memory_gate_passed": {"const": true},
+        "full_dataset": {"const": true},
+        "metric_cutoffs_qualified": {"const": true},
+        "model_revision_qualified": {"const": true},
+        "no_case_errors": {"const": true},
+        "official_dataset_artifact": {"const": true},
+        "ranking_stability_qualified": {"const": true},
+        "requested_route_qualified": {"const": true},
+        "semantic_route_qualified": {"type": ["boolean", "null"]},
+        "upstream_representation_qualified": {"const": true},
+        "upstream_temporal_policy_qualified": {"const": true},
+        "required_metric_cutoffs": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "integer"}}
+      }
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cases", "retrieval_scored_cases", "abstention_scored_cases", "unscored_retrieval_cases", "exclusions"],
+      "properties": {
+        "cases": {"$ref": "#/$defs/nonnegativeInteger"},
+        "retrieval_scored_cases": {"$ref": "#/$defs/nonnegativeInteger"},
+        "abstention_scored_cases": {"$ref": "#/$defs/nonnegativeInteger"},
+        "unscored_retrieval_cases": {"$ref": "#/$defs/nonnegativeInteger"},
+        "exclusions": {"$ref": "#/$defs/nonnegativeIntegerMap"}
+      }
+    },
+    "metricMap": {
+      "type": "object",
+      "minProperties": 1,
+      "patternProperties": {"^[a-z_]+@[0-9]+$": {"type": "number"}},
+      "additionalProperties": false
+    },
+    "abstention": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["f1", "false_negative", "false_positive", "precision", "recall", "scored_cases", "true_negative", "true_positive"],
+      "properties": {
+        "f1": {"type": "number", "minimum": 0, "maximum": 1},
+        "false_negative": {"$ref": "#/$defs/nonnegativeInteger"},
+        "false_positive": {"$ref": "#/$defs/nonnegativeInteger"},
+        "precision": {"type": "number", "minimum": 0, "maximum": 1},
+        "recall": {"type": "number", "minimum": 0, "maximum": 1},
+        "scored_cases": {"$ref": "#/$defs/nonnegativeInteger"},
+        "true_negative": {"$ref": "#/$defs/nonnegativeInteger"},
+        "true_positive": {"$ref": "#/$defs/nonnegativeInteger"}
+      }
+    },
+    "category": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["abstention", "cases", "metrics"],
+      "properties": {
+        "abstention": {"$ref": "#/$defs/abstention"},
+        "cases": {"$ref": "#/$defs/nonnegativeInteger"},
+        "metrics": {"$ref": "#/$defs/metricMap"}
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["abstention", "by_category", "overall"],
+      "properties": {
+        "abstention": {"$ref": "#/$defs/abstention"},
+        "by_category": {"type": "object", "minProperties": 1, "additionalProperties": {"$ref": "#/$defs/category"}},
+        "overall": {"$ref": "#/$defs/metricMap"}
+      }
+    },
+    "numericMap": {"type": "object", "additionalProperties": {"$ref": "#/$defs/nonnegativeNumber"}},
+    "nonnegativeIntegerMap": {"type": "object", "additionalProperties": {"$ref": "#/$defs/nonnegativeInteger"}},
+    "timing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ingestion", "latency_profiles_seconds", "latency_seconds", "total"],
+      "properties": {
+        "ingestion": {"$ref": "#/$defs/numericMap"},
+        "latency_profiles_seconds": {"type": "object", "additionalProperties": {"$ref": "#/$defs/numericMap"}},
+        "latency_seconds": {"$ref": "#/$defs/numericMap"},
+        "total": {"$ref": "#/$defs/numericMap"}
+      }
+    },
+    "predictionIntegrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["coverage", "dataset_cases", "full_dataset_complete", "matched", "missing_dataset_cases", "provided", "unknown_case_count", "valid"],
+      "properties": {
+        "coverage": {"const": 1.0},
+        "dataset_cases": {"$ref": "#/$defs/nonnegativeInteger"},
+        "full_dataset_complete": {"const": true},
+        "matched": {"$ref": "#/$defs/nonnegativeInteger"},
+        "missing_dataset_cases": {"const": 0},
+        "provided": {"$ref": "#/$defs/nonnegativeInteger"},
+        "unknown_case_count": {"const": 0},
+        "valid": {"const": true}
+      }
+    },
+    "transformation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "excluded_classes", "sanitized_sha256_location"],
+      "properties": {
+        "id": {"const": "autopsy-aggregate-allowlist/v1"},
+        "excluded_classes": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+        "sanitized_sha256_location": {"const": "MANIFEST.json"}
+      }
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["independent_metric_equality", "prediction_integrity", "source_predictions_sha256", "source_run_sha256", "source_score_sha256", "transformation"],
+      "properties": {
+        "independent_metric_equality": {"const": true},
+        "prediction_integrity": {"$ref": "#/$defs/predictionIntegrity"},
+        "source_predictions_sha256": {"$ref": "#/$defs/sha256"},
+        "source_run_sha256": {"$ref": "#/$defs/sha256"},
+        "source_score_sha256": {"$ref": "#/$defs/sha256"},
+        "transformation": {"$ref": "#/$defs/transformation"}
+      }
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "answers": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "abstained": { "type": "boolean" },
+          "answer": { "type": "string" },
+          "case_handle": { "minLength": 1, "type": "string" },
+          "cited_context_handles": {
+            "items": { "minLength": 1, "type": "string" },
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": ["case_handle", "answer", "abstained", "cited_context_handles"],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "schema": { "const": "autopsy-codex-answer-output/v1" }
+  },
+  "required": ["schema", "answers"],
+  "type": "object"
+}

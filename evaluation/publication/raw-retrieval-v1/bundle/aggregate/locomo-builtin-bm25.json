@@ -1,0 +1,385 @@
+{
+  "counts": {
+    "abstention_scored_cases": 1980,
+    "cases": 1986,
+    "exclusions": {
+      "no_resolvable_source_evidence": 4,
+      "unresolved_source_evidence": 2
+    },
+    "retrieval_scored_cases": 1534,
+    "unscored_retrieval_cases": 6
+  },
+  "dataset": {
+    "bytes": 2805274,
+    "dataset": "locomo",
+    "expected_sha256": "79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4",
+    "license": "CC-BY-NC-4.0",
+    "sha256": "79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4",
+    "version": "git-3eb6f2c585f5e1699204e3c3bdf7adc5c28cb376"
+  },
+  "integrity": {
+    "independent_metric_equality": true,
+    "prediction_integrity": {
+      "coverage": 1.0,
+      "dataset_cases": 1986,
+      "full_dataset_complete": true,
+      "matched": 1986,
+      "missing_dataset_cases": 0,
+      "provided": 1986,
+      "unknown_case_count": 0,
+      "valid": true
+    },
+    "source_predictions_sha256": "d9196f6519d6f668e7a8b857559474969121076ab7b63ebb7982f464637fcd00",
+    "source_run_sha256": "b4eaf719efb2d0e991dda965882c20f6fc8e1228b6ed65bff684e0bb892dea7f",
+    "source_score_sha256": "9074c6e60ccc764d1309762c950fa8542f85e30b6273f3649c825de7d95c5afc",
+    "transformation": {
+      "excluded_classes": [
+        "absolute-and-local-paths",
+        "answers-and-generated-text",
+        "case-identifiers-and-labels",
+        "dataset-conversation-and-query-text",
+        "ranked-relevant-and-forbidden-source-identifiers"
+      ],
+      "id": "autopsy-aggregate-allowlist/v1",
+      "sanitized_sha256_location": "MANIFEST.json"
+    }
+  },
+  "leakage_audit": {
+    "answers_ingested": 0,
+    "documents_with_exact_query_text": 0,
+    "documents_with_query_as_exact_title": 0,
+    "judgments_ingested": 0,
+    "prohibited_gold_metadata_documents": 0,
+    "questions_ingested": 0,
+    "source_metadata_fields_stripped": 0
+  },
+  "metrics": {
+    "abstention": {
+      "f1": 0.0,
+      "false_negative": 446,
+      "false_positive": 0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "scored_cases": 1980,
+      "true_negative": 1534,
+      "true_positive": 0
+    },
+    "by_category": {
+      "adversarial-abstention": {
+        "abstention": {
+          "f1": 0.0,
+          "false_negative": 446,
+          "false_positive": 0,
+          "precision": 0.0,
+          "recall": 0.0,
+          "scored_cases": 446,
+          "true_negative": 0,
+          "true_positive": 0
+        },
+        "cases": 446,
+        "metrics": {
+          "forbidden_exposure@1": 0.0,
+          "forbidden_exposure@10": 0.0,
+          "forbidden_exposure@5": 0.0
+        }
+      },
+      "multi-hop": {
+        "abstention": {
+          "f1": 0.0,
+          "false_negative": 0,
+          "false_positive": 0,
+          "precision": 0.0,
+          "recall": 0.0,
+          "scored_cases": 280,
+          "true_negative": 280,
+          "true_positive": 0
+        },
+        "cases": 282,
+        "metrics": {
+          "evidence_recall@1": 0.04524389301175016,
+          "evidence_recall@10": 0.21972995258709543,
+          "evidence_recall@5": 0.14610015976087404,
+          "forbidden_exposure@1": 0.0,
+          "forbidden_exposure@10": 0.0,
+          "forbidden_exposure@5": 0.0,
+          "mrr@10": 0.20445719954648525,
+          "ndcg@1": 0.12857142857142856,
+          "ndcg@10": 0.1602948627934352,
+          "ndcg@5": 0.13068233905100005,
+          "recall_all@1": 0.0,
+          "recall_all@10": 0.07857142857142857,
+          "recall_all@5": 0.03214285714285714,
+          "recall_any@1": 0.12857142857142856,
+          "recall_any@10": 0.42857142857142855,
+          "recall_any@5": 0.32142857142857145,
+          "upstream_longmemeval_ndcg@1": 0.12857142857142856,
+          "upstream_longmemeval_ndcg@10": 0.15057224208775516,
+          "upstream_longmemeval_ndcg@5": 0.12493683727679882
+        }
+      },
+      "open-domain": {
+        "abstention": {
+          "f1": 0.0,
+          "false_negative": 0,
+          "false_positive": 0,
+          "precision": 0.0,
+          "recall": 0.0,
+          "scored_cases": 92,
+          "true_negative": 92,
+          "true_positive": 0
+        },
+        "cases": 96,
+        "metrics": {
+          "evidence_recall@1": 0.08423913043478261,
+          "evidence_recall@10": 0.2811700767263427,
+          "evidence_recall@5": 0.1845161977834612,
+          "forbidden_exposure@1": 0.0,
+          "forbidden_exposure@10": 0.0,
+          "forbidden_exposure@5": 0.0,
+          "mrr@10": 0.2050983436853002,
+          "ndcg@1": 0.13043478260869565,
+          "ndcg@10": 0.19243265278276964,
+          "ndcg@5": 0.15820628594626046,
+          "recall_all@1": 0.05434782608695652,
+          "recall_all@10": 0.1956521739130435,
+          "recall_all@5": 0.11956521739130435,
+          "recall_any@1": 0.13043478260869565,
+          "recall_any@10": 0.3804347826086957,
+          "recall_any@5": 0.2717391304347826,
+          "upstream_longmemeval_ndcg@1": 0.13043478260869565,
+          "upstream_longmemeval_ndcg@10": 0.21017255455286285,
+          "upstream_longmemeval_ndcg@5": 0.17608092895750438
+        }
+      },
+      "single-hop": {
+        "abstention": {
+          "f1": 0.0,
+          "false_negative": 0,
+          "false_positive": 0,
+          "precision": 0.0,
+          "recall": 0.0,
+          "scored_cases": 841,
+          "true_negative": 841,
+          "true_positive": 0
+        },
+        "cases": 841,
+        "metrics": {
+          "evidence_recall@1": 0.34086405073325404,
+          "evidence_recall@10": 0.6418945699564012,
+          "evidence_recall@5": 0.5657946888624653,
+          "forbidden_exposure@1": 0.0,
+          "forbidden_exposure@10": 0.0,
+          "forbidden_exposure@5": 0.0,
+          "mrr@10": 0.4483683445633505,
+          "ndcg@1": 0.3507728894173603,
+          "ndcg@10": 0.49053734121877834,
+          "ndcg@5": 0.4656661755639669,
+          "recall_all@1": 0.3329369797859691,
+          "recall_all@10": 0.6313912009512486,
+          "recall_all@5": 0.5517241379310345,
+          "recall_any@1": 0.3507728894173603,
+          "recall_any@10": 0.6516052318668252,
+          "recall_any@5": 0.5790725326991677,
+          "upstream_longmemeval_ndcg@1": 0.3507728894173603,
+          "upstream_longmemeval_ndcg@10": 0.5388761015241145,
+          "upstream_longmemeval_ndcg@5": 0.5126813183090704
+        }
+      },
+      "temporal": {
+        "abstention": {
+          "f1": 0.0,
+          "false_negative": 0,
+          "false_positive": 0,
+          "precision": 0.0,
+          "recall": 0.0,
+          "scored_cases": 321,
+          "true_negative": 321,
+          "true_positive": 0
+        },
+        "cases": 321,
+        "metrics": {
+          "evidence_recall@1": 0.3014018691588785,
+          "evidence_recall@10": 0.6279854620976116,
+          "evidence_recall@5": 0.5563343717549325,
+          "forbidden_exposure@1": 0.0,
+          "forbidden_exposure@10": 0.0,
+          "forbidden_exposure@5": 0.0,
+          "mrr@10": 0.4356969786876329,
+          "ndcg@1": 0.32087227414330216,
+          "ndcg@10": 0.4719561046298796,
+          "ndcg@5": 0.4473451708068471,
+          "recall_all@1": 0.2866043613707165,
+          "recall_all@10": 0.5981308411214953,
+          "recall_all@5": 0.5264797507788161,
+          "recall_any@1": 0.32087227414330216,
+          "recall_any@10": 0.660436137071651,
+          "recall_any@5": 0.5887850467289719,
+          "upstream_longmemeval_ndcg@1": 0.32087227414330216,
+          "upstream_longmemeval_ndcg@10": 0.5256580856843278,
+          "upstream_longmemeval_ndcg@5": 0.5004197884231477
+        }
+      }
+    },
+    "overall": {
+      "evidence_recall@1": 0.2632561647392156,
+      "evidence_recall@10": 0.5402925035527228,
+      "evidence_recall@5": 0.46434172203115376,
+      "forbidden_exposure@1": 0.0,
+      "forbidden_exposure@10": 0.0,
+      "forbidden_exposure@5": 0.0,
+      "mrr@10": 0.3866059787669957,
+      "ndcg@1": 0.2907431551499348,
+      "ndcg@10": 0.40849164223556755,
+      "ndcg@5": 0.3822484268054955,
+      "recall_all@1": 0.2457627118644068,
+      "recall_all@10": 0.4973924380704042,
+      "recall_all@5": 0.4256844850065189,
+      "recall_any@1": 0.2907431551499348,
+      "recall_any@10": 0.5964797913950456,
+      "recall_any@5": 0.515645371577575,
+      "upstream_longmemeval_ndcg@1": 0.2907431551499348,
+      "upstream_longmemeval_ndcg@10": 0.44551965429588286,
+      "upstream_longmemeval_ndcg@5": 0.4191535206540761
+    }
+  },
+  "protocol": {
+    "adapter_config_sha256": "db42772804136476e68046c43a63004fe899f2c4d1f0d1ace658a1770da3d919",
+    "granularity": "turn",
+    "k_values": [
+      1,
+      5,
+      10
+    ],
+    "repetitions": 2,
+    "representation": "audited",
+    "route": "lexical",
+    "temporal_policy": "dataset",
+    "track": "raw-retrieval"
+  },
+  "qualification": {
+    "code_provenance_qualified": true,
+    "forbidden_memory_gate_passed": true,
+    "full_dataset": true,
+    "metric_cutoffs_qualified": true,
+    "model_revision_qualified": true,
+    "no_case_errors": true,
+    "official_dataset_artifact": true,
+    "passed": true,
+    "ranking_stability_qualified": true,
+    "requested_route_qualified": true,
+    "required_metric_cutoffs": [
+      1,
+      5,
+      10
+    ],
+    "semantic_route_qualified": null,
+    "upstream_representation_qualified": true,
+    "upstream_temporal_policy_qualified": true
+  },
+  "release": {
+    "name": "autopsy-raw-retrieval-v1",
+    "source_commit": "a22c3c7b9946a7fa8a1cdb2c6dd0f50d9b58e71f",
+    "source_tree_sha256": "9275fa06416d09615255df7b8c3af48d8f25410c8c74ad9fe98d3ef50dfb5e1a"
+  },
+  "retrieval_channel_counts": {
+    "bm25": 19860
+  },
+  "row": {
+    "dataset": "locomo",
+    "name": "locomo-builtin-bm25",
+    "system": "builtin-bm25"
+  },
+  "runtime": {
+    "autopsy_source_version": "0.1.30",
+    "autopsy_version": "0.1.30",
+    "cpu_count": 16,
+    "dependency_versions": {
+      "falkordb": "1.6.1",
+      "falkordblite": "0.10.0",
+      "redis": "7.4.1",
+      "sentence-transformers": "5.6.0"
+    },
+    "git_commit": "a22c3c7b9946a7fa8a1cdb2c6dd0f50d9b58e71f",
+    "git_dirty": false,
+    "machine": "arm64",
+    "platform": "macOS-27.0-arm64-arm-64bit",
+    "process_peak_rss_bytes": 41451520,
+    "processor": "Apple M3 Max",
+    "python": "3.12.13",
+    "source_tree_sha256": "9275fa06416d09615255df7b8c3af48d8f25410c8c74ad9fe98d3ef50dfb5e1a",
+    "total_memory_bytes": 51539607552
+  },
+  "schema": "autopsy-publication-aggregate-result/v1",
+  "source_timestamps": {
+    "run_completed_at": "2026-07-11T18:45:16.084661+00:00",
+    "run_started_at": "2026-07-11T18:45:01.426737+00:00",
+    "score_scored_at": "2026-07-11T18:52:56.611247+00:00"
+  },
+  "system": {
+    "adapter_id": "builtin-bm25",
+    "config_sha256": "db42772804136476e68046c43a63004fe899f2c4d1f0d1ace658a1770da3d919",
+    "cost": {
+      "currency": "USD",
+      "external_api_calls": 0,
+      "external_api_cost_usd": 0.0
+    },
+    "execution": {
+      "local": true,
+      "mode": "local-in-process",
+      "network_required": false,
+      "remote": false
+    },
+    "implementation": "autopsy-builtin-okapi-bm25-v1",
+    "package_pin": {
+      "installed_distribution_version": "0.1.30",
+      "name": "autopsy-memory",
+      "version": "0.1.30"
+    },
+    "qualifier": "lexical-control-not-memory-system",
+    "restrictions": {
+      "lexical_control": true,
+      "memory_system": false
+    },
+    "retrieval_family": "lexical",
+    "semantic": false,
+    "source_pin": {
+      "kind": "file-sha256",
+      "sha256": "374800b7362b47ce8719eb9c1d3df521f5634eae8277a7e021c7af040ca02958"
+    }
+  },
+  "timing": {
+    "ingestion": {
+      "characters": 994189,
+      "characters_per_second": 18386887.968430012,
+      "corpora": 10,
+      "documents": 5882,
+      "documents_per_second": 108783.81779551507,
+      "seconds": 0.054070542100816965
+    },
+    "latency_profiles_seconds": {
+      "first_measured_after_warmups": {
+        "mean": 0.0007715772049340222,
+        "p50": 0.0007598749361932278,
+        "p95": 0.0011838442296721041,
+        "p99": 0.00138139370828867,
+        "samples": 1986
+      },
+      "subsequent_repetitions": {
+        "mean": 0.000678501214643552,
+        "p50": 0.0006617289036512375,
+        "p95": 0.001069968449883163,
+        "p99": 0.0012631043908186256,
+        "samples": 1986
+      }
+    },
+    "latency_seconds": {
+      "mean": 0.0007250392097887871,
+      "p50": 0.0007131665479391813,
+      "p95": 0.001123583351727575,
+      "p99": 0.0013047023443505182
+    },
+    "total": {
+      "total_seconds": 14.657659125048667
+    }
+  }
+}

@@ -1,0 +1,473 @@
+{
+  "counts": {
+    "abstention_scored_cases": 449,
+    "cases": 500,
+    "exclusions": {
+      "evidence_not_in_upstream_user_only_representation": 51
+    },
+    "retrieval_scored_cases": 419,
+    "unscored_retrieval_cases": 51
+  },
+  "dataset": {
+    "bytes": 277383467,
+    "dataset": "longmemeval-s",
+    "expected_sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+    "license": "MIT",
+    "sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+    "version": "hf-98d7416c24c778c2fee6e6f3006e7a073259d48f"
+  },
+  "integrity": {
+    "independent_metric_equality": true,
+    "prediction_integrity": {
+      "coverage": 1.0,
+      "dataset_cases": 500,
+      "full_dataset_complete": true,
+      "matched": 500,
+      "missing_dataset_cases": 0,
+      "provided": 500,
+      "unknown_case_count": 0,
+      "valid": true
+    },
+    "source_predictions_sha256": "924375c7ae74a7ad6664365cf89da027354ffb1d8b3c2150aaf72be87027d4ab",
+    "source_run_sha256": "8c4e1e7aec3d6aecfd1e9f00556f8c4813be5bb0bbf6e78c95cd632ebc1cc58f",
+    "source_score_sha256": "bc531eabe72bfa6ab96238f1391f64a9ee0cb437c5e45ff15488c790abf2f0e7",
+    "transformation": {
+      "excluded_classes": [
+        "absolute-and-local-paths",
+        "answers-and-generated-text",
+        "case-identifiers-and-labels",
+        "dataset-conversation-and-query-text",
+        "ranked-relevant-and-forbidden-source-identifiers"
+      ],
+      "id": "autopsy-aggregate-allowlist/v1",
+      "sanitized_sha256_location": "MANIFEST.json"
+    }
+  },
+  "leakage_audit": {
+    "answers_ingested": 0,
+    "documents_with_exact_query_text": 1,
+    "documents_with_query_as_exact_title": 0,
+    "judgments_ingested": 0,
+    "prohibited_gold_metadata_documents": 0,
+    "questions_ingested": 0,
+    "source_metadata_fields_stripped": 47734
+  },
+  "metrics": {
+    "abstention": {
+      "f1": 0.0,
+      "false_negative": 30,
+      "false_positive": 2,
+      "precision": 0.0,
+      "recall": 0.0,
+      "scored_cases": 449,
+      "true_negative": 417,
+      "true_positive": 0
+    },
+    "by_category": {
+      "knowledge-update": {
+        "abstention": {
+          "f1": 0.0,
+          "false_negative": 6,
+          "false_positive": 0,
+          "precision": 0.0,
+          "recall": 0.0,
+          "scored_cases": 78,
+          "true_negative": 72,
+          "true_positive": 0
+        },
+        "cases": 78,
+        "metrics": {
+          "evidence_recall@10": 0.9791666666666666,
+          "evidence_recall@5": 0.9513888888888888,
+          "evidence_recall@50": 0.9791666666666666,
+          "forbidden_exposure@10": 0.0,
+          "forbidden_exposure@5": 0.0,
+          "forbidden_exposure@50": 0.0,
+          "mrr@50": 0.9090277777777778,
+          "ndcg@10": 0.9039641232327861,
+          "ndcg@5": 0.8929439076104532,
+          "ndcg@50": 0.9039641232327861,
+          "recall_all@10": 0.9583333333333334,
+          "recall_all@5": 0.9027777777777778,
+          "recall_all@50": 0.9583333333333334,
+          "recall_any@10": 1.0,
+          "recall_any@5": 1.0,
+          "recall_any@50": 1.0,
+          "upstream_longmemeval_ndcg@10": 0.8921599541874505,
+          "upstream_longmemeval_ndcg@5": 0.8825945144420347,
+          "upstream_longmemeval_ndcg@50": 0.8921599541874505
+        }
+      },
+      "multi-session": {
+        "abstention": {
+          "f1": 0.0,
+          "false_negative": 12,
+          "false_positive": 2,
+          "precision": 0.0,
+          "recall": 0.0,
+          "scored_cases": 133,
+          "true_negative": 119,
+          "true_positive": 0
+        },
+        "cases": 133,
+        "metrics": {
+          "evidence_recall@10": 0.8909090909090909,
+          "evidence_recall@5": 0.8604683195592286,
+          "evidence_recall@50": 0.9090909090909091,
+          "forbidden_exposure@10": 0.0,
+          "forbidden_exposure@5": 0.0,
+          "forbidden_exposure@50": 0.0,
+          "mrr@50": 0.8893188079138492,
+          "ndcg@10": 0.8575570130248219,
+          "ndcg@5": 0.843623008533721,
+          "ndcg@50": 0.8641829141004768,
+          "recall_all@10": 0.8181818181818182,
+          "recall_all@5": 0.743801652892562,
+          "recall_all@50": 0.8429752066115702,
+          "recall_any@10": 0.9504132231404959,
+          "recall_any@5": 0.9421487603305785,
+          "recall_any@50": 0.9586776859504132,
+          "upstream_longmemeval_ndcg@10": 0.8424739697464456,
+          "upstream_longmemeval_ndcg@5": 0.8303771994155295,
+          "upstream_longmemeval_ndcg@50": 0.8480286543572195
+        }
+      },
+      "single-session-assistant": {
+        "abstention": {
+          "f1": 0.0,
+          "false_negative": 0,
+          "false_positive": 0,
+          "precision": 0.0,
+          "recall": 0.0,
+          "scored_cases": 5,
+          "true_negative": 5,
+          "true_positive": 0
+        },
+        "cases": 56,
+        "metrics": {
+          "evidence_recall@10": 1.0,
+          "evidence_recall@5": 1.0,
+          "evidence_recall@50": 1.0,
+          "forbidden_exposure@10": 0.0,
+          "forbidden_exposure@5": 0.0,
+          "forbidden_exposure@50": 0.0,
+          "mrr@50": 1.0,
+          "ndcg@10": 1.0,
+          "ndcg@5": 1.0,
+          "ndcg@50": 1.0,
+          "recall_all@10": 1.0,
+          "recall_all@5": 1.0,
+          "recall_all@50": 1.0,
+          "recall_any@10": 1.0,
+          "recall_any@5": 1.0,
+          "recall_any@50": 1.0,
+          "upstream_longmemeval_ndcg@10": 1.0,
+          "upstream_longmemeval_ndcg@5": 1.0,
+          "upstream_longmemeval_ndcg@50": 1.0
+        }
+      },
+      "single-session-preference": {
+        "abstention": {
+          "f1": 0.0,
+          "false_negative": 0,
+          "false_positive": 0,
+          "precision": 0.0,
+          "recall": 0.0,
+          "scored_cases": 30,
+          "true_negative": 30,
+          "true_positive": 0
+        },
+        "cases": 30,
+        "metrics": {
+          "evidence_recall@10": 0.9333333333333333,
+          "evidence_recall@5": 0.8333333333333334,
+          "evidence_recall@50": 0.9666666666666667,
+          "forbidden_exposure@10": 0.0,
+          "forbidden_exposure@5": 0.0,
+          "forbidden_exposure@50": 0.0,
+          "mrr@50": 0.7443386243386243,
+          "ndcg@10": 0.7852977214035889,
+          "ndcg@5": 0.7530411659925673,
+          "ndcg@50": 0.7943056598844995,
+          "recall_all@10": 0.9333333333333333,
+          "recall_all@5": 0.8333333333333334,
+          "recall_all@50": 0.9666666666666667,
+          "recall_any@10": 0.9333333333333333,
+          "recall_any@5": 0.8333333333333334,
+          "recall_any@50": 0.9666666666666667,
+          "upstream_longmemeval_ndcg@10": 0.7939969641740651,
+          "upstream_longmemeval_ndcg@5": 0.759734322474006,
+          "upstream_longmemeval_ndcg@50": 0.8032950623624361
+        }
+      },
+      "single-session-user": {
+        "abstention": {
+          "f1": 0.0,
+          "false_negative": 6,
+          "false_positive": 0,
+          "precision": 0.0,
+          "recall": 0.0,
+          "scored_cases": 70,
+          "true_negative": 64,
+          "true_positive": 0
+        },
+        "cases": 70,
+        "metrics": {
+          "evidence_recall@10": 0.921875,
+          "evidence_recall@5": 0.875,
+          "evidence_recall@50": 0.921875,
+          "forbidden_exposure@10": 0.0,
+          "forbidden_exposure@5": 0.0,
+          "forbidden_exposure@50": 0.0,
+          "mrr@50": 0.7956349206349206,
+          "ndcg@10": 0.8258091021506496,
+          "ndcg@5": 0.8113805372238495,
+          "ndcg@50": 0.8258091021506496,
+          "recall_all@10": 0.921875,
+          "recall_all@5": 0.875,
+          "recall_all@50": 0.921875,
+          "recall_any@10": 0.921875,
+          "recall_any@5": 0.875,
+          "recall_any@50": 0.921875,
+          "upstream_longmemeval_ndcg@10": 0.8608736669194912,
+          "upstream_longmemeval_ndcg@5": 0.8456751972389016,
+          "upstream_longmemeval_ndcg@50": 0.8608736669194912
+        }
+      },
+      "temporal-reasoning": {
+        "abstention": {
+          "f1": 0.0,
+          "false_negative": 6,
+          "false_positive": 0,
+          "precision": 0.0,
+          "recall": 0.0,
+          "scored_cases": 133,
+          "true_negative": 127,
+          "true_positive": 0
+        },
+        "cases": 133,
+        "metrics": {
+          "evidence_recall@10": 0.9068241469816273,
+          "evidence_recall@5": 0.847769028871391,
+          "evidence_recall@50": 0.9297900262467191,
+          "forbidden_exposure@10": 0.0,
+          "forbidden_exposure@5": 0.0,
+          "forbidden_exposure@50": 0.0,
+          "mrr@50": 0.7996597016282055,
+          "ndcg@10": 0.8000198152414835,
+          "ndcg@5": 0.7792234070410499,
+          "ndcg@50": 0.8066619627691398,
+          "recall_all@10": 0.8661417322834646,
+          "recall_all@5": 0.7716535433070866,
+          "recall_all@50": 0.8976377952755905,
+          "recall_any@10": 0.937007874015748,
+          "recall_any@5": 0.905511811023622,
+          "recall_any@50": 0.952755905511811,
+          "upstream_longmemeval_ndcg@10": 0.8055986320288843,
+          "upstream_longmemeval_ndcg@5": 0.7854898207105819,
+          "upstream_longmemeval_ndcg@50": 0.8119783387957137
+        }
+      }
+    },
+    "overall": {
+      "evidence_recall@10": 0.9199681782020684,
+      "evidence_recall@5": 0.8741845664280031,
+      "evidence_recall@50": 0.9345664280031821,
+      "forbidden_exposure@10": 0.0,
+      "forbidden_exposure@5": 0.0,
+      "forbidden_exposure@50": 0.0,
+      "mrr@50": 0.8421602661459463,
+      "ndcg@10": 0.8397686065970923,
+      "ndcg@5": 0.823034146627326,
+      "ndcg@50": 0.8443402651187962,
+      "recall_all@10": 0.883054892601432,
+      "recall_all@5": 0.8090692124105012,
+      "recall_all@50": 0.9021479713603818,
+      "recall_any@10": 0.9498806682577565,
+      "recall_any@5": 0.9236276849642004,
+      "recall_any@50": 0.9594272076372315,
+      "upstream_longmemeval_ndcg@10": 0.8410542169846159,
+      "upstream_longmemeval_ndcg@5": 0.8250474837633874,
+      "upstream_longmemeval_ndcg@50": 0.8452577552732605
+    }
+  },
+  "protocol": {
+    "adapter_config_sha256": "ddc11f5a7625b593a2228a32a61b87ae7679a1c33c67383bff8a8a766f977482",
+    "granularity": "session",
+    "k_values": [
+      5,
+      10,
+      50
+    ],
+    "repetitions": 2,
+    "representation": "upstream",
+    "route": "hybrid",
+    "temporal_policy": "dataset",
+    "track": "raw-retrieval"
+  },
+  "qualification": {
+    "code_provenance_qualified": true,
+    "forbidden_memory_gate_passed": true,
+    "full_dataset": true,
+    "metric_cutoffs_qualified": true,
+    "model_revision_qualified": true,
+    "no_case_errors": true,
+    "official_dataset_artifact": true,
+    "passed": true,
+    "ranking_stability_qualified": true,
+    "requested_route_qualified": true,
+    "required_metric_cutoffs": [
+      5,
+      10,
+      50
+    ],
+    "semantic_route_qualified": true,
+    "upstream_representation_qualified": true,
+    "upstream_temporal_policy_qualified": true
+  },
+  "release": {
+    "name": "autopsy-raw-retrieval-v1",
+    "source_commit": "a22c3c7b9946a7fa8a1cdb2c6dd0f50d9b58e71f",
+    "source_tree_sha256": "9275fa06416d09615255df7b8c3af48d8f25410c8c74ad9fe98d3ef50dfb5e1a"
+  },
+  "retrieval_channel_counts": {
+    "embedding": 5660,
+    "mem0-native-search": 5660
+  },
+  "row": {
+    "dataset": "longmemeval-s",
+    "name": "longmemeval-s-mem0-oss-raw",
+    "system": "mem0-oss-raw"
+  },
+  "runtime": {
+    "autopsy_source_version": "0.1.30",
+    "autopsy_version": "0.1.30",
+    "cpu_count": 16,
+    "dependency_versions": {
+      "falkordb": "1.6.1",
+      "falkordblite": "0.10.0",
+      "redis": "7.4.1",
+      "sentence-transformers": "5.6.0"
+    },
+    "git_commit": "a22c3c7b9946a7fa8a1cdb2c6dd0f50d9b58e71f",
+    "git_dirty": false,
+    "machine": "arm64",
+    "platform": "macOS-27.0-arm64-arm-64bit",
+    "process_peak_rss_bytes": 299614208,
+    "processor": "Apple M3 Max",
+    "python": "3.12.13",
+    "source_tree_sha256": "9275fa06416d09615255df7b8c3af48d8f25410c8c74ad9fe98d3ef50dfb5e1a",
+    "total_memory_bytes": 51539607552
+  },
+  "schema": "autopsy-publication-aggregate-result/v1",
+  "source_timestamps": {
+    "run_completed_at": "2026-07-11T18:52:37.931597+00:00",
+    "run_started_at": "2026-07-11T18:47:37.866962+00:00",
+    "score_scored_at": "2026-07-11T18:53:03.332687+00:00"
+  },
+  "system": {
+    "adapter_id": "mem0-oss-raw",
+    "config_sha256": "ddc11f5a7625b593a2228a32a61b87ae7679a1c33c67383bff8a8a766f977482",
+    "cost": {
+      "currency": "USD",
+      "external_api_calls": 0,
+      "external_api_cost_usd": 0.0
+    },
+    "embedding": {
+      "eligible_items": 23796,
+      "embedded_items": 23796,
+      "model": "sentence-transformers/multi-qa-MiniLM-L6-cos-v1",
+      "revision": "b207367332321f8e44f96e224ef15bc607f4dbf0",
+      "vector_coverage": 1.0
+    },
+    "execution": {
+      "bootstrap_network_required": true,
+      "external_service_credentials_required": false,
+      "initial_model_download_network_required": true,
+      "local": true,
+      "mode": "local-isolated-subprocess",
+      "network_required": false,
+      "remote": false,
+      "runtime_offline_enforced": true
+    },
+    "implementation": "mem0-oss-2.0.11-raw-infer-false-v1",
+    "package_pin": {
+      "embedding_model": {
+        "name": "sentence-transformers/multi-qa-MiniLM-L6-cos-v1",
+        "revision": "b207367332321f8e44f96e224ef15bc607f4dbf0"
+      },
+      "name": "mem0ai",
+      "required_version": "2.0.11",
+      "runtime_dependencies": {
+        "mem0ai": "2.0.11",
+        "pydantic": "2.13.4",
+        "qdrant-client": "1.18.0",
+        "sentence-transformers": "5.1.2",
+        "torch": "2.13.0",
+        "transformers": "4.57.6"
+      },
+      "version": "2.0.11"
+    },
+    "qualifier": "restricted-raw-vector-adapter-not-native-memory-pipeline",
+    "restrictions": {
+      "infer": false,
+      "local_qdrant": true,
+      "native_llm_extraction": false,
+      "runtime_offline": true,
+      "telemetry": false
+    },
+    "retrieval_family": "dense-semantic",
+    "semantic": true,
+    "source_pin": {
+      "adapter_bundle": {
+        "kind": "mem0-adapter-bundle-sha256",
+        "sha256": "db2d3ccac2efeb71303bc61eaaf2dcbf4a6f3087dd5c126ddbbcbca36a4629a4"
+      },
+      "adapter_sha256": "daa38427ddbead1be0b82a25fc4ce259b5a8a9b3e3e51a562149387ddc8facf0",
+      "bootstrap_assets": {
+        "kind": "source-tree-sha256",
+        "sha256": "9017f0ae9d452cbf95aaaf0a49d029c80741831b4cd5b8ff9e60d3bceb62bd22"
+      },
+      "commit": "f2532f072fdefa4c90264acc80af0984309f8b06",
+      "kind": "upstream-git-commit-plus-complete-adapter-bundle",
+      "repository": "https://github.com/mem0ai/mem0",
+      "tag": "v2.0.11",
+      "worker_sha256": "0377f5eaf370b8c5ee0353fecd2b52ae0bb5a8f80e9467b713964c5f4864fbf9"
+    }
+  },
+  "timing": {
+    "ingestion": {
+      "characters": 30822891,
+      "characters_per_second": 106983.42319227052,
+      "corpora": 500,
+      "documents": 23867,
+      "documents_per_second": 82.84016451701174,
+      "seconds": 288.10903671127744
+    },
+    "latency_profiles_seconds": {
+      "first_measured_after_warmups": {
+        "mean": 0.0068318320843391124,
+        "p50": 0.006864791037514806,
+        "p95": 0.008218420844059434,
+        "p99": 0.010059312193188813,
+        "samples": 500
+      },
+      "subsequent_repetitions": {
+        "mean": 0.006740242323372513,
+        "p50": 0.006669853930361569,
+        "p95": 0.008344135084189472,
+        "p99": 0.010267188597936183,
+        "samples": 500
+      }
+    },
+    "latency_seconds": {
+      "mean": 0.006786037203855812,
+      "p50": 0.0067091769888065755,
+      "p95": 0.00818379634292796,
+      "p99": 0.009692787079839033
+    },
+    "total": {
+      "total_seconds": 300.0614348750096
+    }
+  }
+}

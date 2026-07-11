@@ -1,0 +1,424 @@
+{
+  "counts": {
+    "abstention_scored_cases": 1980,
+    "cases": 1986,
+    "exclusions": {
+      "no_resolvable_source_evidence": 4,
+      "unresolved_source_evidence": 2
+    },
+    "retrieval_scored_cases": 1534,
+    "unscored_retrieval_cases": 6
+  },
+  "dataset": {
+    "bytes": 2805274,
+    "dataset": "locomo",
+    "expected_sha256": "79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4",
+    "license": "CC-BY-NC-4.0",
+    "sha256": "79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4",
+    "version": "git-3eb6f2c585f5e1699204e3c3bdf7adc5c28cb376"
+  },
+  "integrity": {
+    "independent_metric_equality": true,
+    "prediction_integrity": {
+      "coverage": 1.0,
+      "dataset_cases": 1986,
+      "full_dataset_complete": true,
+      "matched": 1986,
+      "missing_dataset_cases": 0,
+      "provided": 1986,
+      "unknown_case_count": 0,
+      "valid": true
+    },
+    "source_predictions_sha256": "550fc1ac9cc613407c336c0bbf69b7e6cf8f49cd84e240ca013893d4ffc9e0cf",
+    "source_run_sha256": "f8d778dfba84082f3cbe1893f0dda16609fe27356b483f8c085fde925828a7df",
+    "source_score_sha256": "1a13dee1a52e31e07294159da8da6636ca9c74c8b8c53dbbbb756241bbf89c6d",
+    "transformation": {
+      "excluded_classes": [
+        "absolute-and-local-paths",
+        "answers-and-generated-text",
+        "case-identifiers-and-labels",
+        "dataset-conversation-and-query-text",
+        "ranked-relevant-and-forbidden-source-identifiers"
+      ],
+      "id": "autopsy-aggregate-allowlist/v1",
+      "sanitized_sha256_location": "MANIFEST.json"
+    }
+  },
+  "leakage_audit": {
+    "answers_ingested": 0,
+    "documents_with_exact_query_text": 0,
+    "documents_with_query_as_exact_title": 0,
+    "judgments_ingested": 0,
+    "prohibited_gold_metadata_documents": 0,
+    "questions_ingested": 0,
+    "source_metadata_fields_stripped": 0
+  },
+  "metrics": {
+    "abstention": {
+      "f1": 0.0,
+      "false_negative": 446,
+      "false_positive": 0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "scored_cases": 1980,
+      "true_negative": 1534,
+      "true_positive": 0
+    },
+    "by_category": {
+      "adversarial-abstention": {
+        "abstention": {
+          "f1": 0.0,
+          "false_negative": 446,
+          "false_positive": 0,
+          "precision": 0.0,
+          "recall": 0.0,
+          "scored_cases": 446,
+          "true_negative": 0,
+          "true_positive": 0
+        },
+        "cases": 446,
+        "metrics": {
+          "forbidden_exposure@1": 0.0,
+          "forbidden_exposure@10": 0.0,
+          "forbidden_exposure@5": 0.0
+        }
+      },
+      "multi-hop": {
+        "abstention": {
+          "f1": 0.0,
+          "false_negative": 0,
+          "false_positive": 0,
+          "precision": 0.0,
+          "recall": 0.0,
+          "scored_cases": 280,
+          "true_negative": 280,
+          "true_positive": 0
+        },
+        "cases": 282,
+        "metrics": {
+          "evidence_recall@1": 0.04093253968253968,
+          "evidence_recall@10": 0.2568194634313055,
+          "evidence_recall@5": 0.177678700267986,
+          "forbidden_exposure@1": 0.0,
+          "forbidden_exposure@10": 0.0,
+          "forbidden_exposure@5": 0.0,
+          "mrr@10": 0.21569160997732426,
+          "ndcg@1": 0.10357142857142858,
+          "ndcg@10": 0.18237108871068244,
+          "ndcg@5": 0.14695676396887566,
+          "recall_all@1": 0.0,
+          "recall_all@10": 0.08214285714285714,
+          "recall_all@5": 0.05714285714285714,
+          "recall_any@1": 0.10357142857142858,
+          "recall_any@10": 0.5142857142857142,
+          "recall_any@5": 0.37142857142857144,
+          "upstream_longmemeval_ndcg@1": 0.10357142857142858,
+          "upstream_longmemeval_ndcg@10": 0.17734895770486558,
+          "upstream_longmemeval_ndcg@5": 0.1464929069961777
+        }
+      },
+      "open-domain": {
+        "abstention": {
+          "f1": 0.0,
+          "false_negative": 0,
+          "false_positive": 0,
+          "precision": 0.0,
+          "recall": 0.0,
+          "scored_cases": 92,
+          "true_negative": 92,
+          "true_positive": 0
+        },
+        "cases": 96,
+        "metrics": {
+          "evidence_recall@1": 0.04891304347826087,
+          "evidence_recall@10": 0.2653985507246377,
+          "evidence_recall@5": 0.17028985507246377,
+          "forbidden_exposure@1": 0.0,
+          "forbidden_exposure@10": 0.0,
+          "forbidden_exposure@5": 0.0,
+          "mrr@10": 0.1465407177363699,
+          "ndcg@1": 0.07608695652173914,
+          "ndcg@10": 0.15510534876614424,
+          "ndcg@5": 0.12178141257381361,
+          "recall_all@1": 0.021739130434782608,
+          "recall_all@10": 0.1956521739130435,
+          "recall_all@5": 0.10869565217391304,
+          "recall_any@1": 0.07608695652173914,
+          "recall_any@10": 0.34782608695652173,
+          "recall_any@5": 0.2391304347826087,
+          "upstream_longmemeval_ndcg@1": 0.07608695652173914,
+          "upstream_longmemeval_ndcg@10": 0.16654080767369026,
+          "upstream_longmemeval_ndcg@5": 0.13237867882097915
+        }
+      },
+      "single-hop": {
+        "abstention": {
+          "f1": 0.0,
+          "false_negative": 0,
+          "false_positive": 0,
+          "precision": 0.0,
+          "recall": 0.0,
+          "scored_cases": 841,
+          "true_negative": 841,
+          "true_positive": 0
+        },
+        "cases": 841,
+        "metrics": {
+          "evidence_recall@1": 0.1896551724137931,
+          "evidence_recall@10": 0.5055489496630995,
+          "evidence_recall@5": 0.409235037653587,
+          "forbidden_exposure@1": 0.0,
+          "forbidden_exposure@10": 0.0,
+          "forbidden_exposure@5": 0.0,
+          "mrr@10": 0.291297680388049,
+          "ndcg@1": 0.19976218787158145,
+          "ndcg@10": 0.33743584323926656,
+          "ndcg@5": 0.30561188812508605,
+          "recall_all@1": 0.1807372175980975,
+          "recall_all@10": 0.4934601664684899,
+          "recall_all@5": 0.3971462544589774,
+          "recall_any@1": 0.19976218787158145,
+          "recall_any@10": 0.5184304399524375,
+          "recall_any@5": 0.4233055885850178,
+          "upstream_longmemeval_ndcg@1": 0.19976218787158145,
+          "upstream_longmemeval_ndcg@10": 0.37659338636783196,
+          "upstream_longmemeval_ndcg@5": 0.34281983142224104
+        }
+      },
+      "temporal": {
+        "abstention": {
+          "f1": 0.0,
+          "false_negative": 0,
+          "false_positive": 0,
+          "precision": 0.0,
+          "recall": 0.0,
+          "scored_cases": 321,
+          "true_negative": 321,
+          "true_positive": 0
+        },
+        "cases": 321,
+        "metrics": {
+          "evidence_recall@1": 0.23130841121495327,
+          "evidence_recall@10": 0.5677570093457944,
+          "evidence_recall@5": 0.45301142263759087,
+          "forbidden_exposure@1": 0.0,
+          "forbidden_exposure@10": 0.0,
+          "forbidden_exposure@5": 0.0,
+          "mrr@10": 0.3581652079315631,
+          "ndcg@1": 0.2554517133956386,
+          "ndcg@10": 0.3958932308337166,
+          "ndcg@5": 0.357931357312117,
+          "recall_all@1": 0.21495327102803738,
+          "recall_all@10": 0.5358255451713395,
+          "recall_all@5": 0.4205607476635514,
+          "recall_any@1": 0.2554517133956386,
+          "recall_any@10": 0.6043613707165109,
+          "recall_any@5": 0.48598130841121495,
+          "upstream_longmemeval_ndcg@1": 0.2554517133956386,
+          "upstream_longmemeval_ndcg@10": 0.4379612633910296,
+          "upstream_longmemeval_ndcg@5": 0.3982607715056661
+        }
+      }
+    },
+    "overall": {
+      "evidence_recall@1": 0.16278429668260178,
+      "evidence_recall@10": 0.45876322235599665,
+      "evidence_recall@5": 0.3617992412483938,
+      "forbidden_exposure@1": 0.0,
+      "forbidden_exposure@10": 0.0,
+      "forbidden_exposure@5": 0.0,
+      "mrr@10": 0.28280819933362306,
+      "ndcg@1": 0.1864406779661017,
+      "ndcg@10": 0.310429509900471,
+      "ndcg@5": 0.27657584581386113,
+      "recall_all@1": 0.1453715775749674,
+      "recall_all@10": 0.409387222946545,
+      "recall_all@5": 0.3226857887874837,
+      "recall_any@1": 0.1864406779661017,
+      "recall_any@10": 0.5254237288135594,
+      "recall_any@5": 0.41590612777053454,
+      "upstream_longmemeval_ndcg@1": 0.1864406779661017,
+      "upstream_longmemeval_ndcg@10": 0.34046940413768517,
+      "upstream_longmemeval_ndcg@5": 0.305964822874761
+    }
+  },
+  "protocol": {
+    "adapter_config_sha256": "ddc11f5a7625b593a2228a32a61b87ae7679a1c33c67383bff8a8a766f977482",
+    "granularity": "turn",
+    "k_values": [
+      1,
+      5,
+      10
+    ],
+    "repetitions": 2,
+    "representation": "audited",
+    "route": "hybrid",
+    "temporal_policy": "dataset",
+    "track": "raw-retrieval"
+  },
+  "qualification": {
+    "code_provenance_qualified": true,
+    "forbidden_memory_gate_passed": true,
+    "full_dataset": true,
+    "metric_cutoffs_qualified": true,
+    "model_revision_qualified": true,
+    "no_case_errors": true,
+    "official_dataset_artifact": true,
+    "passed": true,
+    "ranking_stability_qualified": true,
+    "requested_route_qualified": true,
+    "required_metric_cutoffs": [
+      1,
+      5,
+      10
+    ],
+    "semantic_route_qualified": true,
+    "upstream_representation_qualified": true,
+    "upstream_temporal_policy_qualified": true
+  },
+  "release": {
+    "name": "autopsy-raw-retrieval-v1",
+    "source_commit": "a22c3c7b9946a7fa8a1cdb2c6dd0f50d9b58e71f",
+    "source_tree_sha256": "9275fa06416d09615255df7b8c3af48d8f25410c8c74ad9fe98d3ef50dfb5e1a"
+  },
+  "retrieval_channel_counts": {
+    "embedding": 19860,
+    "mem0-native-search": 19860
+  },
+  "row": {
+    "dataset": "locomo",
+    "name": "locomo-mem0-oss-raw",
+    "system": "mem0-oss-raw"
+  },
+  "runtime": {
+    "autopsy_source_version": "0.1.30",
+    "autopsy_version": "0.1.30",
+    "cpu_count": 16,
+    "dependency_versions": {
+      "falkordb": "1.6.1",
+      "falkordblite": "0.10.0",
+      "redis": "7.4.1",
+      "sentence-transformers": "5.6.0"
+    },
+    "git_commit": "a22c3c7b9946a7fa8a1cdb2c6dd0f50d9b58e71f",
+    "git_dirty": false,
+    "machine": "arm64",
+    "platform": "macOS-27.0-arm64-arm-64bit",
+    "process_peak_rss_bytes": 42156032,
+    "processor": "Apple M3 Max",
+    "python": "3.12.13",
+    "source_tree_sha256": "9275fa06416d09615255df7b8c3af48d8f25410c8c74ad9fe98d3ef50dfb5e1a",
+    "total_memory_bytes": 51539607552
+  },
+  "schema": "autopsy-publication-aggregate-result/v1",
+  "source_timestamps": {
+    "run_completed_at": "2026-07-11T18:47:27.838510+00:00",
+    "run_started_at": "2026-07-11T18:45:33.977854+00:00",
+    "score_scored_at": "2026-07-11T18:52:57.086480+00:00"
+  },
+  "system": {
+    "adapter_id": "mem0-oss-raw",
+    "config_sha256": "ddc11f5a7625b593a2228a32a61b87ae7679a1c33c67383bff8a8a766f977482",
+    "cost": {
+      "currency": "USD",
+      "external_api_calls": 0,
+      "external_api_cost_usd": 0.0
+    },
+    "embedding": {
+      "eligible_items": 5882,
+      "embedded_items": 5882,
+      "model": "sentence-transformers/multi-qa-MiniLM-L6-cos-v1",
+      "revision": "b207367332321f8e44f96e224ef15bc607f4dbf0",
+      "vector_coverage": 1.0
+    },
+    "execution": {
+      "bootstrap_network_required": true,
+      "external_service_credentials_required": false,
+      "initial_model_download_network_required": true,
+      "local": true,
+      "mode": "local-isolated-subprocess",
+      "network_required": false,
+      "remote": false,
+      "runtime_offline_enforced": true
+    },
+    "implementation": "mem0-oss-2.0.11-raw-infer-false-v1",
+    "package_pin": {
+      "embedding_model": {
+        "name": "sentence-transformers/multi-qa-MiniLM-L6-cos-v1",
+        "revision": "b207367332321f8e44f96e224ef15bc607f4dbf0"
+      },
+      "name": "mem0ai",
+      "required_version": "2.0.11",
+      "runtime_dependencies": {
+        "mem0ai": "2.0.11",
+        "pydantic": "2.13.4",
+        "qdrant-client": "1.18.0",
+        "sentence-transformers": "5.1.2",
+        "torch": "2.13.0",
+        "transformers": "4.57.6"
+      },
+      "version": "2.0.11"
+    },
+    "qualifier": "restricted-raw-vector-adapter-not-native-memory-pipeline",
+    "restrictions": {
+      "infer": false,
+      "local_qdrant": true,
+      "native_llm_extraction": false,
+      "runtime_offline": true,
+      "telemetry": false
+    },
+    "retrieval_family": "dense-semantic",
+    "semantic": true,
+    "source_pin": {
+      "adapter_bundle": {
+        "kind": "mem0-adapter-bundle-sha256",
+        "sha256": "db2d3ccac2efeb71303bc61eaaf2dcbf4a6f3087dd5c126ddbbcbca36a4629a4"
+      },
+      "adapter_sha256": "daa38427ddbead1be0b82a25fc4ce259b5a8a9b3e3e51a562149387ddc8facf0",
+      "bootstrap_assets": {
+        "kind": "source-tree-sha256",
+        "sha256": "9017f0ae9d452cbf95aaaf0a49d029c80741831b4cd5b8ff9e60d3bceb62bd22"
+      },
+      "commit": "f2532f072fdefa4c90264acc80af0984309f8b06",
+      "kind": "upstream-git-commit-plus-complete-adapter-bundle",
+      "repository": "https://github.com/mem0ai/mem0",
+      "tag": "v2.0.11",
+      "worker_sha256": "0377f5eaf370b8c5ee0353fecd2b52ae0bb5a8f80e9467b713964c5f4864fbf9"
+    }
+  },
+  "timing": {
+    "ingestion": {
+      "characters": 994189,
+      "characters_per_second": 20357.084087221738,
+      "corpora": 10,
+      "documents": 5882,
+      "documents_per_second": 120.44024687563255,
+      "seconds": 48.83749537705444
+    },
+    "latency_profiles_seconds": {
+      "first_measured_after_warmups": {
+        "mean": 0.012164093283087592,
+        "p50": 0.011549666873179376,
+        "p95": 0.016534624621272087,
+        "p99": 0.01894884805660695,
+        "samples": 1986
+      },
+      "subsequent_repetitions": {
+        "mean": 0.011995106439358458,
+        "p50": 0.011505124624818563,
+        "p95": 0.016363697650376707,
+        "p99": 0.018667154433205723,
+        "samples": 1986
+      }
+    },
+    "latency_seconds": {
+      "mean": 0.012079599861223025,
+      "p50": 0.011777531064581126,
+      "p95": 0.015938937751343474,
+      "p99": 0.016890183446230368
+    },
+    "total": {
+      "total_seconds": 113.85936166718602
+    }
+  }
+}
