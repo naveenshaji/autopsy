@@ -70,6 +70,7 @@ class AutopsyEvaluationAdapter:
         self._ingestion_history: list[dict[str, Any]] = []
         self._evaluated_eligible_items = 0
         self._evaluated_embedded_items = 0
+        self._query_state_keys: set[str] = set()
         self.initialization_seconds = time.perf_counter() - initialization_started
 
     @staticmethod
@@ -82,6 +83,7 @@ class AutopsyEvaluationAdapter:
         self.cli.invalidate_graph_caches(self.graph)
         self._stable_to_document.clear()
         self._document_to_stable.clear()
+        self._query_state_keys.clear()
         self._corpus_fingerprint = ""
 
     def _row(self, document: EvaluationDocument, entity_id: int, order: int) -> dict[str, Any]:
@@ -255,9 +257,12 @@ class AutopsyEvaluationAdapter:
         return self.prepare(corpus)
 
     def reset_query_state(self) -> None:
+        if not self._query_state_keys:
+            return
         self.graph.query(
             """
             MATCH (node:SemanticItem)
+            WHERE node.stable_key IN $stable_keys
             SET node.access_count = 0,
                 node.last_accessed_at = '',
                 node.last_access_source = '',
@@ -270,8 +275,10 @@ class AutopsyEvaluationAdapter:
                 node.last_feedback_rating = '',
                 node.last_feedback_source = '',
                 node.last_feedback_note = ''
-            """
+            """,
+            params={"stable_keys": sorted(self._query_state_keys)},
         )
+        self._query_state_keys.clear()
 
     def retrieve(self, request: RetrievalRequest) -> RetrievalResult:
         if not isinstance(request, RetrievalRequest):
@@ -294,6 +301,14 @@ class AutopsyEvaluationAdapter:
         )
         elapsed = time.perf_counter() - started
         hits = list(payload.get("hits") or [])
+        # Consult mutates access telemetry only for final hits. Remember that
+        # bounded set so the next query can remove adaptive-ranking state
+        # without rewriting the entire corpus before every retrieval.
+        self._query_state_keys = {
+            str(hit.get("stable_key") or "")
+            for hit in hits
+            if str(hit.get("stable_key") or "")
+        }
         selected_hits = [
             (hit, self._stable_to_document[stable_key])
             for hit in hits
@@ -325,6 +340,7 @@ class AutopsyEvaluationAdapter:
                 "store": "falkordblite",
                 "embeddings": self.config,
                 "telemetry_reset_between_queries": True,
+                "telemetry_reset_mode": "prior-hit-stable-keys",
             },
             source_path=__file__,
             retrieval_family="hybrid",
@@ -364,6 +380,7 @@ class AutopsyEvaluationAdapter:
             "store": "falkordblite",
             "production_worker_used": False,
             "telemetry_reset_between_queries": True,
+            "telemetry_reset_mode": "prior-hit-stable-keys",
             "eligible_items": eligible,
             "embedded_items": embedded,
             "vector_coverage": embedded / eligible if eligible else 0.0,

@@ -380,6 +380,29 @@ class ExternalMetricTests(unittest.TestCase):
 
 
 class ExternalEvaluationContractTests(unittest.TestCase):
+    def test_autopsy_query_state_reset_is_bounded_to_prior_hits(self):
+        from autopsy_memory.evaluation.autopsy_adapter import AutopsyEvaluationAdapter
+
+        class RecordingGraph:
+            def __init__(self):
+                self.calls = []
+
+            def query(self, query, params=None):
+                self.calls.append((query, params or {}))
+
+        adapter = object.__new__(AutopsyEvaluationAdapter)
+        adapter.graph = RecordingGraph()
+        adapter._query_state_keys = {"memory:b", "memory:a"}
+
+        adapter.reset_query_state()
+        adapter.reset_query_state()
+
+        self.assertEqual(len(adapter.graph.calls), 1)
+        query, params = adapter.graph.calls[0]
+        self.assertIn("node.stable_key IN $stable_keys", query)
+        self.assertEqual(params["stable_keys"], ["memory:a", "memory:b"])
+        self.assertEqual(adapter._query_state_keys, set())
+
     def test_adapter_initialization_failure_restores_the_process_guard(self):
         from autopsy_memory.evaluation.autopsy_adapter import AutopsyEvaluationAdapter
 
