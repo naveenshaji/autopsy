@@ -8,9 +8,9 @@
         "properties": {
           "abstained": { "type": "boolean" },
           "answer": { "type": "string" },
-          "case_handle": { "minLength": 1, "type": "string" },
+          "case_handle": { "type": "string" },
           "cited_context_handles": {
-            "items": { "minLength": 1, "type": "string" },
+            "items": { "type": "string" },
             "type": "array"
           }
         },

@@ -6,7 +6,7 @@
       "items": {
         "additionalProperties": false,
         "properties": {
-          "case_handle": { "minLength": 1, "type": "string" },
+          "case_handle": { "type": "string" },
           "correct": { "type": "boolean" }
         },
         "required": ["case_handle", "correct"],
