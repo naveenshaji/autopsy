@@ -63,7 +63,11 @@ python "$TOOL" resume --run-dir "$RUN"
 python "$TOOL" status --run-dir "$RUN"
 ```
 
-The defaults pin answer routing to `gpt-5.4-mini` at `xhigh` reasoning and the
+Answer batches are capped at 16 cases and 100,000 input characters. The lower
+case cap makes exact output coverage easier to enforce and limits the amount of
+work lost when a batch fails closed.
+
+The defaults pin answer routing to `gpt-5.4-mini` at `medium` reasoning and the
 judge to `gpt-5.4` at `medium` reasoning, with two independent judge passes.
 The manifest also pins the exact prompt, selection-policy, output-schema,
 dataset, and retrieval-artifact hashes. Model IDs pin routing names, not

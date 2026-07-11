@@ -214,6 +214,13 @@ class CodexDiagnosticTests(unittest.TestCase):
                 else:
                     args = parser.parse_args([phase, "--run-dir", "run"])
                 self.assertEqual(args.phase, phase)
+                if phase == "prepare":
+                    self.assertEqual(args.answer_reasoning_effort, "medium")
+                    self.assertEqual(args.judge_model, "gpt-5.4")
+
+    def test_answer_batch_cap_limits_strict_output_coverage_risk(self) -> None:
+        self.assertEqual(diagnostic.MAX_BATCH_CASES, 16)
+        self.assertEqual(diagnostic.MAX_BATCH_CHARACTERS, 100_000)
 
 
 if __name__ == "__main__":

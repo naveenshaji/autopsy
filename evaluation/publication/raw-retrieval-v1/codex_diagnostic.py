@@ -52,7 +52,7 @@ EXPLORATORY_LABEL = (
 )
 
 SELECTION_SEED = "autopsy-codex-diagnostic-v1"
-MAX_BATCH_CASES = 32
+MAX_BATCH_CASES = 16
 MAX_BATCH_CHARACTERS = 100_000
 DEFAULT_JUDGE_REPETITIONS = 2
 
@@ -1266,7 +1266,7 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--longmemeval-data", required=True)
     prepare.add_argument("--longmemeval-predictions", required=True)
     prepare.add_argument("--answer-model", default="gpt-5.4-mini")
-    prepare.add_argument("--answer-reasoning-effort", default="xhigh", choices=("low", "medium", "high", "xhigh"))
+    prepare.add_argument("--answer-reasoning-effort", default="medium", choices=("low", "medium", "high", "xhigh"))
     prepare.add_argument("--judge-model", default="gpt-5.4")
     prepare.add_argument("--judge-reasoning-effort", default="medium", choices=("low", "medium", "high", "xhigh"))
     prepare.add_argument("--judge-repetitions", type=int, default=DEFAULT_JUDGE_REPETITIONS, choices=range(1, 4))
