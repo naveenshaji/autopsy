@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from collections import deque
@@ -465,6 +466,8 @@ _GRAPH_VECTOR_AVAILABILITY: dict[str, bool] = {}
 _GRAPH_SEMANTIC_ITEM_COUNT: dict[str, int] = {}
 _FALKORDB_LITE_CLIENTS: dict[str, Any] = {}
 _FALKORDB_LITE_GRAPH_NAMES: dict[str, set[str]] = {}
+_FALKORDB_LITE_RUNTIME_LOCKS: dict[str, threading.RLock] = {}
+_FALKORDB_LITE_RUNTIME_LOCKS_GUARD = threading.Lock()
 _FALKORDB_LITE_SHUTDOWN_REGISTERED = False
 _EMBEDDING_MODEL_CACHE: dict[tuple[str, str], Any] = {}
 _RERANKER_MODEL_CACHE: dict[tuple[str, str], Any] = {}
@@ -2160,6 +2163,39 @@ def guarded_falkor_graph(graph, *, lite_path: str, graph_name: str):
     return guarded
 
 
+def falkordb_lite_runtime_lock_path(lite_path: str | Path) -> Path:
+    return Path(str(Path(lite_path).expanduser()) + ".runtime.lock")
+
+
+def falkordb_lite_process_runtime_lock(lite_path: str | Path) -> threading.RLock:
+    resolved_path = str(Path(lite_path).expanduser())
+    with _FALKORDB_LITE_RUNTIME_LOCKS_GUARD:
+        return _FALKORDB_LITE_RUNTIME_LOCKS.setdefault(resolved_path, threading.RLock())
+
+
+@contextlib.contextmanager
+def falkordb_lite_runtime_lock(lite_path: str | Path):
+    """Serialize embedded runtime bootstrap across threads and processes."""
+
+    resolved_path = str(Path(lite_path).expanduser())
+    process_lock = falkordb_lite_process_runtime_lock(resolved_path)
+    with process_lock:
+        path = falkordb_lite_runtime_lock_path(resolved_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle = path.open("a+", encoding="utf-8")
+        try:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            yield
+        finally:
+            if fcntl is not None:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                except OSError:
+                    pass
+            handle.close()
+
+
 def ensure_graph(host: str, port: int, graph_name: str, lite_path: str | None = None):
     if lite_path:
         FalkorDBLite = load_falkordblite()
@@ -2170,45 +2206,63 @@ def ensure_graph(host: str, port: int, graph_name: str, lite_path: str | None = 
         log_path = falkordb_lite_log_path(resolved_path)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         serverconfig = {"logfile": str(log_path)}
-        try:
-            client = _FALKORDB_LITE_CLIENTS.get(resolved_path)
-            if client is None:
-                client = FalkorDBLite(resolved_path, serverconfig=serverconfig)
-            _FALKORDB_LITE_CLIENTS[resolved_path] = client
-            _FALKORDB_LITE_GRAPH_NAMES.setdefault(resolved_path, set()).add(graph_name)
-            graph = guarded_falkor_graph(client.select_graph(graph_name), lite_path=resolved_path, graph_name=graph_name)
-            return graph
-        except MemoryDatabaseRollbackError:
-            stale_client = _FALKORDB_LITE_CLIENTS.pop(resolved_path, None) or locals().get("client")
-            if stale_client is not None:
-                try:
-                    close_falkordb_lite_client(stale_client, save=False)
-                except Exception:
-                    disarm_falkordb_lite_cleanup(stale_client)
-            _FALKORDB_LITE_GRAPH_NAMES.pop(resolved_path, None)
-            raise
-        except Exception as exc:
-            if not is_stale_falkordb_lite_error(exc):
-                raise
-            reset_falkordb_lite_client(resolved_path)
-            backup_stale_falkordb_lite_settings(resolved_path)
-            client = FalkorDBLite(resolved_path, serverconfig=serverconfig)
-            _FALKORDB_LITE_CLIENTS[resolved_path] = client
-            _FALKORDB_LITE_GRAPH_NAMES.setdefault(resolved_path, set()).add(graph_name)
-            try:
-                graph = guarded_falkor_graph(client.select_graph(graph_name), lite_path=resolved_path, graph_name=graph_name)
-            except MemoryDatabaseRollbackError:
-                try:
-                    close_falkordb_lite_client(client, save=False)
-                except Exception:
-                    disarm_falkordb_lite_cleanup(client)
-                _FALKORDB_LITE_CLIENTS.pop(resolved_path, None)
-                _FALKORDB_LITE_GRAPH_NAMES.pop(resolved_path, None)
-                raise
-            return graph
+        with falkordb_lite_runtime_lock(resolved_path):
+            return ensure_falkordb_lite_graph(
+                FalkorDBLite,
+                resolved_path=resolved_path,
+                graph_name=graph_name,
+                serverconfig=serverconfig,
+            )
     FalkorDB = load_falkordb()
     client = FalkorDB(host=host, port=port)
     return client.select_graph(graph_name)
+
+
+def ensure_falkordb_lite_graph(
+    FalkorDBLite,
+    *,
+    resolved_path: str,
+    graph_name: str,
+    serverconfig: dict[str, Any],
+):
+    """Open one embedded graph while holding the runtime bootstrap lease."""
+
+    try:
+        client = _FALKORDB_LITE_CLIENTS.get(resolved_path)
+        if client is None:
+            client = FalkorDBLite(resolved_path, serverconfig=serverconfig)
+        _FALKORDB_LITE_CLIENTS[resolved_path] = client
+        _FALKORDB_LITE_GRAPH_NAMES.setdefault(resolved_path, set()).add(graph_name)
+        graph = guarded_falkor_graph(client.select_graph(graph_name), lite_path=resolved_path, graph_name=graph_name)
+        return graph
+    except MemoryDatabaseRollbackError:
+        stale_client = _FALKORDB_LITE_CLIENTS.pop(resolved_path, None) or locals().get("client")
+        if stale_client is not None:
+            try:
+                close_falkordb_lite_client(stale_client, save=False)
+            except Exception:
+                disarm_falkordb_lite_cleanup(stale_client)
+        _FALKORDB_LITE_GRAPH_NAMES.pop(resolved_path, None)
+        raise
+    except Exception as exc:
+        if not is_stale_falkordb_lite_error(exc):
+            raise
+        reset_falkordb_lite_client(resolved_path)
+        backup_stale_falkordb_lite_settings(resolved_path)
+        client = FalkorDBLite(resolved_path, serverconfig=serverconfig)
+        _FALKORDB_LITE_CLIENTS[resolved_path] = client
+        _FALKORDB_LITE_GRAPH_NAMES.setdefault(resolved_path, set()).add(graph_name)
+        try:
+            graph = guarded_falkor_graph(client.select_graph(graph_name), lite_path=resolved_path, graph_name=graph_name)
+        except MemoryDatabaseRollbackError:
+            try:
+                close_falkordb_lite_client(client, save=False)
+            except Exception:
+                disarm_falkordb_lite_cleanup(client)
+            _FALKORDB_LITE_CLIENTS.pop(resolved_path, None)
+            _FALKORDB_LITE_GRAPH_NAMES.pop(resolved_path, None)
+            raise
+        return graph
 
 
 def register_falkordb_lite_shutdown() -> None:
@@ -18285,6 +18339,8 @@ def build_health_payload(args: argparse.Namespace) -> dict[str, Any]:
         import_check("redislite.falkordb_client", required=True),
         import_check("sentence_transformers", required=True),
     ]
+    embedded_runtime_lifecycle = redislite_lifecycle_check()
+    checks.append(embedded_runtime_lifecycle)
     required_ok = all(check["ok"] for check in checks if check["required"])
     repo_hint = repository_path_from_args(args) or str(Path.cwd().resolve())
     targets = instruction_targets(
@@ -18317,6 +18373,7 @@ def build_health_payload(args: argparse.Namespace) -> dict[str, Any]:
         "checks": {
             "runtime": checks,
             "required_runtime_ok": required_ok,
+            "embedded_runtime_lifecycle": embedded_runtime_lifecycle,
             "indexes_ready": index_ok,
             "graph_ready": graph_ok,
             "embeddings_configured": bool(config.get("enabled", True)),
@@ -19094,7 +19151,7 @@ def redislite_lifecycle_check(*, cleanup: bool = False) -> dict[str, Any]:
     except Exception as exc:
         return {
             "name": "redislite_processes",
-            "required": False,
+            "required": True,
             "ok": False,
             "error": str(exc),
         }

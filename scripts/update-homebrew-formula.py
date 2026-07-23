@@ -228,7 +228,7 @@ class {FORMULA_CLASS} < Formula
   end
 
   def autopsy_python
-    Formula["python@3.12"].opt_bin/"python3.12"
+    formula_opt_bin("python@3.12")/"python3.12"
   end
 
   def validate_autopsy_python!

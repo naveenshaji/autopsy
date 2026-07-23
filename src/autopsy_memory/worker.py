@@ -972,6 +972,18 @@ def health_via_falkor(tool, workspace, embeddings_config, falkor, request: dict)
         module.import_check("redislite.falkordb_client", required=True),
         module.import_check("sentence_transformers", required=True),
     ]
+    lifecycle_check = getattr(module, "redislite_lifecycle_check", None)
+    embedded_runtime_lifecycle = (
+        lifecycle_check()
+        if callable(lifecycle_check)
+        else {
+            "name": "redislite_processes",
+            "required": True,
+            "ok": False,
+            "error": "The loaded Autopsy memory module does not expose embedded runtime lifecycle diagnostics.",
+        }
+    )
+    checks.append(embedded_runtime_lifecycle)
     required_ok = all(check["ok"] for check in checks if check["required"])
     repo_hint = str(request.get('repo') or workspace.get('root_path') or os.getcwd())
     targets = module.instruction_targets(
@@ -1002,6 +1014,7 @@ def health_via_falkor(tool, workspace, embeddings_config, falkor, request: dict)
         "checks": {
             "runtime": checks,
             "required_runtime_ok": required_ok,
+            "embedded_runtime_lifecycle": embedded_runtime_lifecycle,
             "indexes_ready": index_ok,
             "graph_ready": graph_ok,
             "embeddings_configured": bool(embeddings_config.get("enabled", True)),

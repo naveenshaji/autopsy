@@ -435,6 +435,8 @@ def annotate_redislite_process_records(records: list[dict[str, Any]], *, current
     annotated: list[dict[str, Any]] = []
     current_prefix = str(Path(sys.prefix).resolve())
     current_app_support = app_support_dir().expanduser().resolve()
+    current_settings = read_falkor_settings() or {}
+    current_unixsocket = str(current_settings.get("unixsocket") or "").strip()
     for record in records:
         command = str(record.get("command") or "")
         cwd_text = str(record.get("cwd") or "").strip()
@@ -442,14 +444,22 @@ def annotate_redislite_process_records(records: list[dict[str, Any]], *, current
             cwd = Path(cwd_text).expanduser().resolve() if cwd_text else None
         except Exception:
             cwd = None
+        socket_match = REDISLITE_UNIX_SOCKET_RE.search(command)
+        unixsocket = str(socket_match.group(1) if socket_match else "").strip()
+        matches_current_database = bool(current_unixsocket and unixsocket == current_unixsocket)
+        in_current_app_support = bool(cwd and (cwd == current_app_support or current_app_support in cwd.parents))
         package_version = redislite_package_version(command)
         enriched = dict(record)
+        enriched["unixsocket"] = unixsocket
+        enriched["current_unixsocket"] = current_unixsocket
+        enriched["matches_current_database"] = matches_current_database
         enriched["package_version"] = package_version
         enriched["current_package_version"] = current_version
         enriched["stale_package_version"] = bool(package_version and current_version and package_version != current_version)
         enriched["matches_current_prefix"] = bool(current_prefix and current_prefix in command)
         enriched["current_app_support"] = str(current_app_support)
-        enriched["in_current_app_support"] = bool(cwd and (cwd == current_app_support or current_app_support in cwd.parents))
+        enriched["in_current_app_support"] = in_current_app_support
+        enriched["in_current_runtime_scope"] = matches_current_database or in_current_app_support
         annotated.append(enriched)
     return annotated
 
@@ -467,11 +477,11 @@ def redislite_keep_score(record: dict[str, Any], *, current_version: str | None)
     return score, -pid
 
 
-def reap_stale_redislite_processes(*, expected_max: int = 2, cleanup_current_excess: bool = False) -> dict[str, Any]:
+def reap_stale_redislite_processes(*, expected_max: int = 1, cleanup_current_excess: bool = False) -> dict[str, Any]:
     current_version = autopsy_distribution_version()
     before = annotate_redislite_process_records(redislite_process_records(), current_version=current_version)
     expected = max(0, int(expected_max))
-    cleanup_candidates = [record for record in before if record.get("in_current_app_support")]
+    cleanup_candidates = [record for record in before if record.get("in_current_runtime_scope")]
     terminate_records = [record for record in cleanup_candidates if record.get("stale_package_version")]
 
     if cleanup_current_excess:
@@ -510,17 +520,19 @@ def reap_stale_redislite_processes(*, expected_max: int = 2, cleanup_current_exc
     }
 
 
-def redislite_lifecycle_payload(*, expected_max: int = 2, cleanup: bool = False) -> dict[str, Any]:
+def redislite_lifecycle_payload(*, expected_max: int = 1, cleanup: bool = False) -> dict[str, Any]:
     cleanup_payload = None
     if cleanup:
         cleanup_payload = reap_stale_redislite_processes(expected_max=expected_max, cleanup_current_excess=True)
     current_version = autopsy_distribution_version()
-    records = annotate_redislite_process_records(redislite_process_records(), current_version=current_version)
+    all_records = annotate_redislite_process_records(redislite_process_records(), current_version=current_version)
+    records = [record for record in all_records if record.get("in_current_runtime_scope")]
+    ignored_records = [record for record in all_records if not record.get("in_current_runtime_scope")]
     expected = max(0, int(expected_max))
     excess_count = max(0, len(records) - expected)
     return {
         "name": "redislite_processes",
-        "required": False,
+        "required": True,
         "ok": excess_count == 0,
         "count": len(records),
         "expected_max": expected,
@@ -528,6 +540,8 @@ def redislite_lifecycle_payload(*, expected_max: int = 2, cleanup: bool = False)
         "current_package_version": current_version,
         "cleanup": cleanup_payload,
         "records": records[:20],
+        "ignored_count": len(ignored_records),
+        "ignored_records": ignored_records[:20],
     }
 
 
