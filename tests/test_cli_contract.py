@@ -5,6 +5,7 @@ import os
 import plistlib
 import sys
 import tempfile
+import threading
 import types
 import unittest
 from pathlib import Path
@@ -3458,7 +3459,16 @@ class AutopsyCLIContractTests(unittest.TestCase):
             {"pid": 33, "command": "/pkg/redislite/bin/redis-server unixsocket:/tmp/autopsy-c/redis.socket"},
             {"pid": 34, "command": "/pkg/redislite/bin/redis-server unixsocket:/tmp/other/redis.socket"},
         ]
-        with mock.patch.object(mcp_bridge, "process_table_rows", return_value=rows):
+        with (
+            tempfile.TemporaryDirectory() as current_dir,
+            mock.patch.object(mcp_bridge, "app_support_dir", return_value=Path(current_dir)),
+            mock.patch.object(
+                mcp_bridge,
+                "process_cwd",
+                side_effect=lambda pid: str(Path(current_dir) / "FalkorDB") if int(pid) != 34 else "/tmp/other",
+            ),
+            mock.patch.object(mcp_bridge, "process_table_rows", return_value=rows),
+        ):
             payload = mcp_bridge.redislite_lifecycle_payload(expected_max=2)
 
         self.assertFalse(payload["ok"])
@@ -3573,9 +3583,10 @@ class AutopsyCLIContractTests(unittest.TestCase):
             payload = mcp_bridge.redislite_lifecycle_payload(expected_max=0, cleanup=True)
 
         self.assertEqual(terminated, [])
-        self.assertFalse(payload["ok"])
-        self.assertEqual(payload["count"], 1)
-        self.assertFalse(payload["records"][0]["in_current_app_support"])
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["count"], 0)
+        self.assertEqual(payload["ignored_count"], 1)
+        self.assertFalse(payload["ignored_records"][0]["in_current_app_support"])
 
     def test_worker_lifecycle_payload_flags_mismatched_current_worker(self):
         with (
@@ -3589,12 +3600,98 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertFalse(payload["current"]["matches_current_sources"])
 
     def test_redislite_lifecycle_check_passes_cleanup_flag(self):
-        expected = {"name": "redislite_processes", "required": False, "ok": True}
+        expected = {"name": "redislite_processes", "required": True, "ok": True}
         with mock.patch.object(mcp_bridge, "redislite_lifecycle_payload", return_value=expected) as lifecycle:
             payload = cli.redislite_lifecycle_check(cleanup=True)
 
         self.assertEqual(payload, expected)
         lifecycle.assert_called_once_with(cleanup=True)
+
+    def test_redislite_lifecycle_requires_a_single_runtime(self):
+        records = [
+            {"pid": 41, "command": "redis-server one", "in_current_runtime_scope": True},
+            {"pid": 42, "command": "redis-server two", "in_current_runtime_scope": True},
+        ]
+        with (
+            mock.patch.object(mcp_bridge, "redislite_process_records", return_value=records),
+            mock.patch.object(mcp_bridge, "annotate_redislite_process_records", side_effect=lambda items, current_version: items),
+            mock.patch.object(mcp_bridge, "autopsy_distribution_version", return_value="0.1.31"),
+        ):
+            payload = mcp_bridge.redislite_lifecycle_payload()
+
+        self.assertTrue(payload["required"])
+        self.assertEqual(payload["expected_max"], 1)
+        self.assertEqual(payload["excess_count"], 1)
+        self.assertFalse(payload["ok"])
+
+    def test_redislite_lifecycle_ignores_other_app_support_scopes(self):
+        records = [
+            {"pid": 41, "command": "redis-server current", "in_current_runtime_scope": True},
+            {"pid": 42, "command": "redis-server isolated", "in_current_runtime_scope": False},
+        ]
+        with (
+            mock.patch.object(mcp_bridge, "redislite_process_records", return_value=records),
+            mock.patch.object(mcp_bridge, "annotate_redislite_process_records", side_effect=lambda items, current_version: items),
+            mock.patch.object(mcp_bridge, "autopsy_distribution_version", return_value="0.1.31"),
+        ):
+            payload = mcp_bridge.redislite_lifecycle_payload()
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(payload["ignored_count"], 1)
+        self.assertEqual([record["pid"] for record in payload["records"]], [41])
+
+    def test_redislite_lifecycle_matches_current_database_socket_outside_app_support_cwd(self):
+        socket_path = "/tmp/autopsy-current/redis.socket"
+        records = [{
+            "pid": 41,
+            "command": f"/pkg/redislite/bin/redis-server unixsocket:{socket_path}",
+            "cwd": "/tmp/caller-worktree",
+        }]
+        with (
+            tempfile.TemporaryDirectory() as current_dir,
+            mock.patch.object(mcp_bridge, "app_support_dir", return_value=Path(current_dir)),
+            mock.patch.object(mcp_bridge, "read_falkor_settings", return_value={"unixsocket": socket_path}),
+            mock.patch.object(mcp_bridge, "redislite_process_records", return_value=records),
+            mock.patch.object(mcp_bridge, "autopsy_distribution_version", return_value="0.1.31"),
+        ):
+            payload = mcp_bridge.redislite_lifecycle_payload()
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["count"], 1)
+        self.assertTrue(payload["records"][0]["matches_current_database"])
+        self.assertTrue(payload["records"][0]["in_current_runtime_scope"])
+
+    def test_falkordb_lite_runtime_lock_serializes_threads(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lite_path = str(Path(directory) / "autopsy-memory.db")
+            first_entered = threading.Event()
+            release_first = threading.Event()
+            second_entered = threading.Event()
+
+            def hold_first():
+                with cli.falkordb_lite_runtime_lock(lite_path):
+                    first_entered.set()
+                    release_first.wait(timeout=2)
+
+            def enter_second():
+                first_entered.wait(timeout=2)
+                with cli.falkordb_lite_runtime_lock(lite_path):
+                    second_entered.set()
+
+            first = threading.Thread(target=hold_first)
+            second = threading.Thread(target=enter_second)
+            first.start()
+            second.start()
+            self.assertTrue(first_entered.wait(timeout=1))
+            self.assertFalse(second_entered.wait(timeout=0.1))
+            release_first.set()
+            first.join(timeout=2)
+            second.join(timeout=2)
+
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertTrue(second_entered.is_set())
 
     def test_shutdown_falkordb_lite_clients_detaches_registered_clients_by_default(self):
         events: list[str] = []
@@ -6498,7 +6595,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
             "updated_at": "2026-06-21T00:00:00Z",
         }
 
-        with (
+        patches = (
             mock.patch.object(cli, "semantic_item_count", return_value=3),
             mock.patch.object(cli, "fetch_exact_text_candidates", return_value=([], 0.0)),
             mock.patch.object(cli, "fetch_node_lexical", return_value=([], 0.0)),
@@ -6520,7 +6617,10 @@ class AutopsyCLIContractTests(unittest.TestCase):
             mock.patch.object(cli, "filter_relationship_hits_by_read_guard", side_effect=lambda items, _guard: items),
             mock.patch.object(cli, "record_memory_access", return_value={"updated": 0, "stable_keys": []}),
             mock.patch.object(cli, "reranker_enabled_for_current_process", return_value=True),
-        ):
+        )
+        with contextlib.ExitStack() as stack:
+            for patch in patches:
+                stack.enter_context(patch)
             payload = cli.build_consult_payload(
                 types.SimpleNamespace(name="unit"),
                 tool=Tool(),
