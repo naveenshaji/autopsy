@@ -153,8 +153,16 @@ Back up and restore memory:
 
 ```bash
 autopsy backup
-autopsy restore ~/Library/Application\ Support/Autopsy/Backups/<backup>.json --dry-run
+autopsy backup --enable-icloud
+autopsy backup --status
+autopsy restore ~/Library/Application\ Support/Autopsy/Backups/<backup>.json --dry-run --include-operational
 ```
+
+Backups include memory history, source episodes, and repository lineage. Each
+successful memory write creates a new local recovery snapshot. Opting into iCloud
+also copies snapshots to iCloud Drive with SHA-256 verification. A verified local
+iCloud Drive copy does not confirm Apple's server upload. See
+[backup and recovery](docs/backups.md) for status, retries, and restore steps.
 
 Update Autopsy:
 

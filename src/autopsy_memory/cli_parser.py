@@ -315,6 +315,12 @@ def build_parser(
     backup_parser.add_argument("--output", "-o", help="Write backup JSON to this path instead of the default backups directory.")
     backup_parser.add_argument("--limit", type=int, default=0, help="Maximum number of items to export. Default exports all matching items.")
     backup_parser.add_argument("--include-operational", action="store_true", help="Include workspace/repository/thread/worktree/branch nodes.")
+    backup_parser.add_argument("--status", action="store_true", help="Show local backup and iCloud mirror status without opening the memory runtime.")
+    cloud_options = backup_parser.add_mutually_exclusive_group()
+    cloud_options.add_argument("--enable-icloud", action="store_true", help="Persistently enable verified iCloud Drive copies for manual and automatic backups.")
+    cloud_options.add_argument("--disable-icloud", action="store_true", help="Disable future iCloud copies without deleting any backups.")
+    backup_parser.add_argument("--icloud-directory", help="Backup destination inside your iCloud Drive; use with --enable-icloud.")
+    backup_parser.add_argument("--retry-icloud", action="store_true", help="Retry copying the latest local backup, or --output file, without opening the memory runtime.")
     backup_parser.set_defaults(func=handlers.backup)
 
     for restore_command in ("restore", "import"):

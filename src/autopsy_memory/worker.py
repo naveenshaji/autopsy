@@ -21,6 +21,8 @@ from urllib.parse import parse_qs, urlparse
 
 _EMBEDDING_MODEL_CACHE = {}
 _RERANKER_MODEL_CACHE = {}
+_EMBEDDING_MODEL_LOCK = threading.Lock()
+_RERANKER_MODEL_LOCK = threading.Lock()
 _TOOL_MODULE_CACHE = {}
 _TOOL_MODULE_LOCK = threading.Lock()
 _EMBEDDINGS_CONFIG_CACHE = {}
@@ -467,9 +469,12 @@ def load_sentence_transformer(model_name: str, device: str):
     key = (model_name, device)
     model = _EMBEDDING_MODEL_CACHE.get(key)
     if model is None:
-        from sentence_transformers import SentenceTransformer
-        model = SentenceTransformer(model_name, device=device)
-        _EMBEDDING_MODEL_CACHE[key] = model
+        with _EMBEDDING_MODEL_LOCK:
+            model = _EMBEDDING_MODEL_CACHE.get(key)
+            if model is None:
+                from sentence_transformers import SentenceTransformer
+                model = SentenceTransformer(model_name, device=device)
+                _EMBEDDING_MODEL_CACHE[key] = model
     return model
 
 
@@ -477,9 +482,12 @@ def load_cross_encoder(model_name: str, device: str):
     key = (model_name, device)
     model = _RERANKER_MODEL_CACHE.get(key)
     if model is None:
-        from sentence_transformers import CrossEncoder
-        model = CrossEncoder(model_name, device=device)
-        _RERANKER_MODEL_CACHE[key] = model
+        with _RERANKER_MODEL_LOCK:
+            model = _RERANKER_MODEL_CACHE.get(key)
+            if model is None:
+                from sentence_transformers import CrossEncoder
+                model = CrossEncoder(model_name, device=device)
+                _RERANKER_MODEL_CACHE[key] = model
     return model
 
 
@@ -553,11 +561,14 @@ def remove_owned_info_file(path: str, *, token: str, source_fingerprint: str) ->
 def worker_should_exit(server, *, info_file: str, token: str, source_fingerprint: str) -> tuple[bool, str]:
     if not info_file_still_owned(info_file, token=token, source_fingerprint=source_fingerprint):
         return True, 'info_file_replaced'
-    idle_timeout = float(getattr(server, 'idle_timeout_seconds', 0.0) or 0.0)
-    if idle_timeout > 0:
-        idle_for = time.monotonic() - float(getattr(server, 'last_request_at', 0.0) or 0.0)
-        if idle_for >= idle_timeout:
-            return True, 'idle_timeout'
+    with getattr(server, 'request_state_lock', contextlib.nullcontext()):
+        if getattr(server, 'active_requests', 0) > 0:
+            return False, ''
+        idle_timeout = float(getattr(server, 'idle_timeout_seconds', 0.0) or 0.0)
+        if idle_timeout > 0:
+            idle_for = time.monotonic() - float(getattr(server, 'last_request_at', 0.0) or 0.0)
+            if idle_for >= idle_timeout:
+                return True, 'idle_timeout'
     return False, ''
 
 
@@ -569,7 +580,8 @@ def worker_lifecycle_monitor(server, *, info_file: str, token: str, source_finge
         if not should_exit:
             continue
         request_worker_shutdown(server, reason)
-        return
+        if bool(getattr(server, 'shutdown_requested', False)):
+            return
 
 
 def force_exit_if_still_running(server, delay_seconds: float = 5.0) -> None:
@@ -579,10 +591,17 @@ def force_exit_if_still_running(server, delay_seconds: float = 5.0) -> None:
 
 
 def request_worker_shutdown(server, reason: str) -> None:
-    if bool(getattr(server, 'shutdown_requested', False)):
-        return
-    server.shutdown_reason = reason
-    server.shutdown_requested = True
+    with getattr(server, 'request_state_lock', contextlib.nullcontext()):
+        if bool(getattr(server, 'shutdown_requested', False)):
+            return
+        if reason == 'idle_timeout':
+            # A request may have started since the lifecycle monitor checked.
+            idle_timeout = float(getattr(server, 'idle_timeout_seconds', 0.0) or 0.0)
+            idle_for = time.monotonic() - float(getattr(server, 'last_request_at', 0.0) or 0.0)
+            if getattr(server, 'active_requests', 0) > 0 or idle_timeout <= 0 or idle_for < idle_timeout:
+                return
+        server.shutdown_reason = reason
+        server.shutdown_requested = True
     print(f'autopsy worker exiting: {reason}', file=sys.stderr, flush=True)
     threading.Thread(target=force_exit_if_still_running, args=(server,), daemon=True).start()
     threading.Thread(target=server.shutdown, daemon=True).start()
@@ -801,16 +820,12 @@ def run_falkor_operation(falkor: dict, operation):
     try:
         return operation(graph)
     except Exception as exc:
-        reset_falkor_lite_client(falkor['module'], falkor.get('lite_path'))
-        if worker_memory_database_rollback_error(exc):
-            raise
-        graph = falkor['module'].ensure_graph(
-            falkor['host'],
-            falkor['port'],
-            falkor['graph_name'],
-            lite_path=falkor.get('lite_path'),
-        )
-        return operation(graph)
+        # An operation may already have committed part or all of its writes.
+        # Replaying it on an ambiguous failure can duplicate memories/history.
+        stale_error = getattr(falkor['module'], 'is_stale_falkordb_lite_error', None)
+        if worker_memory_database_rollback_error(exc) or (callable(stale_error) and stale_error(exc)):
+            reset_falkor_lite_client(falkor['module'], falkor.get('lite_path'))
+        raise
 
 
 def int_request_argument(request: dict, name: str, default: int) -> int:
@@ -1765,11 +1780,34 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self._require_token():
             return
-        self._touch_request()
-        length = int(self.headers.get('content-length', '0') or '0')
+        with getattr(self.server, 'request_state_lock', contextlib.nullcontext()):
+            if bool(getattr(self.server, 'shutdown_requested', False)):
+                self._write_json(503, {'error': 'worker is shutting down'})
+                return
+            self.server.active_requests = getattr(self.server, 'active_requests', 0) + 1
+            self._touch_request()
+        try:
+            self._handle_post()
+        finally:
+            with getattr(self.server, 'request_state_lock', contextlib.nullcontext()):
+                self.server.active_requests -= 1
+                self._touch_request()
+
+    def _handle_post(self):
+        try:
+            length = int(self.headers.get('content-length', '0') or '0')
+            if length < 0:
+                raise ValueError('content-length must be nonnegative')
+        except (TypeError, ValueError) as exc:
+            self._write_json(400, {'error': f'invalid content-length: {exc}'})
+            return
         raw = self.rfile.read(length) if length > 0 else b'{}'
         try:
+            if length > 0 and len(raw) != length:
+                raise ValueError('request body is shorter than content-length')
             payload = json.loads(raw.decode('utf-8')) if raw else {}
+            if not isinstance(payload, dict):
+                raise ValueError('request payload must be a JSON object')
         except Exception as exc:
             self._write_json(400, {'error': f'invalid json: {exc}'})
             return
@@ -1894,6 +1932,8 @@ def main():
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     server.auth_token = args.token
     server.daemon_threads = True
+    server.request_state_lock = threading.Lock()
+    server.active_requests = 0
     server.last_request_at = time.monotonic()
     server.idle_timeout_seconds = worker_idle_timeout_seconds()
     server.ownership_check_seconds = worker_ownership_check_seconds()

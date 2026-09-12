@@ -353,17 +353,21 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["backup_health"]["severity"], "warning")
         self.assertEqual(payload["workflow"]["next_step"], "inspect_failed_checks_or_backup")
 
-    def test_auto_backup_after_write_skips_when_latest_backup_is_fresh(self):
+    def test_auto_backup_after_write_covers_new_write_even_when_previous_backup_is_fresh(self):
         with (
-            mock.patch.object(cli, "latest_backup_status", return_value={"count": 1, "latest": "/tmp/fresh.json", "valid": True, "age_seconds": 60}),
-            mock.patch.object(cli, "semantic_backup_item_count", return_value=2),
-            mock.patch.object(cli, "export_memory_payload") as export_memory,
+            tempfile.TemporaryDirectory() as temp_dir,
+            mock.patch.object(cli, "APP_SUPPORT_DIR_DEFAULT", Path(temp_dir)),
+            mock.patch.object(cli, "latest_backup_status") as latest,
+            mock.patch.object(cli, "export_memory_payload", return_value={
+                "schema_version": 1, "items": [{"stable_key": "new-write", "kind": "decision", "content": "New state"}],
+                "relations": [], "structural_edges": [],
+            }) as export_memory,
         ):
             payload = cli.maybe_auto_backup_after_write(object(), {"root_path": "/tmp/workspace"}, reason="unit")
-
-        self.assertEqual(payload["status"], "skipped")
-        self.assertEqual(payload["reason"], "latest_backup_fresh")
-        export_memory.assert_not_called()
+            self.assertEqual(payload["status"], "created")
+            self.assertTrue(payload["validation"]["valid"])
+            self.assertTrue(export_memory.call_args.kwargs["include_operational"])
+            latest.assert_not_called()
 
     def test_auto_backup_after_write_creates_valid_backup_when_stale(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -434,7 +438,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         self.assertEqual(payload["status"], "invalid")
         self.assertFalse(payload["validation"]["valid"])
         self.assertEqual(payload["validation"]["error"], "items_must_be_array")
-        self.assertIn("previous_backup_health", payload)
+        self.assertEqual(payload["icloud"]["status"], "not_attempted")
 
     def test_attach_auto_backup_marks_workflow_incomplete_when_backup_invalid(self):
         payload = {

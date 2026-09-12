@@ -28,6 +28,7 @@ except ImportError:  # pragma: no cover - fcntl is expected on supported macOS i
     fcntl = None
 
 from .cli_parser import CommandHandlers, build_parser as build_cli_parser, normalized_cli_args
+from . import backups as backup_storage
 from .doctor import import_check, installed_autopsy_command_check, python_version_check
 from .init import build_init_payload, cmd_init, instruction_targets, smoke_tests, target_status
 from .metadata import PACKAGE_NAME, cmd_instructions, cmd_version, package_version
@@ -462,7 +463,8 @@ RELATION_TERM_STOP_TOKENS = ENTITY_STOP_TOKENS | {
     "relations",
 }
 
-_GRAPH_VECTOR_AVAILABILITY: dict[str, bool] = {}
+_GRAPH_VECTOR_AVAILABILITY: dict[str, tuple[bool, float]] = {}
+GRAPH_VECTOR_AVAILABILITY_TTL_SECONDS = 60.0
 _GRAPH_SEMANTIC_ITEM_COUNT: dict[str, int] = {}
 _FALKORDB_LITE_CLIENTS: dict[str, Any] = {}
 _FALKORDB_LITE_GRAPH_NAMES: dict[str, set[str]] = {}
@@ -3179,28 +3181,38 @@ def fetch_vector_candidates(graph, tool, query: str, config: dict[str, Any], *, 
     if not provider_ok:
         return [], 0.0
     graph_name = getattr(graph, "name", "graph")
-    has_vectors = _GRAPH_VECTOR_AVAILABILITY.get(graph_name)
+    cached = _GRAPH_VECTOR_AVAILABILITY.get(graph_name)
+    has_vectors = cached[0] if cached and time.monotonic() - cached[1] < GRAPH_VECTOR_AVAILABILITY_TTL_SECONDS else None
     if has_vectors is None:
         try:
             probe = graph.query(
                 """
                 MATCH (node:SemanticItem)
                 WHERE node.embedding IS NOT NULL
-                RETURN count(node)
+                RETURN 1
                 LIMIT 1
                 """
             )
             rows = result_rows(probe)
-            has_vectors = bool(rows and int(rows[0][0] or 0) > 0)
+            has_vectors = bool(rows)
         except Exception:
-            has_vectors = False
-        _GRAPH_VECTOR_AVAILABILITY[graph_name] = has_vectors
+            # A failed probe says nothing about index contents. Retry the next
+            # read instead of disabling vector recall for the worker lifetime.
+            _GRAPH_VECTOR_AVAILABILITY.pop(graph_name, None)
+            return [], 0.0
+        _GRAPH_VECTOR_AVAILABILITY[graph_name] = (has_vectors, time.monotonic())
     if not has_vectors:
         return [], 0.0
-    vector = tool.embed_texts_with_provider([query], config)[0]
-    if not vector:
-        return [], 0.0
     started = time.perf_counter()
+    try:
+        vectors = tool.embed_texts_with_provider([query], config)
+        vector = vectors[0] if vectors else []
+    except Exception:
+        # Embeddings are optional: keep the direct retrieval results usable
+        # during a temporary provider failure without poisoning graph state.
+        return [], time.perf_counter() - started
+    if not vector:
+        return [], time.perf_counter() - started
     try:
         candidate_limit = max(limit * 4, int(config.get("vector_candidate_limit") or config.get("candidate_limit") or 48))
         result = graph.query(
@@ -3223,8 +3235,8 @@ def fetch_vector_candidates(graph, tool, query: str, config: dict[str, Any], *, 
             },
         )
     except Exception:
-        _GRAPH_VECTOR_AVAILABILITY[graph_name] = False
-        return [], 0.0
+        _GRAPH_VECTOR_AVAILABILITY.pop(graph_name, None)
+        return [], time.perf_counter() - started
     elapsed = time.perf_counter() - started
     items = []
     for rank, row in enumerate(result_rows(result)):
@@ -8948,6 +8960,28 @@ def stable_keys_linked_to_repository(graph, stable_keys: list[str], repository_s
     return {str(row[0] or "") for row in result_rows(result) if str(row[0] or "")}
 
 
+def memory_filter_metadata_by_stable_key(graph, stable_keys: list[str]) -> dict[str, dict[str, Any]]:
+    keys = sorted({key for key in stable_keys if key})
+    if not keys or graph is None:
+        return {}
+    result = graph.query(
+        """
+        MATCH (node:MemoryNode)
+        WHERE node.stable_key IN $stable_keys
+        RETURN node.stable_key, coalesce(node.memory_tags, ''), coalesce(node.memory_metadata, '{}')
+        """,
+        params={"stable_keys": keys},
+    )
+    return {
+        str(row[0]): {
+            "tags": item_memory_tags({"memory_tags": str(row[1] or "")}),
+            "metadata": item_memory_metadata({"memory_metadata": str(row[2] or "{}")}),
+        }
+        for row in result_rows(result)
+        if row[0]
+    }
+
+
 def filter_candidates_by_metadata(graph, items: list[dict[str, Any]], filters: dict[str, Any] | None) -> list[dict[str, Any]]:
     if not items or not consult_filters_active(filters):
         return items
@@ -8968,149 +9002,44 @@ def filter_candidates_by_metadata(graph, items: list[dict[str, Any]], filters: d
             repo_key,
         )
         filtered = [item for item in filtered if str(item.get("stable_key") or "") in allowed]
-    tags = normalize_tag_filters(filters.get("tags") if isinstance(filters, dict) else None)
-    if tags:
-        allowed_by_key: set[str] = set()
-        fetched_tags_by_key: dict[str, list[str]] = {}
-        missing_tag_keys = [
-            str(item.get("stable_key") or "")
-            for item in filtered
-            if str(item.get("stable_key") or "") and not item_has_tag_field(item)
-        ]
-        if missing_tag_keys:
-            fetched_tags_by_key = memory_tags_by_stable_key(graph, missing_tag_keys)
-            allowed_by_key = {
-                key
-                for key, memory_tags in fetched_tags_by_key.items()
-                if item_matches_tag_filters({"tags": memory_tags}, tags)
-            }
-        annotated: list[dict[str, Any]] = []
-        for item in filtered:
-            stable_key = str(item.get("stable_key") or "")
-            if not item_has_tag_field(item) and stable_key in fetched_tags_by_key:
-                item = {**item, "tags": fetched_tags_by_key[stable_key]}
-            annotated.append(item)
-        filtered = annotated
-        filtered = [
-            item
-            for item in filtered
-            if (item_has_tag_field(item) and item_matches_tag_filters(item, tags))
-            or (str(item.get("stable_key") or "") in allowed_by_key)
-        ]
-    namespaces = normalize_namespace_filters(filters.get("namespaces") if isinstance(filters, dict) else None)
-    if namespaces:
-        allowed_by_key = set()
-        fetched_namespaces_by_key: dict[str, list[str]] = {}
-        missing_namespace_keys = [
-            str(item.get("stable_key") or "")
-            for item in filtered
-            if str(item.get("stable_key") or "") and not item_has_namespace_field(item)
-        ]
-        if missing_namespace_keys and graph is not None:
-            fetched_namespaces_by_key = memory_namespaces_by_stable_key(graph, missing_namespace_keys)
-            allowed_by_key = {
-                key
-                for key, memory_namespaces in fetched_namespaces_by_key.items()
-                if item_matches_namespace_filters({"metadata": {MEMORY_NAMESPACE_METADATA_KEY: memory_namespaces}}, namespaces)
-            }
-        annotated = []
-        for item in filtered:
-            stable_key = str(item.get("stable_key") or "")
-            if not item_has_namespace_field(item) and stable_key in fetched_namespaces_by_key:
-                item = {**item, "metadata": {MEMORY_NAMESPACE_METADATA_KEY: fetched_namespaces_by_key[stable_key]}}
-            annotated.append(item)
-        filtered = annotated
-        filtered = [
-            item
-            for item in filtered
-            if (item_has_namespace_field(item) and item_matches_namespace_filters(item, namespaces))
-            or (str(item.get("stable_key") or "") in allowed_by_key)
-        ]
-    entity_scopes = normalize_entity_scope_filters(filters.get("entity_scopes") if isinstance(filters, dict) else None)
-    if entity_scopes:
-        allowed_by_key = set()
-        fetched_scopes_by_key: dict[str, list[str]] = {}
-        missing_scope_keys = [
-            str(item.get("stable_key") or "")
-            for item in filtered
-            if str(item.get("stable_key") or "") and not item_has_entity_scope_field(item)
-        ]
-        if missing_scope_keys and graph is not None:
-            fetched_scopes_by_key = memory_entity_scopes_by_stable_key(graph, missing_scope_keys)
-            allowed_by_key = {
-                key
-                for key, memory_scopes in fetched_scopes_by_key.items()
-                if item_matches_entity_scope_filters({"metadata": {ENTITY_SCOPE_METADATA_KEY: memory_scopes}}, entity_scopes)
-            }
-        annotated = []
-        for item in filtered:
-            stable_key = str(item.get("stable_key") or "")
-            if not item_has_entity_scope_field(item) and stable_key in fetched_scopes_by_key:
-                item = {**item, "metadata": {ENTITY_SCOPE_METADATA_KEY: fetched_scopes_by_key[stable_key]}}
-            annotated.append(item)
-        filtered = annotated
-        filtered = [
-            item
-            for item in filtered
-            if (item_has_entity_scope_field(item) and item_matches_entity_scope_filters(item, entity_scopes))
-            or (str(item.get("stable_key") or "") in allowed_by_key)
-        ]
-    metadata_filters = normalize_metadata_filters(filters.get("metadata") if isinstance(filters, dict) else None)
-    if metadata_filters:
-        allowed_by_key = set()
-        fetched_metadata_by_key: dict[str, dict[str, Any]] = {}
-        missing_metadata_keys = [
-            str(item.get("stable_key") or "")
-            for item in filtered
-            if str(item.get("stable_key") or "") and not item_has_metadata_field(item)
-        ]
-        if missing_metadata_keys:
-            fetched_metadata_by_key = memory_metadata_by_stable_key(graph, missing_metadata_keys)
-            allowed_by_key = {
-                key
-                for key, metadata in fetched_metadata_by_key.items()
-                if item_matches_metadata_filters({"metadata": metadata}, metadata_filters)
-            }
-        annotated = []
-        for item in filtered:
-            stable_key = str(item.get("stable_key") or "")
-            if not item_has_metadata_field(item) and stable_key in fetched_metadata_by_key:
-                item = {**item, "metadata": fetched_metadata_by_key[stable_key]}
-            annotated.append(item)
-        filtered = annotated
-        filtered = [
-            item
-            for item in filtered
-            if (item_has_metadata_field(item) and item_matches_metadata_filters(item, metadata_filters))
-            or (str(item.get("stable_key") or "") in allowed_by_key)
-        ]
-        if graph is not None:
-            missing_tag_keys = [
+    tags = normalize_tag_filters(filters.get("tags"))
+    namespaces = normalize_namespace_filters(filters.get("namespaces"))
+    entity_scopes = normalize_entity_scope_filters(filters.get("entity_scopes"))
+    metadata_filters = normalize_metadata_filters(filters.get("metadata"))
+    filter_expression = normalize_memory_filter_expression(filters.get("filter_json"))
+    expression_active = filter_expression_active(filter_expression)
+    if graph is not None and filtered:
+        # Namespace and entity-scope values may live in either tags or metadata.
+        # Fetch both together before evaluating any filter; a derived namespace
+        # fragment must never masquerade as the item's complete metadata.
+        if expression_active:
+            fetched_by_key = memory_filter_items_by_stable_key(
+                graph, [str(item.get("stable_key") or "") for item in filtered]
+            )
+        elif tags or namespaces or entity_scopes or metadata_filters:
+            needs_metadata = bool(namespaces or entity_scopes or metadata_filters)
+            missing_keys = [
                 str(item.get("stable_key") or "")
                 for item in filtered
-                if str(item.get("stable_key") or "") and not item_has_tag_field(item)
+                if not item_has_tag_field(item) or (needs_metadata and not item_has_metadata_field(item))
             ]
-            if missing_tag_keys:
-                tags_by_key = memory_tags_by_stable_key(graph, missing_tag_keys)
-                filtered = [
-                    {**item, "tags": tags_by_key.get(str(item.get("stable_key") or ""), [])}
-                    if str(item.get("stable_key") or "") in tags_by_key and not item_has_tag_field(item)
-                    else item
-                    for item in filtered
-                ]
-    filter_expression = normalize_memory_filter_expression(filters.get("filter_json") if isinstance(filters, dict) else None)
-    if filter_expression_active(filter_expression):
-        fetched_items_by_key: dict[str, dict[str, Any]] = {}
-        if graph is not None:
-            fetched_items_by_key = memory_filter_items_by_stable_key(
-                graph,
-                [str(item.get("stable_key") or "") for item in filtered],
-            )
-        annotated = []
-        for item in filtered:
-            stable_key = str(item.get("stable_key") or "")
-            annotated.append(merge_filter_item_details(item, fetched_items_by_key.get(stable_key) or {}))
-        filtered = [item for item in annotated if item_matches_filter_expression(item, filter_expression)]
+            fetched_by_key = memory_filter_metadata_by_stable_key(graph, missing_keys)
+        else:
+            fetched_by_key = {}
+        filtered = [
+            merge_filter_item_details(item, fetched_by_key.get(str(item.get("stable_key") or "")) or {})
+            for item in filtered
+        ]
+    if tags:
+        filtered = [item for item in filtered if item_matches_tag_filters(item, tags)]
+    if namespaces:
+        filtered = [item for item in filtered if item_matches_namespace_filters(item, namespaces)]
+    if entity_scopes:
+        filtered = [item for item in filtered if item_matches_entity_scope_filters(item, entity_scopes)]
+    if metadata_filters:
+        filtered = [item for item in filtered if item_matches_metadata_filters(item, metadata_filters)]
+    if expression_active:
+        filtered = [item for item in filtered if item_matches_filter_expression(item, filter_expression)]
     return filtered
 
 
@@ -16489,7 +16418,59 @@ def cmd_pin_item(args: argparse.Namespace) -> None:
     print_write_payload(payload)
 
 
+# Portable snapshots retain opaque history, session and usage fields as well as
+# the public memory body. Runtime identifiers and search indexes are regenerated.
+BACKUP_NODE_MAPPED_PROPERTIES = {
+    "entity_id", "stable_key", "kind", "label", "summary", "detail_content",
+    "source_kind", "confidence", "created_at", "updated_at", "expired_at",
+    "expiration_reason", "pinned_at", "pin_label", "pin_reason", "memory_tags",
+    "memory_metadata", "embedding", "search_text",
+}
+BACKUP_EDGE_MAPPED_PROPERTIES = {
+    "edge_id", "from_entity_id", "to_entity_id", "relation", "predicate",
+    "fact_text", "valid_at", "invalid_at", "expired_at", "fact_rating",
+    "updated_at",
+}
+
+
+def backup_extra_properties(raw: Any, *, edge: bool = False) -> dict[str, Any]:
+    excluded = BACKUP_EDGE_MAPPED_PROPERTIES if edge else BACKUP_NODE_MAPPED_PROPERTIES
+    return {str(key): value for key, value in dict(raw or {}).items() if key not in excluded}
+
+
 def export_memory_payload(
+    graph,
+    *,
+    workspace: dict[str, Any],
+    include_operational: bool = False,
+    limit: int = 0,
+) -> dict[str, Any]:
+    # All guarded writers use the same lock. Read the raw graph while holding it
+    # so a backup cannot join nodes and relationships from different generations.
+    if isinstance(graph, GuardedFalkorGraph) and memory_database_guard_enabled():
+        with memory_database_guard_lock(graph._autopsy_guard_lite_path):
+            raw_graph = graph._autopsy_guard_raw_graph
+            state = assert_memory_database_guard_current(
+                raw_graph,
+                graph._autopsy_guard_lite_path,
+                graph_name=graph._autopsy_guard_graph_name,
+                lock_held=True,
+            )
+            payload = _export_memory_payload(
+                raw_graph, workspace=workspace, include_operational=include_operational, limit=limit,
+            )
+            payload["snapshot"] = {
+                "consistent": True,
+                "policy": "guarded_graph_write_lock",
+                "generation": state.get("graph_generation"),
+            }
+            return payload
+    return _export_memory_payload(
+        graph, workspace=workspace, include_operational=include_operational, limit=limit,
+    )
+
+
+def _export_memory_payload(
     graph,
     *,
     workspace: dict[str, Any],
@@ -16517,7 +16498,8 @@ def export_memory_payload(
           coalesce(node.pin_label, ''),
           coalesce(node.pin_reason, ''),
           coalesce(node.memory_tags, ''),
-          coalesce(node.memory_metadata, '{}')
+          coalesce(node.memory_metadata, '{}'),
+          properties(node)
         ORDER BY node.updated_at DESC, node.entity_id DESC
     """
     params = {
@@ -16547,6 +16529,7 @@ def export_memory_payload(
             "pin_reason": str(row[14] or ""),
             "tags": item_memory_tags({"memory_tags": str(row[15] or "")}),
             "metadata": item_memory_metadata({"memory_metadata": str(row[16] or "{}")}),
+            "properties": backup_extra_properties(row[17]) if len(row) > 17 else {},
         }
         for row in rows
     ]
@@ -16568,7 +16551,8 @@ def export_memory_payload(
               fact.invalid_at,
               fact.expired_at,
               coalesce(fact.fact_rating, 0.5),
-              fact.updated_at
+              fact.updated_at,
+              properties(fact)
             ORDER BY fact.updated_at DESC
             """,
             params={"stable_keys": stable_keys},
@@ -16585,6 +16569,7 @@ def export_memory_payload(
                 "expired_at": str(row[7] or ""),
                 "fact_rating": fact_rating_for_read(row[8]),
                 "updated_at": str(row[9] or ""),
+                "properties": backup_extra_properties(row[10], edge=True) if len(row) > 10 else {},
             }
             for row in fact_rows
         ]
@@ -16594,7 +16579,7 @@ def export_memory_payload(
             WHERE type(edge) IN $edge_types
               AND source.stable_key IN $stable_keys
               AND target.stable_key IN $stable_keys
-            RETURN source.stable_key, target.stable_key, coalesce(edge.relation, toLower(type(edge))), edge.updated_at
+            RETURN source.stable_key, target.stable_key, coalesce(edge.relation, toLower(type(edge))), edge.updated_at, properties(edge)
             ORDER BY edge.updated_at DESC
             """,
             params={"stable_keys": stable_keys, "edge_types": list(STRUCTURAL_EDGE_TYPES)},
@@ -16605,6 +16590,7 @@ def export_memory_payload(
                 "to": str(row[1] or ""),
                 "relation": str(row[2] or ""),
                 "updated_at": str(row[3] or ""),
+                "properties": backup_extra_properties(row[4], edge=True) if len(row) > 4 else {},
             }
             for row in structural_rows
         ]
@@ -16649,12 +16635,48 @@ def cmd_export(args: argparse.Namespace) -> None:
 
 
 def cmd_backup(args: argparse.Namespace) -> None:
-    output = str(getattr(args, "output", "") or "").strip()
-    if not output:
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        output = str(APP_SUPPORT_DIR_DEFAULT / "Backups" / f"autopsy-memory-{timestamp}.json")
-    args.output = output
-    cmd_export(args)
+    if int(getattr(args, "limit", 0) or 0) != 0:
+        fail("Recovery backups must include the full graph; use autopsy export --limit for a partial export.", 2)
+    enable = bool(getattr(args, "enable_icloud", False))
+    disable = bool(getattr(args, "disable_icloud", False))
+    directory = getattr(args, "icloud_directory", None)
+    if directory and not enable:
+        fail("--icloud-directory requires --enable-icloud", 2)
+    if enable or disable:
+        backup_storage.configure_icloud_backup(
+            app_support=APP_SUPPORT_DIR_DEFAULT, enabled=enable, directory=directory,
+        )
+    if bool(getattr(args, "status", False)) or disable:
+        print(json.dumps({"backup": latest_backup_status(), "icloud": backup_storage.icloud_backup_status(app_support=APP_SUPPORT_DIR_DEFAULT)}, indent=2))
+        return
+    if bool(getattr(args, "retry_icloud", False)):
+        retry_output = getattr(args, "output", None)
+        if retry_output:
+            retry_path = Path(retry_output).expanduser()
+            latest = {"latest": str(retry_path), **restore_input_summary_or_error(str(retry_path), include_operational=True)}
+        else:
+            latest = latest_backup_status()
+        if not latest.get("valid"):
+            fail("No valid local backup is available to mirror; run autopsy backup first.", 2)
+        mirror = backup_storage.mirror_backup_to_icloud(Path(latest["latest"]), app_support=APP_SUPPORT_DIR_DEFAULT)
+        print(json.dumps({"icloud": mirror}, indent=2))
+        if mirror.get("status") == "error":
+            raise SystemExit(1)
+        return
+    _tool, workspace, _config, graph = open_workspace_graph(args)
+    # A recovery backup includes history, source episodes, and repository lineage.
+    # `export` retains its existing semantic-only default for interchange.
+    payload = export_memory_payload(
+        graph, workspace=workspace, include_operational=True,
+        limit=int(getattr(args, "limit", 0) or 0),
+    )
+    receipt = backup_storage.write_backup_snapshot(
+        payload, app_support=APP_SUPPORT_DIR_DEFAULT, output=getattr(args, "output", None),
+    )
+    receipt["icloud"] = backup_storage.mirror_backup_to_icloud(Path(receipt["written"]), app_support=APP_SUPPORT_DIR_DEFAULT)
+    print(json.dumps(receipt, indent=2))
+    if receipt["icloud"].get("status") == "error":
+        raise SystemExit(1)
 
 
 def auto_backup_after_write_enabled() -> bool:
@@ -16663,11 +16685,7 @@ def auto_backup_after_write_enabled() -> bool:
 
 
 def default_backup_output_path(*, timestamp: str | None = None) -> Path:
-    stamp = timestamp or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    base = APP_SUPPORT_DIR_DEFAULT / "Backups" / f"autopsy-memory-{stamp}.json"
-    if not base.exists():
-        return base
-    return base.with_name(base.stem + "-" + uuid.uuid4().hex[:8] + base.suffix)
+    return backup_storage.unique_backup_path(app_support=APP_SUPPORT_DIR_DEFAULT, timestamp=timestamp)
 
 
 def semantic_backup_item_count(graph) -> int:
@@ -16691,35 +16709,27 @@ def maybe_auto_backup_after_write(graph, workspace: dict[str, Any], *, reason: s
             "status": "disabled",
             "reason": "AUTOPSY_AUTO_BACKUP_AFTER_WRITE disables opportunistic backups",
         }
-    latest = latest_backup_status()
-    item_count = semantic_backup_item_count(graph)
-    health = backup_freshness_status(latest, item_count=item_count)
-    if bool(health.get("ok")):
-        return {
-            "enabled": True,
-            "status": "skipped",
-            "reason": "latest_backup_fresh",
-            "latest": latest.get("latest"),
-            "backup_health": health,
-        }
+    # A recent snapshot cannot cover a subsequent write. Snapshot this committed
+    # state instead of rereading yesterday's full backup on every mutation.
     output = default_backup_output_path()
     try:
         payload = export_memory_payload(
             graph,
             workspace=workspace,
-            include_operational=False,
+            include_operational=True,
         )
-        write_json_atomic(output, payload)
-        summary = restore_input_summary_or_error(str(output), include_operational=False)
+        receipt = backup_storage.write_backup_snapshot(payload, app_support=APP_SUPPORT_DIR_DEFAULT, output=output)
+        summary = restore_input_summary_or_error(str(output), include_operational=True)
         valid = bool(summary.get("valid"))
+        mirror = backup_storage.mirror_backup_to_icloud(output, app_support=APP_SUPPORT_DIR_DEFAULT) if valid else {"status": "not_attempted"}
         return {
             "enabled": True,
             "status": "created" if valid else "invalid",
             "reason": reason,
             "written": str(output),
-            "bytes": output.stat().st_size,
-            "previous_latest": latest.get("latest"),
-            "previous_backup_health": health,
+            "bytes": receipt["bytes"],
+            "sha256": receipt["sha256"],
+            "icloud": mirror,
             "validation": {
                 "valid": valid,
                 "error": summary.get("error"),
@@ -16733,8 +16743,6 @@ def maybe_auto_backup_after_write(graph, workspace: dict[str, Any], *, reason: s
             "reason": reason,
             "output": str(output),
             "error": str(exc),
-            "previous_latest": latest.get("latest"),
-            "previous_backup_health": health,
         }
 
 
@@ -16751,6 +16759,11 @@ def auto_backup_write_recovery(auto_backup: dict[str, Any]) -> dict[str, Any]:
         complete = True
         next_step = "done"
         message = f"Write recovery is covered by a fresh validated backup at {auto_backup.get('written')}."
+        mirror = auto_backup.get("icloud") or {}
+        if mirror.get("status") == "error":
+            complete = False
+            next_step = "retry_icloud_backup"
+            message += f" The local backup is safe, but the iCloud copy failed: {mirror.get('error', 'unknown error')}. Run autopsy backup --retry-icloud."
     elif status == "skipped" and reason == "latest_backup_fresh":
         complete = True
         next_step = "done"
@@ -16837,12 +16850,41 @@ def load_restore_json(path_value: str) -> dict[str, Any]:
     if not path.exists():
         fail(f"restore input does not exist: {path}", 2)
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        data = path.read_bytes()
+        payload = json.loads(data)
     except Exception as exc:
         fail(f"restore input is not valid JSON: {exc}", 2)
+    manifest_path = backup_storage.backup_manifest_path(path)
+    if (isinstance(payload, dict) and payload.get("backup_integrity") is not None) or manifest_path.exists() or manifest_path.is_symlink():
+        integrity = backup_storage.verify_backup_snapshot(path, require_manifest=True)
+        if not integrity.get("valid") or integrity.get("sha256") != hashlib.sha256(data).hexdigest():
+            fail(f"restore input failed integrity verification: {integrity.get('error') or 'backup changed during validation'}", 2)
     if not isinstance(payload, dict):
         fail("restore input must be a JSON object", 2)
     return payload
+
+
+def restore_raw_value(raw: dict[str, Any], *keys: str, default: Any = "") -> Any:
+    # Empty content and whitespace can be meaningful (code, instructions, logs).
+    for key in keys:
+        if key in raw and raw[key] is not None:
+            return raw[key]
+    return default
+
+
+def restore_properties(raw: dict[str, Any], *, edge: bool = False) -> dict[str, Any]:
+    properties = raw.get("properties", {})
+    if not isinstance(properties, dict):
+        fail("restore properties must be an object when present", 2)
+    for key, value in properties.items():
+        if not isinstance(key, str) or not key:
+            fail("restore property names must be nonempty strings", 2)
+        values = value if isinstance(value, list) else [value]
+        if any(not isinstance(entry, (str, int, float, bool)) and entry is not None for entry in values):
+            fail(f"restore property {key!r} must be a scalar or a list of scalars", 2)
+        if any(isinstance(entry, float) and not math.isfinite(entry) for entry in values):
+            fail(f"restore property {key!r} contains a non-finite number", 2)
+    return backup_extra_properties(properties, edge=edge)
 
 
 def restore_confidence(raw_item: dict[str, Any]) -> float:
@@ -16850,33 +16892,52 @@ def restore_confidence(raw_item: dict[str, Any]) -> float:
     if raw_value is None:
         return 1.0
     try:
-        return float(raw_value)
+        value = float(raw_value)
     except (TypeError, ValueError):
-        return 1.0
+        fail("restore confidence must be a finite number", 2)
+    if not math.isfinite(value):
+        fail("restore confidence must be a finite number", 2)
+    return value
 
 
 def restore_item_from_raw(raw_item: dict[str, Any], *, fallback_timestamp: str) -> dict[str, Any]:
     stable_key = str(raw_item.get("stable_key") or raw_item.get("stableKey") or "").strip()
-    content = str(raw_item.get("content") or raw_item.get("detail_content") or raw_item.get("detailContent") or "").strip()
-    summary = str(raw_item.get("summary") or summary_snippet(content)).strip()
-    title = str(raw_item.get("title") or raw_item.get("label") or summary or stable_key).strip()
+    content = str(restore_raw_value(raw_item, "content", "detail_content", "detailContent"))
+    summary = str(restore_raw_value(raw_item, "summary", default=summary_snippet(content)))
+    title = str(restore_raw_value(raw_item, "title", "label", default=summary or stable_key))
     timestamp = str(raw_item.get("updated_at") or raw_item.get("updatedAt") or raw_item.get("created_at") or raw_item.get("createdAt") or fallback_timestamp).strip()
+    properties = restore_properties(raw_item)
+    # Earlier schema-v1 exports kept history details only in the JSON body. Recover
+    # their queryable fields when loading those backups, without changing the body.
+    if raw_item.get("kind") == MEMORY_HISTORY_EVENT_KIND and not properties:
+        try:
+            record = json.loads(content)
+        except (ValueError, TypeError):
+            record = {}
+        if isinstance(record, dict):
+            for key in ("target_stable_key", "event", "old_memory", "new_memory", "source"):
+                if key in record:
+                    properties[key] = record[key] or ""
+            if "changed_fields" in record:
+                properties["changed_fields"] = json.dumps(record["changed_fields"], sort_keys=True)
     return {
         "stable_key": stable_key,
         "kind": str(raw_item.get("kind") or "memory_note").strip() or "memory_note",
         "title": title,
         "summary": summary,
         "content": content,
-        "source_kind": str(raw_item.get("source_kind") or raw_item.get("sourceKind") or "restore").strip() or "restore",
+        "source_kind": str(restore_raw_value(raw_item, "source_kind", "sourceKind", default="restore")),
         "confidence": restore_confidence(raw_item),
         "timestamp": timestamp or fallback_timestamp,
-        "expired_at": str(raw_item.get("expired_at") or raw_item.get("expiredAt") or "").strip(),
-        "expiration_reason": str(raw_item.get("expiration_reason") or raw_item.get("expirationReason") or "").strip(),
-        "pinned_at": str(raw_item.get("pinned_at") or raw_item.get("pinnedAt") or "").strip(),
-        "pin_label": str(raw_item.get("pin_label") or raw_item.get("pinLabel") or "").strip(),
-        "pin_reason": str(raw_item.get("pin_reason") or raw_item.get("pinReason") or "").strip(),
+        "created_at": str(restore_raw_value(raw_item, "created_at", "createdAt", default=timestamp or fallback_timestamp)),
+        "expired_at": str(restore_raw_value(raw_item, "expired_at", "expiredAt")),
+        "expiration_reason": str(restore_raw_value(raw_item, "expiration_reason", "expirationReason")),
+        "pinned_at": str(restore_raw_value(raw_item, "pinned_at", "pinnedAt")),
+        "pin_label": str(restore_raw_value(raw_item, "pin_label", "pinLabel")),
+        "pin_reason": str(restore_raw_value(raw_item, "pin_reason", "pinReason")),
         "tags": item_memory_tags(raw_item),
         "metadata": item_memory_metadata(raw_item),
+        "properties": properties,
     }
 
 
@@ -16908,53 +16969,93 @@ def normalized_restore_items(payload: dict[str, Any], *, include_operational: bo
     return items, skipped
 
 
-def normalized_restore_fact_edges(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    raw_edges = payload.get("relations") or []
-    if not isinstance(raw_edges, list):
-        fail("restore input relations must be an array when present", 2)
-    edges: list[dict[str, Any]] = []
-    for raw_edge in raw_edges:
-        if not isinstance(raw_edge, dict):
+def validate_restore_input_counts(payload: dict[str, Any]) -> None:
+    counts = payload.get("counts")
+    if counts is None:
+        return
+    if not isinstance(counts, dict):
+        fail("restore input counts must be an object when present", 2)
+    for name in ("items", "relations", "structural_edges"):
+        if name not in counts:
             continue
+        count = counts[name]
+        raw_values = payload.get(name, payload.get("structuralEdges", []) if name == "structural_edges" else [])
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0 or not isinstance(raw_values, list) or count != len(raw_values):
+            fail(f"restore input count for {name} does not match the backup data", 2)
+
+
+def validate_restore_item_skips(skipped: list[dict[str, Any]]) -> None:
+    malformed = [item for item in skipped if item.get("reason") != "operational_excluded"]
+    if malformed:
+        fail(f"restore input contains {len(malformed)} malformed or duplicate items; refusing a partial restore", 2)
+
+
+def restore_edge_array(payload: dict[str, Any], *keys: str) -> list[dict[str, Any]]:
+    raw_edges = next((payload[key] for key in keys if key in payload), [])
+    if not isinstance(raw_edges, list):
+        fail(f"restore input {keys[0]} must be an array when present", 2)
+    for index, edge in enumerate(raw_edges):
+        if not isinstance(edge, dict):
+            fail(f"restore input {keys[0]}[{index}] must be an object", 2)
+    return raw_edges
+
+
+def normalized_restore_fact_edges(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    edges: list[dict[str, Any]] = []
+    for index, raw_edge in enumerate(restore_edge_array(payload, "relations")):
         from_key = str(raw_edge.get("from") or raw_edge.get("from_stable_key") or raw_edge.get("fromStableKey") or "").strip()
         to_key = str(raw_edge.get("to") or raw_edge.get("to_stable_key") or raw_edge.get("toStableKey") or "").strip()
         relation = str(raw_edge.get("relation") or "").strip()
         if not from_key or not to_key or not relation:
-            continue
-        predicate = str(raw_edge.get("predicate") or relation.upper()).strip() or relation.upper()
+            fail(f"restore input relations[{index}] requires from, to and relation", 2)
+        timestamps = {
+            key: str(restore_raw_value(raw_edge, key, alias))
+            for key, alias in (("valid_at", "validAt"), ("invalid_at", "invalidAt"), ("expired_at", "expiredAt"))
+        }
+        for key, value in timestamps.items():
+            try:
+                normalize_optional_timestamp(value, flag_name=key)
+            except ValueError as exc:
+                fail(f"restore input relations[{index}]: {exc}", 2)
+        raw_rating = restore_raw_value(raw_edge, "fact_rating", "factRating", default=None)
+        if raw_rating is not None:
+            try:
+                rating = float(raw_rating)
+            except (TypeError, ValueError):
+                fail(f"restore input relations[{index}] fact_rating must be a finite number in 0..1", 2)
+            if not math.isfinite(rating) or not 0.0 <= rating <= 1.0:
+                fail(f"restore input relations[{index}] fact_rating must be a finite number in 0..1", 2)
         edges.append({
             "from": from_key,
             "to": to_key,
             "relation": relation,
-            "predicate": predicate,
-            "fact_text": str(raw_edge.get("fact_text") or raw_edge.get("factText") or f"{from_key} {relation} {to_key}").strip(),
+            "predicate": str(restore_raw_value(raw_edge, "predicate", default=relation.upper())),
+            "fact_text": str(restore_raw_value(raw_edge, "fact_text", "factText", default=f"{from_key} {relation} {to_key}")),
             "timestamp": str(raw_edge.get("updated_at") or raw_edge.get("updatedAt") or utc_now_iso()).strip(),
-            "valid_at": str(raw_edge.get("valid_at") or raw_edge.get("validAt") or "").strip(),
-            "invalid_at": str(raw_edge.get("invalid_at") or raw_edge.get("invalidAt") or "").strip(),
-            "expired_at": str(raw_edge.get("expired_at") or raw_edge.get("expiredAt") or "").strip(),
-            "fact_rating": normalize_fact_rating(raw_edge.get("fact_rating") if "fact_rating" in raw_edge else raw_edge.get("factRating")),
+            **timestamps,
+            "fact_rating": normalize_fact_rating(raw_rating),
+            "properties": restore_properties(raw_edge, edge=True),
         })
     return edges
 
 
 def normalized_restore_structural_edges(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    raw_edges = payload.get("structural_edges") or payload.get("structuralEdges") or []
-    if not isinstance(raw_edges, list):
-        fail("restore input structural_edges must be an array when present", 2)
     edges: list[dict[str, Any]] = []
-    for raw_edge in raw_edges:
-        if not isinstance(raw_edge, dict):
-            continue
+    for index, raw_edge in enumerate(restore_edge_array(payload, "structural_edges", "structuralEdges")):
         from_key = str(raw_edge.get("from") or raw_edge.get("from_stable_key") or raw_edge.get("fromStableKey") or "").strip()
         to_key = str(raw_edge.get("to") or raw_edge.get("to_stable_key") or raw_edge.get("toStableKey") or "").strip()
         relation = str(raw_edge.get("relation") or "").strip()
-        if from_key and to_key and relation:
-            edges.append({
-                "from": from_key,
-                "to": to_key,
-                "relation": relation,
-                "timestamp": str(raw_edge.get("updated_at") or raw_edge.get("updatedAt") or utc_now_iso()).strip(),
-            })
+        if not from_key or not to_key or not relation:
+            fail(f"restore input structural_edges[{index}] requires from, to and relation", 2)
+        if structural_edge_label(relation) not in STRUCTURAL_EDGE_TYPES:
+            fail(f"restore input structural_edges[{index}] has an unsupported relation: {relation!r}", 2)
+        edges.append({
+            "from": from_key,
+            "to": to_key,
+            "relation": relation,
+            "timestamp": str(raw_edge.get("updated_at") or raw_edge.get("updatedAt") or utc_now_iso()).strip(),
+            "properties": restore_properties(raw_edge, edge=True),
+        })
     return edges
 
 
@@ -16973,6 +17074,72 @@ def existing_restore_keys(graph, stable_keys: list[str]) -> set[str]:
     return existing
 
 
+def existing_restore_edge_records(graph, stable_keys: list[str]) -> dict[tuple[str, str, str], list[dict[str, Any]]]:
+    if not stable_keys:
+        return {}
+    rows = result_rows(graph.query(
+        """
+        MATCH (source:MemoryNode)-[edge]->(target:MemoryNode)
+        WHERE source.stable_key IN $stable_keys AND target.stable_key IN $stable_keys
+          AND type(edge) IN $edge_types
+        RETURN source.stable_key, target.stable_key, type(edge), properties(edge)
+        ORDER BY id(edge)
+        """,
+        params={"stable_keys": stable_keys, "edge_types": ["FACT_EDGE", *STRUCTURAL_EDGE_TYPES]},
+    ))
+    records: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for row in rows:
+        key = (str(row[0]), str(row[1]), str(row[2]))
+        records.setdefault(key, []).append(dict(row[3] or {}))
+    return records
+
+
+def restore_graph_edge(
+    graph,
+    edge: dict[str, Any],
+    *,
+    fact: bool,
+    entity_ids: dict[str, int],
+    existing_edges: dict[tuple[str, str, str], list[dict[str, Any]]],
+) -> str:
+    edge_label = "FACT_EDGE" if fact else structural_edge_label(edge["relation"])
+    fields = {"relation": edge["relation"], "updated_at": edge["timestamp"]}
+    if fact:
+        fields.update({
+            "predicate": edge["predicate"],
+            "fact_text": edge["fact_text"],
+            "valid_at": edge.get("valid_at") or "",
+            "invalid_at": edge.get("invalid_at") or "",
+            "expired_at": edge.get("expired_at") or "",
+            "fact_rating": 0.5 if edge.get("fact_rating") is None else edge["fact_rating"],
+        })
+    fields.update(edge.get("properties") or {})
+    key = (edge["from"], edge["to"], edge_label)
+    candidates = existing_edges.get(key, [])
+    for index, candidate in enumerate(candidates):
+        # Consume each exact match once: parallel facts and even identical repeated
+        # edges survive, while rerunning the same restore does not duplicate them.
+        if all(candidate.get(name, 0.5 if name == "fact_rating" else "") == value for name, value in fields.items()):
+            candidates.pop(index)
+            return "unchanged"
+    fields.setdefault("created_at", edge["timestamp"])
+    fields.setdefault("origin", "restore")
+    fields.update({
+        "edge_id": next_edge_id(graph),
+        "from_entity_id": entity_ids[edge["from"]],
+        "to_entity_id": entity_ids[edge["to"]],
+    })
+    graph.query(
+        f"""
+        MATCH (source:MemoryNode {{stable_key: $from_key}}), (target:MemoryNode {{stable_key: $to_key}})
+        CREATE (source)-[edge:{edge_label}]->(target)
+        SET edge += $properties
+        """,
+        params={"from_key": edge["from"], "to_key": edge["to"], "properties": fields},
+    )
+    return "created"
+
+
 def restore_memory_payload(
     graph,
     *,
@@ -16986,13 +17153,17 @@ def restore_memory_payload(
     schema_version = payload.get("schema_version")
     if schema_version != 1:
         fail(f"unsupported restore schema_version: {schema_version!r}", 2)
+    validate_restore_input_counts(payload)
     items, skipped_items = normalized_restore_items(payload, include_operational=include_operational)
+    validate_restore_item_skips(skipped_items)
     fact_edges = normalized_restore_fact_edges(payload)
     structural_edges = normalized_restore_structural_edges(payload)
     item_keys = [item["stable_key"] for item in items]
     item_key_set = set(item_keys)
-    existing_keys = existing_restore_keys(graph, item_keys) if item_keys else set()
-    available_keys = existing_keys | item_key_set
+    endpoint_keys = {edge[key] for edge in [*fact_edges, *structural_edges] for key in ("from", "to")}
+    existing_endpoint_keys = existing_restore_keys(graph, sorted(item_key_set | endpoint_keys))
+    existing_keys = existing_endpoint_keys & item_key_set
+    available_keys = existing_endpoint_keys | item_key_set
     missing_fact_edges = [
         edge for edge in fact_edges
         if edge["from"] not in available_keys or edge["to"] not in available_keys
@@ -17049,11 +17220,12 @@ def restore_memory_payload(
         for key in sorted(existing_keys):
             delete_graph_item_payload(graph, stable_key=key, record_history=False)
 
+    entity_ids: dict[str, int] = {}
     created_items = 0
     updated_items = 0
     for item in items:
         existed = item["stable_key"] in existing_keys
-        upsert_memory_node(
+        entity_ids[item["stable_key"]] = upsert_memory_node(
             graph,
             kind=item["kind"],
             stable_key=item["stable_key"],
@@ -17067,72 +17239,49 @@ def restore_memory_payload(
             tags=item.get("tags") or [],
             metadata=item.get("metadata") or {},
         )
-        if item.get("expired_at") or item.get("expiration_reason") or item.get("pinned_at") or item.get("pin_label") or item.get("pin_reason"):
-            graph.query(
-                """
-                MATCH (node:MemoryNode {stable_key: $stable_key})
-                SET node.expired_at = $expired_at,
-                    node.expiration_reason = $expiration_reason,
-                    node.pinned_at = $pinned_at,
-                    node.pin_label = $pin_label,
-                    node.pin_reason = $pin_reason
-                """,
-                params={
-                    "stable_key": item["stable_key"],
-                    "expired_at": item.get("expired_at") or "",
-                    "expiration_reason": item.get("expiration_reason") or "",
-                    "pinned_at": item.get("pinned_at") or "",
-                    "pin_label": item.get("pin_label") or "",
-                    "pin_reason": item.get("pin_reason") or "",
-                },
-            )
+        properties = {
+            **(item.get("properties") or {}),
+            "created_at": item["created_at"],
+            "expired_at": item["expired_at"],
+            "expiration_reason": item["expiration_reason"],
+            "pinned_at": item["pinned_at"],
+            "pin_label": item["pin_label"],
+            "pin_reason": item["pin_reason"],
+        }
+        graph.query(
+            "MATCH (node:MemoryNode {stable_key: $stable_key}) SET node += $properties",
+            params={"stable_key": item["stable_key"], "properties": properties},
+        )
         if replace or not existed:
             created_items += 1
         else:
             updated_items += 1
 
+    for stable_key in sorted(existing_endpoint_keys - item_key_set):
+        node = lookup_node_by_stable_key(graph, stable_key)
+        if node is not None:
+            entity_ids[stable_key] = int(node["entity_id"])
+    existing_edges = existing_restore_edge_records(graph, sorted(available_keys))
     fact_created = 0
     fact_updated = 0
     fact_skipped = 0
     for edge in fact_edges:
-        if edge["from"] not in available_keys or edge["to"] not in available_keys:
+        if edge["from"] not in entity_ids or edge["to"] not in entity_ids:
             fact_skipped += 1
             continue
-        result = upsert_fact_edge(
-            graph,
-            from_stable_key=edge["from"],
-            to_stable_key=edge["to"],
-            relation=edge["relation"],
-            predicate=edge["predicate"],
-            fact_text=edge["fact_text"],
-            timestamp=edge["timestamp"],
-            origin="restore",
-            valid_at=edge.get("valid_at") or "",
-            invalid_at=edge.get("invalid_at") or "",
-            expired_at=edge.get("expired_at") or "",
-            fact_rating=edge.get("fact_rating"),
-        )
+        result = restore_graph_edge(graph, edge, fact=True, entity_ids=entity_ids, existing_edges=existing_edges)
         if result == "created":
             fact_created += 1
-        elif result == "updated":
-            fact_updated += 1
         else:
-            fact_skipped += 1
+            fact_updated += 1
 
     structural_upserted = 0
     structural_skipped = 0
     for edge in structural_edges:
-        if edge["from"] not in available_keys or edge["to"] not in available_keys:
+        if edge["from"] not in entity_ids or edge["to"] not in entity_ids:
             structural_skipped += 1
             continue
-        upsert_structural_edge(
-            graph,
-            from_stable_key=edge["from"],
-            to_stable_key=edge["to"],
-            relation=edge["relation"],
-            timestamp=edge["timestamp"],
-            origin="restore",
-        )
+        restore_graph_edge(graph, edge, fact=False, entity_ids=entity_ids, existing_edges=existing_edges)
         structural_upserted += 1
 
     invalidate_graph_caches(graph)
@@ -17167,7 +17316,9 @@ def offline_restore_dry_run_payload(
     schema_version = payload.get("schema_version")
     if schema_version != 1:
         fail(f"unsupported restore schema_version: {schema_version!r}", 2)
+    validate_restore_input_counts(payload)
     items, skipped_items = normalized_restore_items(payload, include_operational=include_operational)
+    validate_restore_item_skips(skipped_items)
     fact_edges = normalized_restore_fact_edges(payload)
     structural_edges = normalized_restore_structural_edges(payload)
     item_keys = {item["stable_key"] for item in items}
@@ -17248,16 +17399,16 @@ def cmd_restore(args: argparse.Namespace) -> None:
         fail("restore --replace is destructive for matching keys and requires --yes unless --dry-run is used", 2)
     input_path = str(getattr(args, "input", "") or "").strip()
     payload = load_restore_json(input_path)
-    if bool(getattr(args, "dry_run", False)):
-        summary = restore_input_summary_or_error(input_path, include_operational=bool(getattr(args, "include_operational", False)))
-        if not bool(summary.get("valid")):
-            fail(f"restore input is not a valid Autopsy backup: {summary.get('error') or 'unknown error'} ({summary.get('path')})", 2)
+    include_operational = bool(getattr(args, "include_operational", False)) or payload.get("include_operational") is True
+    summary = restore_input_summary_or_error(input_path, include_operational=include_operational)
+    if not bool(summary.get("valid")):
+        fail(f"restore input is not a valid Autopsy backup: {summary.get('error') or 'unknown error'} ({summary.get('path')})", 2)
     if bool(getattr(args, "offline", False)):
         print(json.dumps(
             offline_restore_dry_run_payload(
                 input_path=input_path,
                 payload=payload,
-                include_operational=bool(getattr(args, "include_operational", False)),
+                include_operational=include_operational,
                 replace=bool(getattr(args, "replace", False)),
                 offline_requested=True,
             ),
@@ -17272,7 +17423,7 @@ def cmd_restore(args: argparse.Namespace) -> None:
                 offline_restore_dry_run_payload(
                     input_path=input_path,
                     payload=payload,
-                    include_operational=bool(getattr(args, "include_operational", False)),
+                    include_operational=include_operational,
                     replace=bool(getattr(args, "replace", False)),
                     runtime_error_payload=falkor_start_failure_payload(args, exc),
                     offline_requested=False,
@@ -17290,7 +17441,7 @@ def cmd_restore(args: argparse.Namespace) -> None:
         payload=payload,
         dry_run=bool(getattr(args, "dry_run", False)),
         replace=bool(getattr(args, "replace", False)),
-        include_operational=bool(getattr(args, "include_operational", False)),
+        include_operational=include_operational,
     )
     if not bool(getattr(args, "dry_run", False)) and str((report.get("workflow") or {}).get("status") or "") == "ok":
         attach_auto_backup_after_write(report, graph, workspace, reason="restore")
@@ -17371,6 +17522,11 @@ def restore_input_summary_or_error(path_value: str, *, include_operational: bool
         return {**base, "error": f"invalid_json: {exc}"}
     if not isinstance(payload, dict):
         return {**base, "error": "input_must_be_json_object"}
+    manifest_path = backup_storage.backup_manifest_path(path)
+    if (isinstance(payload, dict) and payload.get("backup_integrity") is not None) or manifest_path.exists() or manifest_path.is_symlink():
+        integrity = backup_storage.verify_backup_snapshot(path, require_manifest=True)
+        if not integrity.get("valid"):
+            return {**base, "error": f"integrity_verification_failed: {integrity.get('error')}"}
     schema_version = payload.get("schema_version")
     if schema_version != 1:
         return {**base, "schema_version": schema_version, "error": f"unsupported_schema_version: {schema_version!r}"}
@@ -17378,11 +17534,13 @@ def restore_input_summary_or_error(path_value: str, *, include_operational: bool
         return {**base, "schema_version": schema_version, "error": "items_must_be_array"}
     if "relations" in payload and not isinstance(payload.get("relations"), list):
         return {**base, "schema_version": schema_version, "error": "relations_must_be_array"}
-    structural_edges = payload.get("structural_edges") or payload.get("structuralEdges") or []
+    structural_edges = payload.get("structural_edges", payload.get("structuralEdges", []))
     if not isinstance(structural_edges, list):
         return {**base, "schema_version": schema_version, "error": "structural_edges_must_be_array"}
     try:
+        validate_restore_input_counts(payload)
         items, skipped_items = normalized_restore_items(payload, include_operational=include_operational)
+        validate_restore_item_skips(skipped_items)
         fact_edges = normalized_restore_fact_edges(payload)
         normalized_structural_edges = normalized_restore_structural_edges(payload)
     except SystemExit as exc:
@@ -17447,6 +17605,8 @@ def restore_input_item_fingerprint(item: dict[str, Any]) -> str:
         "source_kind": item.get("source_kind"),
         "confidence": item.get("confidence"),
         "timestamp": item.get("timestamp"),
+        "created_at": item.get("created_at"),
+        "properties": item.get("properties") or {},
         "expired_at": item.get("expired_at"),
         "expiration_reason": item.get("expiration_reason"),
         "pinned_at": item.get("pinned_at"),
@@ -18090,6 +18250,7 @@ def latest_backup_status(*, recovery_reference_at: str = "") -> dict[str, Any]:
         "age_seconds": age_seconds,
         "age_hours": round(age_seconds / 3600.0, 2),
         "bytes": latest.stat().st_size,
+        "icloud": backup_storage.icloud_backup_status(app_support=APP_SUPPORT_DIR_DEFAULT),
     }
     summary = restore_input_summary_or_error(str(latest), include_operational=False)
     payload.update({
@@ -18101,6 +18262,11 @@ def latest_backup_status(*, recovery_reference_at: str = "") -> dict[str, Any]:
         "counts": summary.get("counts"),
         "validation_error": summary.get("error"),
     })
+    integrity = backup_storage.verify_backup_snapshot(latest)
+    payload["integrity"] = integrity.get("integrity")
+    if not integrity.get("valid"):
+        payload["valid"] = False
+        payload["validation_error"] = integrity.get("error")
     if recovery_reference_at and bool(summary.get("valid")):
         payload["recovery_risk"] = backup_recovery_risk(summary, reference_at=recovery_reference_at)
     return payload
@@ -18150,6 +18316,21 @@ def backup_freshness_status(
         }
     age_seconds = int(backup.get("age_seconds") or 0)
     if age_seconds <= int(fresh_max_age_seconds):
+        cloud = backup.get("icloud") or {}
+        attempt = cloud.get("last_attempt") or {}
+        if cloud.get("status") == "error" or (cloud.get("enabled") and (
+            not cloud.get("directory_status", {}).get("available", True)
+            or attempt.get("status") not in {"copied", "already_present"}
+            or str(attempt.get("source") or "") != latest
+            or (cloud.get("directory") and str(attempt.get("destination") or "") != str(Path(cloud["directory"]) / Path(latest).name))
+            or not bool(attempt.get("local_copy_verified"))
+        )):
+            return {
+                "ok": False, "status": "icloud_copy_pending", "severity": "warning",
+                "thresholds": thresholds, "age_seconds": age_seconds,
+                "message": "The local backup is valid; its configured iCloud copy needs attention.",
+                "suggested_next_step": "Run autopsy backup --retry-icloud and inspect autopsy backup --status.",
+            }
         return {
             "ok": True,
             "status": "fresh",

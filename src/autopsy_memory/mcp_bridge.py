@@ -23,10 +23,26 @@ DEFAULT_GRAPH_NAME = "autopsy_memory"
 RELATION_FIELDS = ("informed_by", "answers", "supersedes", "reverts", "depends_on", "implements", "constrains", "refines")
 AUTOPSY_CELLAR_VERSION_RE = re.compile(r"/Cellar/autopsy-memory/([^/\s]+)/")
 REDISLITE_UNIX_SOCKET_RE = re.compile(r"(?:^|\s)unixsocket:([^\s]+)")
+WORKER_REPLAY_SAFE_PATHS = frozenset({
+    "/embed", "/rerank", "/memory/consult", "/memory/status", "/memory/health",
+    "/memory/diagnostics", "/memory/repair-embedded-snapshot/plan",
+    "/memory/timeline", "/memory/history", "/memory/neighbors", "/memory/snapshot",
+    "/memory/graph/search", "/memory/graph/item",
+})
 
 
 class BridgeError(RuntimeError):
     pass
+
+
+class WriteOutcomeUnknownError(BridgeError):
+    """The worker may have committed a mutation before its response failed."""
+
+    def __init__(self, path: str, message: str):
+        super().__init__(
+            f"Memory write outcome is unknown for {path}; the request was not replayed. "
+            f"Inspect the affected memory and its history before retrying. Worker error: {message}"
+        )
 
 
 def app_support_dir() -> Path:
@@ -169,7 +185,8 @@ def read_worker_info() -> dict[str, Any] | None:
 def source_fingerprint() -> str:
     parts: list[str] = []
     paths = script_paths()
-    for name in ("script", "worker", "tool"):
+    paths["backups"] = paths["tool"].parent / "backups.py"
+    for name in ("script", "worker", "tool", "backups"):
         path = paths[name]
         try:
             stat = path.stat()
@@ -699,31 +716,44 @@ def worker_request(path: str, payload: dict[str, Any], retry_on_stale_socket: bo
         },
         method="POST",
     )
+    replay_safe = path in WORKER_REPLAY_SAFE_PATHS
     try:
         with urllib.request.urlopen(request, timeout=180) as response:
             body = response.read().decode("utf-8")
-            return json.loads(body) if body else {}
+            result = json.loads(body) if body else {}
+            if not isinstance(result, dict) or (not body and not replay_safe):
+                raise ValueError("worker response must contain a JSON object")
+            return result
     except urllib.error.HTTPError as error:
         body = error.read().decode("utf-8", errors="replace")
         try:
-            payload = json.loads(body)
-            message = str(payload.get("error") or body)
+            error_payload = json.loads(body)
+            message = str(error_payload.get("error") or body)
         except Exception:
             message = body
-        if retry_on_stale_socket and is_stale_falkor_socket_error(message):
+        if not replay_safe and error.code >= 500:
+            raise WriteOutcomeUnknownError(path, message) from error
+        if replay_safe and retry_on_stale_socket and is_stale_falkor_socket_error(message):
             recover_stale_falkor_socket(info)
-            return worker_request(path, payload_for_retry(path, request), retry_on_stale_socket=False)
-        if retry_on_stale_socket and is_stale_worker_route_error(message):
+            return worker_request(path, payload, retry_on_stale_socket=False)
+        if replay_safe and retry_on_stale_socket and is_stale_worker_route_error(message):
             terminate_pid(info.get("pid"))
             clear_worker_info()
-            return worker_request(path, payload_for_retry(path, request), retry_on_stale_socket=False)
+            return worker_request(path, payload, retry_on_stale_socket=False)
         raise BridgeError(message)
-    except urllib.error.URLError as error:
+    except (urllib.error.URLError, OSError) as error:
+        if not replay_safe:
+            # Leave the worker running: it may still be completing the write.
+            raise WriteOutcomeUnknownError(path, str(error)) from error
         if retry_on_stale_socket:
             terminate_pid(info.get("pid"))
             clear_worker_info()
             return worker_request(path, payload, retry_on_stale_socket=False)
         raise BridgeError(str(error))
+    except (ValueError, UnicodeError) as error:
+        if not replay_safe:
+            raise WriteOutcomeUnknownError(path, str(error)) from error
+        raise BridgeError(f"Invalid worker response: {error}") from error
 
 
 def payload_for_retry(_path: str, request: urllib.request.Request) -> dict[str, Any]:

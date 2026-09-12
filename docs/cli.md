@@ -194,7 +194,9 @@ autopsy repair-embedded-snapshot --yes --accept-data-loss --restore-backup ~/Des
 autopsy repair-embedded-snapshot --yes --accept-data-loss --restore-latest-backup
 ```
 
-`export` writes semantic memory and in-graph relations as JSON. `backup` writes the same export shape to a timestamped file under the Autopsy application-support backups directory unless `--output` is provided. Successful semantic write commands and non-dry-run restores opportunistically create a default backup when the newest default backup is missing, invalid, or older than the freshness window; set `AUTOPSY_AUTO_BACKUP_AFTER_WRITE=0` to disable that automatic backup step.
+`export` writes semantic memory and in-graph relations as JSON. `backup` writes a full recovery snapshot, including operational nodes, source episodes, history, and stored properties, under the Autopsy application-support backups directory unless `--output` is provided. Successful memory write commands and non-dry-run restores create a new snapshot covering the committed state. Files have unique names and SHA-256 sidecars; an existing output is never overwritten. Set `AUTOPSY_AUTO_BACKUP_AFTER_WRITE=0` to disable automatic snapshots.
+
+Use `backup --enable-icloud` to persistently enable verified copies in iCloud Drive, `backup --status` to inspect local and mirror status, and `backup --retry-icloud` to retry the latest local snapshot without opening FalkorDB. `backup --disable-icloud` preserves all existing copies. A verified iCloud Drive file does not confirm upload to Apple's servers. See [backup and recovery](backups.md) for complete instructions.
 
 `restore` validates schema version 1 exports, defaults to safe merge mode, skips operational nodes unless `--include-operational` is set, and refuses replace mode unless `--yes` is provided. Replace mode deletes only matching keys present in the restore file before importing them; unrelated graph data is not wiped.
 
