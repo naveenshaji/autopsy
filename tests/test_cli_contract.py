@@ -1938,6 +1938,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
             ),
             mock.patch.object(cli, "model_warmup_check", return_value=warmup_payload),
             mock.patch.object(cli, "worker_lifecycle_check", return_value=worker_payload),
+            mock.patch.object(cli, "redislite_lifecycle_check", return_value={"name":"redislite_lifecycle", "required":True, "ok":True}),
         ):
             payload = cli.build_doctor_payload(args)
 
@@ -3863,6 +3864,9 @@ class AutopsyCLIContractTests(unittest.TestCase):
         class Graph:
             name = "unit"
 
+            def query(self, _statement, params=None):
+                return types.SimpleNamespace(result_set=[])
+
         originals = {
             "semantic_item_count": cli.semantic_item_count,
             "fetch_exact_text_candidates": cli.fetch_exact_text_candidates,
@@ -3923,6 +3927,9 @@ class AutopsyCLIContractTests(unittest.TestCase):
 
         class Graph:
             name = "unit"
+
+            def query(self, _statement, params=None):
+                return types.SimpleNamespace(result_set=[])
 
         originals = {
             "semantic_item_count": cli.semantic_item_count,
@@ -3986,6 +3993,9 @@ class AutopsyCLIContractTests(unittest.TestCase):
 
         class Graph:
             name = "unit"
+
+            def query(self, _statement, params=None):
+                return types.SimpleNamespace(result_set=[])
 
         originals = {
             "semantic_item_count": cli.semantic_item_count,
@@ -5374,7 +5384,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
         class Graph:
             def query(self, _query, params=None):
                 stable_keys = set((params or {}).get("stable_keys") or [])
-                return Result([[key] for key in stable_keys if key == "graph-note:repo"])
+                return Result([[key, "/tmp/repo", None] for key in stable_keys if key == "graph-note:repo"])
 
         filters = {
             "scope": "repo",

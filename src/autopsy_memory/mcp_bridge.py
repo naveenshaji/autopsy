@@ -20,7 +20,7 @@ from typing import Any
 SERVER_NAME = "autopsy_falkor_memory"
 SERVER_VERSION = "0.1.0"
 DEFAULT_GRAPH_NAME = "autopsy_memory"
-RELATION_FIELDS = ("informed_by", "answers", "supersedes", "reverts", "depends_on", "implements", "constrains", "refines")
+RELATION_FIELDS = ("informed_by", "answers", "supersedes", "reverts", "depends_on", "implements", "constrains", "refines", "completes", "reopens")
 AUTOPSY_CELLAR_VERSION_RE = re.compile(r"/Cellar/autopsy-memory/([^/\s]+)/")
 REDISLITE_UNIX_SOCKET_RE = re.compile(r"(?:^|\s)unixsocket:([^\s]+)")
 WORKER_REPLAY_SAFE_PATHS = frozenset({
@@ -887,6 +887,9 @@ def tool_status(arguments: dict[str, Any]) -> dict[str, Any]:
         "section_limit": int(arguments.get("section_limit") or 4),
         "recent_days": int(arguments.get("recent_days") or 14),
     }
+    for key in ("scope", "repo", "repository_root_path"):
+        if arguments.get(key):
+            request[key] = str(arguments[key])
     if arguments.get("thread_id"):
         request["thread_id"] = str(arguments["thread_id"])
     if arguments.get("as_of"):
@@ -1352,6 +1355,9 @@ TOOLS: dict[str, dict[str, Any]] = {
             "type": "object",
             "properties": {
                 **optional_workspace_properties(),
+                "scope": {"type": "string", "enum": ["system", "repo"], "default": "system"},
+                "repo": {"type": "string", "description": "Current project hint; system-wide search remains the default."},
+                "repository_root_path": {"type": "string"},
                 "thread_id": {"type": "string"},
                 "limit": {"type": "integer", "default": 8},
                 "section_limit": {"type": "integer", "default": 4},

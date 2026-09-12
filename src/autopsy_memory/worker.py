@@ -1068,6 +1068,10 @@ def status_via_falkor(tool, workspace, embeddings_status, falkor, request: dict)
             section_limit=max(1, int(request.get('section_limit') or 4)),
             recent_days=max(0, int(request.get('recent_days') or tool.STATUS_WINDOW_DAYS_DEFAULT)),
             as_of=str(request.get('as_of') or '') or None,
+            filters=falkor['module'].build_consult_filters(
+                graph, scope=request.get('scope'),
+                repository_root_path=request.get('repository_root_path') or request.get('repo'),
+            ),
         ),
     )
     if embeddings_status is not None:

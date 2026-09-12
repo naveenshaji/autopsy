@@ -29,6 +29,7 @@ except ImportError:  # pragma: no cover - fcntl is expected on supported macOS i
 
 from .cli_parser import CommandHandlers, build_parser as build_cli_parser, normalized_cli_args
 from . import backups as backup_storage
+from . import context_state
 from .doctor import import_check, installed_autopsy_command_check, python_version_check
 from .init import build_init_payload, cmd_init, instruction_targets, smoke_tests, target_status
 from .metadata import PACKAGE_NAME, cmd_instructions, cmd_version, package_version
@@ -3886,12 +3887,24 @@ def build_status_payload(
     section_limit: int,
     recent_days: int,
     as_of: str | None = None,
+    filters: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     normalized_as_of = normalize_as_of_timestamp(as_of)
     lifecycle_read_time = lifecycle_read_timestamp(normalized_as_of)
-    operational_semantic_result = graph.query(
+    filters = filters or {}
+    aliases = list(filters.get("repository_aliases") or [])
+    match = "MATCH (node:SemanticItem)"
+    if filters.get("scope") == "repo":
+        match += """
+        OPTIONAL MATCH (node)-[:ABOUT]->(repo:Repository)
+        OPTIONAL MATCH (node)-[:CAPTURED_IN|PART_OF*1..2]->(source)-[:ABOUT]->(origin:Repository)
+        WITH node, collect(DISTINCT repo.stable_key) + collect(DISTINCT origin.stable_key) AS repositories
+        WHERE any(repository IN repositories WHERE repository IN $repository_aliases)
+        WITH node
         """
-        MATCH (node:SemanticItem)
+    operational_semantic_result = graph.query(
+        f"""
+        {match}
         WHERE coalesce(node.source_kind, '') <> 'memory_doc'
           AND ($as_of = '' OR coalesce(node.updated_at, node.created_at, '') <= $as_of)
           AND (coalesce(node.expired_at, '') = '' OR coalesce(node.expired_at, '') > $lifecycle_read_time)
@@ -3907,11 +3920,11 @@ def build_status_payload(
         ORDER BY coalesce(node.updated_at, node.created_at) DESC
         LIMIT $limit
         """,
-        params={"limit": max(limit * 4, section_limit * 6, 36), "as_of": normalized_as_of, "lifecycle_read_time": lifecycle_read_time},
+        params={"repository_aliases": aliases, "limit": max(limit * 4, section_limit * 6, 36), "as_of": normalized_as_of, "lifecycle_read_time": lifecycle_read_time},
     )
     durable_semantic_result = graph.query(
-        """
-        MATCH (node:SemanticItem)
+        f"""
+        {match}
         WHERE ($as_of = '' OR coalesce(node.updated_at, node.created_at, '') <= $as_of)
           AND (coalesce(node.expired_at, '') = '' OR coalesce(node.expired_at, '') > $lifecycle_read_time)
         RETURN
@@ -3926,7 +3939,7 @@ def build_status_payload(
         ORDER BY coalesce(node.updated_at, node.created_at) DESC
         LIMIT $limit
         """,
-        params={"limit": max(limit * 3, section_limit * 4, 24), "as_of": normalized_as_of, "lifecycle_read_time": lifecycle_read_time},
+        params={"repository_aliases": aliases, "limit": max(limit * 3, section_limit * 4, 24), "as_of": normalized_as_of, "lifecycle_read_time": lifecycle_read_time},
     )
 
     def row_to_semantic_item(row: list[Any]) -> dict[str, Any]:
@@ -3948,6 +3961,13 @@ def build_status_payload(
         and str(item.get("source_kind") or "") != "graph_episode"
     ]
     durable_semantic_items = [row_to_semantic_item(row) for row in result_rows(durable_semantic_result)]
+    operational_semantic_items = filter_candidates_by_metadata(graph, operational_semantic_items, filters)
+    durable_semantic_items = filter_candidates_by_metadata(graph, durable_semantic_items, filters)
+    all_items = operational_semantic_items + durable_semantic_items
+    links = context_state.repository_links(graph, [item["stable_key"] for item in all_items], result_rows)
+    context_state.annotate_project(all_items, links, aliases, str(filters.get("repository_root_path") or ""))
+    operational_semantic_items.sort(key=lambda item: item["project_context"]["scope"] != "current_project")
+    durable_semantic_items.sort(key=lambda item: item["project_context"]["scope"] != "current_project")
     pinned_memory = fetch_pinned_memory_items(graph, limit=section_limit, as_of=normalized_as_of)
     pinned_read_guard = build_memory_read_guard_payload(graph, pinned_memory)
     pinned_memory = filter_items_by_read_guard(pinned_memory, pinned_read_guard)
@@ -4005,9 +4025,15 @@ def build_status_payload(
                 break
         return picked
 
-    active_now = pick(operational_semantic_items, {"plan", "attempt", "summary", "open_question"}, section_limit)
-    open_loops = pick(operational_semantic_items, {"attempt", "plan", "open_question"}, section_limit)
-    open_questions = pick(operational_semantic_items, {"open_question"}, section_limit)
+    states = context_state.task_states(graph, operational_semantic_items, lifecycle_read_time, result_rows)
+    for item in operational_semantic_items:
+        if item["stable_key"] in states:
+            item["task_state"] = states[item["stable_key"]]
+    open_items = [item for item in operational_semantic_items
+                  if item.get("task_state", {}).get("state", "open") in {"open", "conflict"}]
+    active_now = pick(open_items, {"plan", "attempt", "summary", "open_question"}, section_limit)
+    open_loops = pick(open_items, {"attempt", "plan", "open_question"}, section_limit)
+    open_questions = pick(open_items, {"open_question"}, section_limit)
     procedures = pick(durable_semantic_items, {"procedure"}, max(1, min(section_limit, 3)))
     observations = pick(durable_semantic_items, {"observation"}, max(1, min(section_limit, 3)))
     recent_activity = pick(operational_semantic_items, {"attempt", "summary", "plan", "decision", "procedure"}, section_limit)
@@ -4125,6 +4151,13 @@ def build_status_payload(
         },
         "status": {
             "summary": summary,
+            "resume": {
+                "policy": "explicit_task_evidence_v1",
+                "open_work": open_loops,
+                "latest_outcomes": observations,
+                "decisions": recent_decisions,
+                "conflicts": [item for item in open_loops if item.get("task_state", {}).get("state") == "conflict"],
+            },
             "pinned_memory": pinned_memory,
             "procedures": procedures,
             "observations": observations,
@@ -4151,6 +4184,7 @@ def build_status_payload(
         payload["onboarding"] = onboarding
         payload["status"]["onboarding"] = onboarding
     payload = filter_status_payload_as_of(payload, normalized_as_of)
+    payload = filter_status_payload_by_metadata(graph, payload, filters)
     return filter_status_payload_for_read_lifecycle(payload, normalized_as_of)
 
 
@@ -4662,6 +4696,11 @@ def filter_status_payload_by_metadata(graph, payload: dict[str, Any], filters: d
         filtered_status,
         fallback="No current memory state matched the requested read filters.",
     )
+    filtered_status["resume"] = {
+        "policy": "explicit_task_evidence_v1", "open_work": filtered_status["open_loops"],
+        "latest_outcomes": filtered_status["observations"], "decisions": filtered_status["recent_decisions"],
+        "conflicts": [item for item in filtered_status["open_loops"] if item.get("task_state", {}).get("state") == "conflict"],
+    }
     filtered_status["metadata_filter"] = {
         "active": True,
         "candidate_count_before": before_count,
@@ -4949,9 +4988,9 @@ def normalized_path_match_key(value: str | None) -> str:
     if not raw:
         return ""
     try:
-        return str(Path(raw).expanduser().resolve(strict=False)).lower()
+        return context_state.repository_identity(raw)
     except Exception:
-        return raw.lower()
+        return os.path.normcase(raw)
 
 
 def canonical_repository_stable_key(graph, repository_root_path: str | None) -> str | None:
@@ -6493,6 +6532,8 @@ def create_graph_note_payload(
     thread_node = None
     normalized_tags = memory_tags_with_namespaces_and_entity_scopes(tags, namespaces, entity_scopes)
     normalized_metadata = memory_metadata_with_namespaces_and_entity_scopes(metadata, namespaces, entity_scopes)
+    if repository_root_path:
+        normalized_metadata.setdefault("worktree", str(Path(repository_root_path).expanduser().resolve(strict=False)))
 
     create_memory_node(
         graph,
@@ -7174,6 +7215,9 @@ def short_hits(items: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any
                 "reranker_score": item.get("reranker_score"),
                 "usage_rank_multiplier": item.get("usage_rank_multiplier"),
                 "usage_rank_score": item.get("usage_rank_score"),
+                "project_context": item.get("project_context"),
+                "project_rank_multiplier": item.get("project_rank_multiplier"),
+                "updated_at": item.get("updated_at"),
             }
         )
     return result
@@ -8913,11 +8957,13 @@ def build_consult_filters(
     metadata_filters = normalize_metadata_filters(metadata)
     filter_expression = normalize_memory_filter_expression(filter_json)
     repo_path = str(repository_root_path or "").strip()
-    repo_key = canonical_repository_stable_key(graph, repo_path) if normalized_scope == "repo" and repo_path else ""
+    repo_aliases = context_state.repository_aliases(graph, repo_path, result_rows) if repo_path and graph is not None else ([repo_path] if repo_path else [])
+    repo_key = repo_aliases[0] if repo_aliases else ""
     return {
         "scope": normalized_scope,
-        "repository_root_path": repo_path if normalized_scope == "repo" else "",
-        "repository_stable_key": repo_key if normalized_scope == "repo" else "",
+        "repository_root_path": repo_path,
+        "repository_stable_key": repo_key,
+        "repository_aliases": repo_aliases,
         "kinds": kind_filters,
         "memory_types": memory_type_filters,
         "kind_intersection_empty": kind_intersection_empty,
@@ -8944,20 +8990,10 @@ def consult_filters_active(filters: dict[str, Any] | None) -> bool:
     )
 
 
-def stable_keys_linked_to_repository(graph, stable_keys: list[str], repository_stable_key: str) -> set[str]:
-    keys = [key for key in stable_keys if key]
-    if not keys or not repository_stable_key:
-        return set()
-    result = graph.query(
-        """
-        MATCH (node:MemoryNode)
-        WHERE node.stable_key IN $stable_keys
-        MATCH (node)-[:ABOUT|BELONGS_TO|PART_OF|CAPTURED_IN|CAPTURES*1..3]-(repo:Repository {stable_key: $repository_stable_key})
-        RETURN DISTINCT node.stable_key
-        """,
-        params={"stable_keys": keys, "repository_stable_key": repository_stable_key},
-    )
-    return {str(row[0] or "") for row in result_rows(result) if str(row[0] or "")}
+def stable_keys_linked_to_repository(graph, stable_keys: list[str], repository_stable_key: str, aliases=None) -> set[str]:
+    aliases = set(aliases or [repository_stable_key])
+    links = context_state.repository_links(graph, stable_keys, result_rows)
+    return {key for key, repositories in links.items() if aliases.intersection(repositories)}
 
 
 def memory_filter_metadata_by_stable_key(graph, stable_keys: list[str]) -> dict[str, dict[str, Any]]:
@@ -9000,6 +9036,7 @@ def filter_candidates_by_metadata(graph, items: list[dict[str, Any]], filters: d
             graph,
             [str(item.get("stable_key") or "") for item in filtered],
             repo_key,
+            aliases=filters.get("repository_aliases"),
         )
         filtered = [item for item in filtered if str(item.get("stable_key") or "") in allowed]
     tags = normalize_tag_filters(filters.get("tags"))
@@ -9056,7 +9093,7 @@ def filter_relationship_hits_by_metadata(graph, hits: list[dict[str, Any]], filt
         endpoint_keys.append(str(hit.get("target_stable_key") or ""))
     allowed = {key for key in endpoint_keys if key}
     if str(filters.get("scope") or "system") == "repo":
-        allowed &= stable_keys_linked_to_repository(graph, endpoint_keys, str(filters.get("repository_stable_key") or ""))
+        allowed &= stable_keys_linked_to_repository(graph, endpoint_keys, str(filters.get("repository_stable_key") or ""), aliases=filters.get("repository_aliases"))
     kinds = normalize_kind_filters(filters.get("kinds"))
     if kinds:
         allowed &= stable_keys_matching_kinds(graph, endpoint_keys, kinds)
@@ -9342,11 +9379,11 @@ def build_consult_payload(
         metadata=metadata,
         filter_json=filter_json,
     )
-    search_limit = max(limit, limit * 5) if consult_filters_active(filters) else limit
+    search_limit = max(limit, limit * 5) if consult_filters_active(filters) or filters.get("repository_aliases") else limit
     if normalized_as_of:
         search_limit = max(search_limit * 4, 50)
     if selected_route == "status":
-        return build_status_payload(
+        status_payload = build_status_payload(
             graph,
             tool=tool,
             workspace=workspace,
@@ -9355,7 +9392,9 @@ def build_consult_payload(
             section_limit=min(4, max(1, limit)),
             recent_days=tool.STATUS_WINDOW_DAYS_DEFAULT,
             as_of=normalized_as_of,
+            filters=filters,
         )
+        return filter_status_payload_by_metadata(graph, status_payload, filters)
 
     item_count = semantic_item_count(graph)
     exact_items, exact_elapsed = fetch_exact_text_candidates(graph, query, limit=search_limit)
@@ -9455,7 +9494,7 @@ def build_consult_payload(
             vector_items = filter_items_as_of(vector_items, normalized_as_of)
             lifecycle_candidate_count_before += len(vector_items)
             vector_items = filter_items_for_read_lifecycle(vector_items, normalized_as_of)
-            merged_items = merge_candidates(lexical_items, vector_items, limit=limit)
+            merged_items = merge_candidates(lexical_items, vector_items, limit=search_limit)
             rerank_min_candidates = max(1, int(config.get("rerank_min_candidates", EMBEDDINGS_CONFIG_DEFAULT["rerank_min_candidates"])))
             if not reranker_enabled_for_current_process(config):
                 hybrid_skipped_reason = "reranker_disabled_for_cli"
@@ -9507,6 +9546,13 @@ def build_consult_payload(
         [str(item.get("stable_key") or "") for item in merged_items],
     )
     merged_items = apply_usage_adaptive_ranking(merged_items, ranking_usage_by_key)
+    candidate_lineage = fetch_context_lineage(graph, [str(item.get("stable_key") or "") for item in merged_items],
+                                              limit=max(80, len(merged_items)), as_of=normalized_as_of)
+    stale_candidates = [item for item in merged_items if candidate_lineage.get(str(item.get("stable_key") or ""), {}).get("current") is False]
+    merged_items = [item for item in merged_items if candidate_lineage.get(str(item.get("stable_key") or ""), {}).get("current") is not False]
+    project_links = context_state.repository_links(graph, [str(item.get("stable_key") or "") for item in merged_items], result_rows)
+    context_state.annotate_project(merged_items, project_links, filters.get("repository_aliases") or [], str(filters.get("repository_root_path") or ""))
+    merged_items = context_state.prioritize_project(merged_items, candidate_final_score)
     hits = short_hits(merged_items, limit=limit)
     lexical_side_hits = short_hits(lexical_items, limit=limit)
     entity_side_hits = short_hits(entity_items, limit=limit)
@@ -9550,6 +9596,12 @@ def build_consult_payload(
         except Exception:
             continue
     attach_usage_to_items(inspected_items, usage_by_key)
+    context_state.annotate_project(inspected_items, project_links, filters.get("repository_aliases") or [], str(filters.get("repository_root_path") or ""))
+    task_state = context_state.task_states(graph, hits, lifecycle_read_timestamp(normalized_as_of), result_rows)
+    for item in hits + inspected_items:
+        key = str(item.get("stable_key") or item.get("stableKey") or "")
+        if key in task_state:
+            item["task_state"] = task_state[key]
 
     return {
         "route": selected_route,
@@ -9573,6 +9625,7 @@ def build_consult_payload(
             "hybrid_skipped_reason": hybrid_skipped_reason,
             "filters": filters,
             "filter_candidate_limit": search_limit,
+            "stale_candidates_excluded": [str(item.get("stable_key") or "") for item in stale_candidates],
             "min_fact_rating": normalized_min_fact_rating,
             "temporal": as_of_temporal_payload(
                 normalized_as_of,
@@ -9632,6 +9685,10 @@ def context_provenance_from_item(item: dict[str, Any]) -> dict[str, Any]:
         "workspaces": workspaces,
         "relation_count": len(relations),
     }
+    metadata = item_memory_metadata(item)
+    for name in ("environment", "source_commit", "verified_at", "valid_until", "worktree"):
+        if metadata.get(name):
+            provenance[name] = metadata[name]
     return {key: value for key, value in provenance.items() if value not in ("", [], None)}
 
 
@@ -9683,6 +9740,9 @@ def compact_context_item(item: dict[str, Any], *, max_body_chars: int = 520) -> 
         "updated_at": str(item.get("updated_at") or item.get("updatedAt") or item.get("activity_at") or ""),
         "source_kind": str(item.get("source_kind") or item.get("sourceKind") or ""),
     }
+    for field in ("project_context", "task_state"):
+        if item.get(field):
+            compacted[field] = item[field]
     evidence: dict[str, Any] = {}
     provenance = context_provenance_from_item(item)
     retrieval = retrieval_evidence_from_item(item)
@@ -11063,7 +11123,7 @@ def build_context_pack_payload(
                 "section": "pinned_memory",
                 "priority": 0,
                 "stable_key": stable_key,
-                "text": text,
+                "text": text + context_state.annotation(item),
             },
             max_chars=max_chars,
             used_chars=used_chars,
@@ -11083,7 +11143,7 @@ def build_context_pack_payload(
                 "section": "retrieved_memory",
                 "priority": 0,
                 "stable_key": stable_key,
-                "text": text,
+                "text": text + context_state.annotation(item),
             },
             max_chars=max_chars,
             used_chars=used_chars,
@@ -11109,7 +11169,7 @@ def build_context_pack_payload(
                 "section": "related_memory",
                 "priority": 1,
                 "stable_key": stable_key,
-                "text": text,
+                "text": text + context_state.annotation(item),
             },
             max_chars=max_chars,
             used_chars=used_chars,
@@ -11149,7 +11209,7 @@ def build_context_pack_payload(
                 "section": "weak_signals",
                 "priority": 2,
                 "stable_key": stable_key,
-                "text": text,
+                "text": text + context_state.annotation(item),
             },
             max_chars=max_chars,
             used_chars=used_chars,
@@ -11177,7 +11237,7 @@ def build_context_pack_payload(
                     "section": section,
                     "priority": 1,
                     "stable_key": stable_key,
-                    "text": text,
+                    "text": text + context_state.annotation(item),
                 },
                 max_chars=max_chars,
                 used_chars=used_chars,
@@ -11199,7 +11259,11 @@ def build_context_pack_payload(
     weak_signal_count = len(weak_candidates) if consult_payload else 0
     status_item_count = len(list(status_payload.get("items") or [])) if isinstance(status_payload, dict) else 0
     stale_retrieved_count = sum(1 for item in retrieved if item.get("lineage") and not bool(item["lineage"].get("current", True)))
-    if reliable_hit_count and stale_retrieved_count >= max(len(retrieved), 1):
+    conflicted = [item for item in retrieved if item.get("task_state", {}).get("state") == "conflict"]
+    if conflicted:
+        workflow_status, coverage, complete = "needs_task_state_review", "conflicted", False
+        message = "Conflicting task state evidence needs review before resuming work."
+    elif reliable_hit_count and stale_retrieved_count >= max(len(retrieved), 1):
         workflow_status = "needs_lineage_review"
         coverage = "stale"
         complete = False
@@ -11244,6 +11308,7 @@ def build_context_pack_payload(
         },
         "core": {
             "summary": summary,
+            "resume": status.get("resume") or {},
             **core_sections,
         },
         "retrieval": {
@@ -11315,16 +11380,6 @@ def build_context_payload(
     min_fact_rating: float | str | None = None,
 ) -> dict[str, Any]:
     normalized_as_of = normalize_as_of_timestamp(as_of)
-    status_payload = build_status_payload(
-        graph,
-        tool=tool,
-        workspace=workspace,
-        thread_id=None,
-        limit=status_limit,
-        section_limit=section_limit,
-        recent_days=recent_days,
-        as_of=normalized_as_of,
-    )
     filters = build_consult_filters(
         graph,
         scope=scope,
@@ -11337,6 +11392,18 @@ def build_context_payload(
         metadata=metadata,
         filter_json=filter_json,
     )
+    status_payload = build_status_payload(
+        graph,
+        tool=tool,
+        workspace=workspace,
+        thread_id=None,
+        limit=status_limit,
+        section_limit=section_limit,
+        recent_days=recent_days,
+        as_of=normalized_as_of,
+        filters=filters,
+    )
+
     status_payload = filter_status_payload_by_metadata(graph, status_payload, filters)
     consult_payload = None
     if query:
@@ -14778,16 +14845,6 @@ def cmd_consult(args: argparse.Namespace) -> None:
 def build_context_command_payload(args: argparse.Namespace) -> dict[str, Any]:
     query = str(getattr(args, "query", None) or getattr(args, "query_text", None) or "").strip()
     tool, workspace, config, graph = open_workspace_graph(args)
-    status_payload = build_status_payload(
-        graph,
-        tool=tool,
-        workspace=workspace,
-        thread_id=None,
-        limit=int(getattr(args, "status_limit", 6)),
-        section_limit=int(getattr(args, "section_limit", 3)),
-        recent_days=int(getattr(args, "recent_days", STATUS_WINDOW_DAYS_DEFAULT)),
-        as_of=str(getattr(args, "as_of", "") or ""),
-    )
     context_filters = build_consult_filters(
         graph,
         scope=str(getattr(args, "scope", "") or "system"),
@@ -14800,6 +14857,18 @@ def build_context_command_payload(args: argparse.Namespace) -> dict[str, Any]:
         metadata=list(getattr(args, "metadata", None) or []),
         filter_json=list(getattr(args, "filter_json", None) or []),
     )
+    status_payload = build_status_payload(
+        graph,
+        tool=tool,
+        workspace=workspace,
+        thread_id=None,
+        limit=int(getattr(args, "status_limit", 6)),
+        section_limit=int(getattr(args, "section_limit", 3)),
+        recent_days=int(getattr(args, "recent_days", STATUS_WINDOW_DAYS_DEFAULT)),
+        as_of=str(getattr(args, "as_of", "") or ""),
+        filters=context_filters,
+    )
+
     status_payload = filter_status_payload_by_metadata(graph, status_payload, context_filters)
     consult_payload: dict[str, Any] | None = None
     if query:
@@ -15050,6 +15119,7 @@ def cmd_status(args: argparse.Namespace) -> None:
         limit=args.limit,
         section_limit=args.section_limit,
         recent_days=args.recent_days,
+        filters=build_consult_filters(graph, scope=getattr(args, "scope", "system"), repository_root_path=repository_scope_path_from_args(args)),
         as_of=str(getattr(args, "as_of", "") or ""),
     )
     print(json.dumps(payload, indent=2))
@@ -15148,7 +15218,7 @@ NOTE_KIND_ALIASES = {
     "create": "memory_note",
 }
 
-FACT_RELATION_FLAGS = ("informed-by", "answers", "supersedes", "reverts", "depends-on", "implements", "constrains", "refines")
+FACT_RELATION_FLAGS = ("informed-by", "answers", "supersedes", "reverts", "depends-on", "implements", "constrains", "refines", "completes", "reopens")
 RELATION_EXPECTED_WRITE_KINDS = {"decision", "attempt", "open_question", "preference", "plan", "procedure", "observation", "memory_note"}
 CANONICAL_FACT_RELATIONS = tuple(relation.replace("-", "_") for relation in FACT_RELATION_FLAGS)
 SEMANTIC_RELATION_ONTOLOGY_POLICY = "semantic_relation_ontology_v1"
@@ -15156,6 +15226,8 @@ SEMANTIC_RELATION_SOURCE_KINDS = frozenset(SEARCHABLE_KINDS)
 SEMANTIC_RELATION_TARGET_KINDS = frozenset(SEARCHABLE_KINDS)
 SEMANTIC_RELATION_TARGET_KIND_RULES = {
     "answers": frozenset({"open_question"}),
+    "completes": frozenset({"attempt", "plan"}),
+    "reopens": frozenset({"attempt", "plan"}),
 }
 RELATION_TARGET_JSON_KEYS = frozenset(
     {
@@ -15386,7 +15458,8 @@ def repository_scope_path_from_args(args: argparse.Namespace) -> str | None:
         return str(Path(value).expanduser().resolve())
     if str(getattr(args, "scope", "") or "").strip().lower() == "repo":
         return infer_git_repository_root(str(Path.cwd()))
-    return None
+    root = infer_git_repository_root(str(Path.cwd()))
+    return root if root and (Path(root) / ".git").exists() else None
 
 
 def relation_temporal_options_from_mapping(values: dict[str, Any]) -> dict[str, str]:
@@ -19499,6 +19572,11 @@ def cmd_doctor(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def cmd_evaluate(args: argparse.Namespace) -> None:
+    from .evaluation import run
+    run(args)
+
+
 def build_parser() -> argparse.ArgumentParser:
     return build_cli_parser(
         CommandHandlers(
@@ -19513,6 +19591,7 @@ def build_parser() -> argparse.ArgumentParser:
             consult=cmd_consult,
             search=cmd_search,
             benchmark=cmd_benchmark,
+            evaluate=cmd_evaluate,
             audit=cmd_audit,
             export=cmd_export,
             backup=cmd_backup,

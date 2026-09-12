@@ -249,6 +249,7 @@ More detail: [docs/troubleshooting.md](docs/troubleshooting.md).
 - [MCP bridge](docs/mcp.md)
 - [Architecture](docs/architecture.md)
 - [Benchmarks](docs/benchmarks.md)
+- [Context quality, task state, and private evaluation](docs/context-quality.md)
 - [Release checklist](docs/release-checklist.md)
 
 ## License

@@ -26,6 +26,7 @@ class CommandHandlers:
     context: CommandHandler
     consult: CommandHandler
     search: CommandHandler
+    evaluate: CommandHandler
     benchmark: CommandHandler
     audit: CommandHandler
     export: CommandHandler
@@ -81,7 +82,7 @@ def add_note_write_arguments(parser: argparse.ArgumentParser, *, include_kind: b
     parser.add_argument("--namespace", action="append", help="Attach one or more normalized memory namespaces. Repeat or comma-separate values.")
     add_entity_scope_arguments(parser, verb="Attach")
     parser.add_argument("--metadata", action="append", help="Attach structured memory metadata as KEY=VALUE. Repeat for multiple fields.")
-    for relation_flag in ("informed-by", "answers", "supersedes", "reverts", "depends-on", "implements", "constrains", "refines"):
+    for relation_flag in ("informed-by", "answers", "supersedes", "reverts", "depends-on", "implements", "constrains", "refines", "completes", "reopens"):
         parser.add_argument(f"--{relation_flag}", action="append", default=[])
     parser.add_argument("--relation-valid-at", help="ISO-8601 timestamp for when newly created semantic relation facts became true.")
     parser.add_argument("--relation-invalid-at", help="ISO-8601 timestamp for when newly created semantic relation facts stopped being true.")
@@ -123,6 +124,11 @@ def build_parser(
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    from .evaluation import add_arguments as add_evaluation_arguments
+    evaluate_parser = subparsers.add_parser("evaluate", help="Evaluate evidence retrieval against a private frozen memory suite.")
+    add_evaluation_arguments(evaluate_parser)
+    evaluate_parser.set_defaults(func=handlers.evaluate)
 
     version_parser = subparsers.add_parser("version", help="Print the Autopsy memory package version.")
     version_parser.add_argument("--json", action="store_true", help="Print version metadata as JSON.")
