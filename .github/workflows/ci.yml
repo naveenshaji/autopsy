@@ -75,6 +75,57 @@ jobs:
       - name: Release check
         run: ./scripts/release-check.sh
 
+  linux-install:
+    name: Linux install (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install from checkout
+        env:
+          PYTHON: python
+          AUTOPSY_INSTALL_PREFIX: ${{ runner.temp }}/autopsy-prefix
+        run: ./scripts/install-global.sh
+
+      - name: CPU-only torch
+        run: |
+          "$RUNNER_TEMP/autopsy-prefix/opt/autopsy-memory/venv/bin/python" - <<'PY'
+          import importlib.metadata as metadata
+          torch = metadata.version("torch")
+          assert "+cpu" in torch, torch
+          cuda = [name for name in (d.metadata["Name"] or "" for d in metadata.distributions()) if name.lower().startswith("nvidia-")]
+          assert not cuda, cuda
+          print("torch", torch)
+          PY
+
+      - name: Set up and smoke test
+        env:
+          AUTOPSY_APP_SUPPORT_DIR: ${{ runner.temp }}/autopsy-data
+        run: |
+          export PATH="$RUNNER_TEMP/autopsy-prefix/bin:$PATH"
+          test "$(command -v autopsy)" = "$RUNNER_TEMP/autopsy-prefix/bin/autopsy"
+          autopsy version --json
+          autopsy install --smoke-test --skip-model-warmup > "$RUNNER_TEMP/install.json"
+          python - "$RUNNER_TEMP/install.json" <<'PY'
+          import json
+          import sys
+
+          payload = json.load(open(sys.argv[1], encoding="utf-8"))
+          assert payload["workflow"]["complete"] is True, payload["workflow"]
+          assert payload["menubar"]["reason"] == "unsupported_platform", payload["menubar"]
+          assert payload["smoke_test"]["ok"] is True, payload["smoke_test"]
+          PY
+
   homebrew-formula:
     name: Homebrew formula
     runs-on: macos-15

@@ -10,13 +10,16 @@ usage() {
 Usage: scripts/install-release.sh [VERSION]
 
 Downloads an Autopsy release tarball from GitHub and runs scripts/install-global.sh
-from the unpacked source tree. This is the non-Homebrew recovery path for Macs
-where `brew update`, `brew upgrade`, or `brew reinstall` is blocked.
+from the unpacked source tree. This is the standard install on Linux (commands in
+~/.local/bin), and the non-Homebrew recovery path for Macs where `brew update`,
+`brew upgrade`, or `brew reinstall` is blocked.
 
 Environment:
   AUTOPSY_VERSION        Release version or tag, e.g. 0.1.30 or v0.1.30.
   AUTOPSY_INSTALL_PREFIX Install prefix passed through to install-global.sh.
-  PYTHON                 Python 3.12+ interpreter used by install-global.sh.
+  PYTHON                 Python 3.12-3.14 interpreter used by install-global.sh.
+  AUTOPSY_TORCH_INDEX_URL
+                         Package index for torch (Linux default: the CPU-only build).
 EOF
 }
 

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "autopsy-memory"
-version = "0.1.33"
+version = "0.1.34"
 description = "Local-first Falkor-backed memory layer and CLI for coding agents."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -32,6 +32,11 @@ dependencies = [
 
 [project.optional-dependencies]
 ml = []
+# ONNX Runtime provider: same models without torch in the resident worker.
+onnx = [
+  "onnxruntime>=1.18",
+  "tokenizers>=0.15",
+]
 dev = [
   "build>=1.2",
   "pytest>=8.0",

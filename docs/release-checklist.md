@@ -25,6 +25,7 @@ Use this checklist before tagging or publishing Autopsy Memory.
 - `autopsy activity --limit 3` returns valid JSON for lightweight UI clients.
 - `./scripts/install-matrix-check.sh` passes inside the release-check virtual environment.
 - GitHub Actions `release-check` passes on Ubuntu for Python 3.12 and 3.13, and on macOS with Python 3.12.
+- GitHub Actions `linux-install` passes: `scripts/install-global.sh` installs CPU-only torch and `autopsy install --smoke-test` passes on Ubuntu 24.04.
 - `autopsy menubar --print-path` resolves the installed menu bar app source.
 - `autopsy menubar --launch-agent-status` reports LaunchAgent state without writing.
 - `./scripts/menubar-check.sh` passes when shipping the macOS menu bar app.

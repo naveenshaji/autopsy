@@ -2,6 +2,7 @@
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![macOS](https://img.shields.io/badge/platform-macOS-black.svg)
+![Linux](https://img.shields.io/badge/platform-Linux-informational.svg)
 ![Homebrew](https://img.shields.io/badge/install-Homebrew-fbb040.svg)
 ![Python](https://img.shields.io/badge/python-3.12%2B-3776ab.svg)
 ![Status](https://img.shields.io/badge/status-Alpha-orange.svg)
@@ -20,13 +21,15 @@ It is built for agent work with history:
 - what context should be recalled before touching this repo again.
 
 Everything runs locally by default: graph storage, activity snapshots, settings,
-embeddings, reranking, and the menu bar companion. No hosted memory account. No
-required API keys.
+embeddings, reranking, and, on macOS, the menu bar companion. No hosted memory
+account. No required API keys.
 
-The macOS menu bar app stays quiet. It shows recent writes, recent consults,
-agent instruction status, and updates.
+Autopsy runs on macOS and Linux. On macOS, a quiet menu bar app shows recent
+writes, recent consults, agent instruction status, and updates.
 
 ## Quickstart
+
+### macOS
 
 Requirements:
 
@@ -41,11 +44,33 @@ brew install autopsy-memory
 autopsy install
 ```
 
-`autopsy install` is the normal setup command. It:
+### Linux
+
+Requirements:
+
+- x86_64 or arm64 Linux with glibc 2.39 or newer (Ubuntu 24.04+, Debian 13+,
+  Fedora 40+).
+- Python 3.12, 3.13 or 3.14 with the `venv` module.
+
+Install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/naveenshaji/autopsy/main/scripts/install-release.sh | sh
+autopsy install
+```
+
+The installer puts the commands in `~/.local/bin` and uses the CPU-only build of
+torch, so the install is about 1.5 GB instead of several GB of CUDA libraries.
+See [Autopsy on Linux](docs/linux.md) for options, paths, Claude Code MCP setup,
+and uninstalling.
+
+### Setup
+
+`autopsy install` is the normal setup command on both platforms. It:
 
 - verifies the `autopsy` command on your PATH,
 - installs global agent instructions,
-- starts the macOS menu bar app,
+- starts the macOS menu bar app (macOS only),
 - warms up the local retrieval models.
 
 Check that everything is ready:
@@ -119,8 +144,11 @@ Autopsy does not require hosted sync or API keys for its default retrieval
 stack. The default data directory is:
 
 ```text
-~/Library/Application Support/Autopsy
+~/Library/Application Support/Autopsy    # macOS
+~/.local/share/autopsy                   # Linux ($XDG_DATA_HOME/autopsy)
 ```
+
+Set `AUTOPSY_APP_SUPPORT_DIR` to use another location.
 
 ## Everyday Commands
 
@@ -159,8 +187,9 @@ autopsy restore ~/Library/Application\ Support/Autopsy/Backups/<backup>.json --d
 ```
 
 Backups include memory history, source episodes, and repository lineage. Each
-successful memory write creates a new local recovery snapshot. Opting into iCloud
-also copies snapshots to iCloud Drive with SHA-256 verification. A verified local
+successful memory write creates a new local recovery snapshot in the data
+directory's `Backups` folder. On macOS, opting into iCloud also copies snapshots
+to iCloud Drive with SHA-256 verification. A verified local
 iCloud Drive copy does not confirm Apple's server upload. See
 [backup and recovery](docs/backups.md) for status, retries, and restore steps.
 
@@ -171,6 +200,8 @@ brew update
 brew upgrade autopsy-memory
 autopsy install
 ```
+
+On Linux, run the install command again, then `autopsy install`.
 
 If Homebrew cannot update or reinstall on a macOS prerelease, use the release
 bootstrap path in [docs/homebrew.md](docs/homebrew.md#macos-prerelease-recovery).
@@ -243,6 +274,7 @@ More detail: [docs/troubleshooting.md](docs/troubleshooting.md).
 ## Documentation
 
 - [CLI reference](docs/cli.md)
+- [Autopsy on Linux](docs/linux.md)
 - [Menu bar app](docs/menubar.md)
 - [Homebrew distribution](docs/homebrew.md)
 - [Agent instructions](docs/agent-instructions.md)

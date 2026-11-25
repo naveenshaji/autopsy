@@ -39,6 +39,12 @@ The bridge writes only protocol messages to stdout. Worker logs go to:
 
 `~/Library/Application Support/Autopsy/CLI/mcp-worker.stderr.log`
 
+On Linux, the same files live under `~/.local/share/autopsy` (`$XDG_DATA_HOME/autopsy`)
+instead of `~/Library/Application Support/Autopsy`. `AUTOPSY_APP_SUPPORT_DIR` overrides both.
+
+The bridge accepts both stdio framings: newline-delimited JSON (Claude Code and most
+MCP clients) and `Content-Length` headers. It answers in the framing the client used.
+
 ## Shared Ownership
 
 The standalone memory layer owns graph semantics.
@@ -68,6 +74,12 @@ Configure Codex with:
 command = "autopsy-memory-mcp"
 ```
 
+Configure Claude Code with:
+
+```bash
+claude mcp add --scope user autopsy -- autopsy-memory-mcp
+```
+
 Useful environment overrides:
 - `AUTOPSY_MEMORY_BACKEND=falkordb`
 - `AUTOPSY_FALKORDB_ENABLED=1`
@@ -86,6 +98,7 @@ The bridge exposes these MCP tools:
 - `autopsy_memory_timeline`
 - `autopsy_memory_neighbors`
 - `autopsy_memory_search`
+- `autopsy_memory_remember` (recall past conversations, passages, and notes by meaning)
 - `autopsy_memory_create_note`
 - `autopsy_memory_update_item`
 - `autopsy_memory_delete_item`

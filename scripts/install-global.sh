@@ -15,11 +15,19 @@ layout:
   <prefix>/opt/autopsy-memory -> <prefix>/Cellar/autopsy-memory/<version>
   <prefix>/bin/autopsy
 
+On Linux the default prefix is ~/.local, so the commands land in ~/.local/bin.
+
 Environment:
-  PYTHON                 Python 3.12+ interpreter to bootstrap with.
+  PYTHON                 Python 3.12-3.14 interpreter to bootstrap with.
   AUTOPSY_INSTALL_PREFIX Install prefix. Defaults to /opt/homebrew when writable,
                          otherwise ~/.local.
   AUTOPSY_INSTALL_EXTRA  Package extra to install. ML is included by default.
+  AUTOPSY_TORCH_INDEX_URL
+                         Package index for torch. On Linux this defaults to the
+                         CPU-only build (https://download.pytorch.org/whl/cpu);
+                         Autopsy's local models run on the CPU, and PyPI's Linux
+                         torch wheels pull several GB of CUDA libraries. Set to
+                         "pypi" to use PyPI's default build.
   AUTOPSY_INSTALL_MENUBAR_AGENT
                          Set to 0 to skip installing the macOS menu bar
                          LaunchAgent. Defaults to 1 on macOS.
@@ -94,8 +102,23 @@ trap cleanup EXIT INT TERM HUP
 
 mkdir -p "$BIN_DIR" "$(dirname "$OPT_DIR")" "$(dirname "$CELLAR_DIR")" "$DIST_DIR"
 
-"$PYTHON_BIN" -m venv "$VENV_DIR"
+if ! "$PYTHON_BIN" -m venv "$VENV_DIR"; then
+  echo "install-global: $PYTHON_BIN could not create a virtual environment." >&2
+  if [ "$(uname -s)" = "Linux" ]; then
+    echo "install-global: on Debian or Ubuntu, install the venv module first, e.g. sudo apt install python3-venv (or python3.12-venv)." >&2
+  fi
+  exit 1
+fi
 "$VENV_DIR/bin/python" -m pip install -U pip build >/dev/null
+
+TORCH_INDEX_URL="${AUTOPSY_TORCH_INDEX_URL:-}"
+if [ -z "$TORCH_INDEX_URL" ] && [ "$(uname -s)" = "Linux" ]; then
+  TORCH_INDEX_URL="https://download.pytorch.org/whl/cpu"
+fi
+if [ -n "$TORCH_INDEX_URL" ] && [ "$TORCH_INDEX_URL" != "pypi" ]; then
+  # Installed first so sentence-transformers' torch requirement is already met.
+  "$VENV_DIR/bin/python" -m pip install --index-url "$TORCH_INDEX_URL" torch >/dev/null
+fi
 "$VENV_DIR/bin/python" -m build --wheel --outdir "$DIST_DIR" "$ROOT_DIR" >/dev/null
 
 WHEEL_PATH="$(find "$DIST_DIR" -maxdepth 1 -name 'autopsy_memory-*.whl' | sort | tail -1)"
@@ -110,7 +133,7 @@ else
   "$VENV_DIR/bin/python" -m pip install "$WHEEL_PATH" >/dev/null
 fi
 
-if [ -d "$ROOT_DIR/apps/menubar" ]; then
+if [ -d "$ROOT_DIR/apps/menubar" ] && [ "$(uname -s)" = "Darwin" ]; then
   mkdir -p "$TMP_DIR/menubar"
   (
     cd "$ROOT_DIR/apps/menubar"
@@ -122,7 +145,7 @@ if [ -d "$ROOT_DIR/apps/menubar" ]; then
     cd "$TMP_DIR/menubar"
     tar -xf -
   )
-  if [ "$(uname -s)" = "Darwin" ] && command -v swift >/dev/null 2>&1; then
+  if command -v swift >/dev/null 2>&1; then
     "$VENV_DIR/bin/python" -m autopsy_memory.cli menubar --dir "$TMP_DIR/menubar" --build --release >/dev/null
   else
     echo "install-global: menu bar app was not prebuilt; it will build on first macOS launch" >&2
@@ -182,4 +205,20 @@ Installed Autopsy Memory $VERSION
   cellar: $CELLAR_DIR
   opt: $OPT_DIR
   autopsy: $BIN_DIR/autopsy
+EOF
+
+case ":$PATH:" in
+  *":$BIN_DIR:"*) ;;
+  *)
+    cat <<EOF
+
+$BIN_DIR is not on your PATH. Add it, for example:
+  echo 'export PATH="$BIN_DIR:\$PATH"' >> ~/.profile
+EOF
+    ;;
+esac
+
+cat <<EOF
+
+Next: run 'autopsy install' to set up agent instructions and warm up the local models.
 EOF
