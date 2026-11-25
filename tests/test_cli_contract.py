@@ -5403,7 +5403,7 @@ class AutopsyCLIContractTests(unittest.TestCase):
     def test_memory_type_filters_map_to_cognitive_layers(self):
         filters = cli.build_consult_filters(None, memory_types=["procedural,episodic"])
         self.assertEqual(filters["memory_types"], ["procedural", "episodic"])
-        self.assertEqual(filters["kinds"], ["procedure", "attempt", "timeline", "timeline_event"])
+        self.assertEqual(filters["kinds"], ["procedure", "attempt", "timeline", "timeline_event", "passage"])
         items = [
             {"stable_key": "graph-note:procedure", "kind": "procedure"},
             {"stable_key": "graph-note:attempt", "kind": "attempt"},

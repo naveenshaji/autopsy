@@ -36,7 +36,16 @@ _WORKER_DEFAULT_IDLE_TIMEOUT_SECONDS = 3600.0
 _WORKER_DEFAULT_OWNERSHIP_CHECK_SECONDS = 5.0
 DIRECT_RETRIEVAL_REASONS = {'lexical', 'exact', 'token_overlap', 'entity_overlap', 'graph_relation'}
 
-APP_SUPPORT_DIR_DEFAULT = Path.home() / 'Library' / 'Application Support' / 'Autopsy'
+def _default_app_support_dir():
+    override = os.environ.get('AUTOPSY_APP_SUPPORT_DIR')
+    if override:
+        return Path(override).expanduser()
+    if sys.platform == 'darwin':
+        return Path.home() / 'Library' / 'Application Support' / 'Autopsy'
+    return Path(os.environ.get('XDG_DATA_HOME') or Path.home() / '.local' / 'share') / 'autopsy'
+
+
+APP_SUPPORT_DIR_DEFAULT = _default_app_support_dir()
 FALKORDB_LITE_PATH_DEFAULT = APP_SUPPORT_DIR_DEFAULT / 'FalkorDB' / 'autopsy-memory.db'
 GLOBAL_MEMORY_SETTINGS_DEFAULT = APP_SUPPORT_DIR_DEFAULT / 'Config' / 'memory-settings.json'
 UNIFIED_MEMORY_ROOT_DEFAULT = APP_SUPPORT_DIR_DEFAULT / 'MemoryRoot'
@@ -266,10 +275,29 @@ def load_embeddings_config_cached(root_dir: Path) -> dict:
     return config
 
 
+def _package_cli():
+    """autopsy_memory.cli, for the ONNX provider (one implementation of the models)."""
+    package_root = str(Path(__file__).resolve().parent.parent)
+    if package_root not in sys.path:
+        sys.path.insert(0, package_root)
+    return importlib.import_module('autopsy_memory.cli')
+
+
+def _onnx_available() -> tuple[bool, str | None]:
+    try:
+        __import__('onnxruntime')
+        __import__('tokenizers')
+    except Exception as exc:
+        return (False, f'onnxruntime unavailable: {exc}')
+    return (True, None)
+
+
 def embedding_provider_available(config: dict) -> tuple[bool, str | None]:
     provider = str(config.get('provider') or '').strip().lower()
     if not config.get('enabled', True):
         return (False, 'disabled')
+    if provider == 'onnx':
+        return _onnx_available()
     if provider != 'sentence_transformers':
         return (False, f'unsupported provider: {provider}')
     try:
@@ -291,6 +319,8 @@ def reranker_provider_available(config: dict | None) -> tuple[bool, str | None]:
     if not reranker.get('enabled', False):
         return (False, 'disabled')
     provider = str(reranker.get('provider') or '').strip().lower()
+    if provider == 'onnx':
+        return _onnx_available()
     if provider != 'sentence_transformers':
         return (False, f'unsupported provider: {provider}')
     try:
@@ -303,11 +333,12 @@ def reranker_provider_available(config: dict | None) -> tuple[bool, str | None]:
 def embed_texts_with_provider(texts: list[str], config: dict) -> list[list[float]]:
     provider = str(config.get('provider') or '').strip().lower()
     model_name = str(config.get('model') or '').strip()
-    if provider != 'sentence_transformers':
+    if provider not in ('sentence_transformers', 'onnx'):
         raise RuntimeError(f'Unsupported embeddings provider: {provider}')
     if not model_name:
         raise RuntimeError('Embeddings config missing model')
-    model = load_sentence_transformer(model_name, str(config.get('device') or 'cpu'))
+    model = (_package_cli().load_embedder_for(config) if provider == 'onnx'
+             else load_sentence_transformer(model_name, str(config.get('device') or 'cpu')))
     batch_size = max(1, int(config.get('batch_size', 16)))
     vectors = model.encode(
         texts,
@@ -328,7 +359,7 @@ def rerank_candidates(query: str, candidates: list[dict], config: dict | None) -
         return candidates
     provider = str(reranker.get('provider') or '').strip().lower()
     model_name = str(reranker.get('model') or '').strip()
-    if provider != 'sentence_transformers' or not model_name:
+    if provider not in ('sentence_transformers', 'onnx') or not model_name:
         return candidates
     candidate_limit = max(1, int(reranker.get('candidate_limit', 24)))
     shortlist = candidates[:candidate_limit]
@@ -344,7 +375,8 @@ def rerank_candidates(query: str, candidates: list[dict], config: dict | None) -
         )
         for item in shortlist
     ]
-    model = load_cross_encoder(model_name, str(reranker.get('device') or 'cpu'))
+    model = (_package_cli().load_reranker_for(reranker) if provider == 'onnx'
+             else load_cross_encoder(model_name, str(reranker.get('device') or 'cpu')))
     scores = model.predict(
         [[query, text] for text in shortlist_texts],
         batch_size=max(1, int(reranker.get('batch_size', 8))),
@@ -1374,6 +1406,32 @@ def handle_memory_consolidate_session(payload: dict) -> dict:
     return run_falkor_operation(falkor, consolidate_session)
 
 
+def handle_memory_remember(payload: dict) -> dict:
+    request = payload.get('request') or {}
+    tool, module, workspace, embeddings_config, _embeddings_status, falkor = require_falkor_context(payload, include_embeddings_status=False)
+
+    def remember(graph):
+        return module.build_remember_payload(
+            graph,
+            tool=tool,
+            workspace=workspace,
+            config=embeddings_config,
+            query=str(request.get('query') or ''),
+            limit=max(1, int(request.get('limit') or 6)),
+            project=str(request.get('project') or ''),
+            exclude_session=str(request.get('exclude_session') or ''),
+            min_similarity=request.get('min_similarity'),
+        )
+
+    return run_falkor_operation(falkor, remember)
+
+
+def handle_memory_embed_pending(payload: dict) -> dict:
+    request = payload.get('request') or {}
+    tool, module, workspace, embeddings_config, _embeddings_status, falkor = require_falkor_context(payload, include_embeddings_status=False)
+    return run_falkor_operation(falkor, lambda graph: module.embed_pending_items(graph, embeddings_config, limit=max(1, int(request.get('limit') or 512))))
+
+
 def handle_memory_import_session(payload: dict) -> dict:
     request = payload.get('request') or {}
     tool, module, workspace, _embeddings_config, _embeddings_status, falkor = require_falkor_context(payload, include_embeddings_status=False)
@@ -1730,6 +1788,22 @@ def handle_memory_sync_workspace(payload: dict) -> dict:
     )
 
 
+def _cli_module():
+    return sys.modules.get('autopsy_memory.cli')
+
+
+def priority_request():
+    """Recall and search run ahead of background imports (see cli.priority_request)."""
+    module = _cli_module()
+    return module.priority_request() if module and hasattr(module, 'priority_request') else contextlib.nullcontext()
+
+
+def yield_to_priority() -> None:
+    module = _cli_module()
+    if module and hasattr(module, 'yield_to_priority'):
+        module.yield_to_priority()
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = 'AutopsyMLWorker/0.1'
 
@@ -1854,7 +1928,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._write_json(200, {'scores': [float(score) for score in scores]})
                 return
             if parsed.path == '/memory/consult':
-                self._write_json(200, handle_memory_consult(payload))
+                with priority_request():
+                    self._write_json(200, handle_memory_consult(payload))
                 return
             if parsed.path == '/memory/health':
                 self._write_json(200, handle_memory_health(payload))
@@ -1883,7 +1958,15 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == '/memory/consolidate-session':
                 self._write_json(200, handle_memory_consolidate_session(payload))
                 return
+            if parsed.path == '/memory/remember':
+                with priority_request():
+                    self._write_json(200, handle_memory_remember(payload))
+                return
+            if parsed.path == '/memory/embed-pending':
+                self._write_json(200, handle_memory_embed_pending(payload))
+                return
             if parsed.path == '/memory/import-session':
+                yield_to_priority()
                 self._write_json(200, handle_memory_import_session(payload))
                 return
             if parsed.path == '/memory/feedback':

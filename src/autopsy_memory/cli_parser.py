@@ -46,6 +46,7 @@ class CommandHandlers:
     pin_item: CommandHandler
     feedback: CommandHandler
     import_session: CommandHandler
+    remember: CommandHandler
     consolidate_session: CommandHandler
     observe: CommandHandler
     item: CommandHandler
@@ -471,6 +472,14 @@ def build_parser(
     import_session_parser.add_argument("--max-events", type=int, default=200, help="Maximum parsed events to import.")
     import_session_parser.add_argument("--dry-run", action="store_true", help="Validate and summarize without writing to Falkor.")
     import_session_parser.set_defaults(func=handlers.import_session)
+
+    remember_parser = subparsers.add_parser("remember", parents=[common], help="Recall what was said or seen, by meaning (conversations, passages, notes).")
+    remember_parser.add_argument("query", help="What to remember, in plain words.")
+    remember_parser.add_argument("--limit", type=int, default=6, help="Maximum moments to return.")
+    remember_parser.add_argument("--project", default="", help="Only moments from this project (folder name).")
+    remember_parser.add_argument("--exclude-session", default="", help="Skip one session's own memories (its stable key).")
+    remember_parser.add_argument("--min-similarity", type=float, default=None, help="Similarity floor (default 0.55).")
+    remember_parser.set_defaults(func=handlers.remember)
 
     consolidate_session_parser = subparsers.add_parser("consolidate-session", parents=[common], help="Draft or write semantic memory from an imported session timeline.")
     consolidate_session_parser.add_argument("stable_key", help="Imported session stable key, for example session-import:<sha>.")

@@ -29,13 +29,30 @@ except ImportError:  # pragma: no cover - fcntl is expected on supported macOS i
 
 from .cli_parser import CommandHandlers, build_parser as build_cli_parser, normalized_cli_args
 from . import backups as backup_storage
+from . import claude_code as claude_code_sessions
+from . import onnx_models
 from . import context_state
 from .doctor import import_check, installed_autopsy_command_check, python_version_check
 from .init import build_init_payload, cmd_init, instruction_targets, smoke_tests, target_status
 from .metadata import PACKAGE_NAME, cmd_instructions, cmd_version, package_version
 
 
-APP_SUPPORT_DIR_DEFAULT = Path(os.environ.get("AUTOPSY_APP_SUPPORT_DIR") or Path.home() / "Library" / "Application Support" / "Autopsy")
+def default_app_support_dir() -> Path:
+    """Where Autopsy keeps its graph, settings and logs.
+
+    ``AUTOPSY_APP_SUPPORT_DIR`` wins; otherwise the platform's convention:
+    ``~/Library/Application Support/Autopsy`` on macOS, ``$XDG_DATA_HOME/autopsy``
+    (``~/.local/share/autopsy``) elsewhere.
+    """
+    override = os.environ.get("AUTOPSY_APP_SUPPORT_DIR")
+    if override:
+        return Path(override).expanduser()
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "Autopsy"
+    return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "autopsy"
+
+
+APP_SUPPORT_DIR_DEFAULT = default_app_support_dir()
 FALKORDB_LITE_PATH_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "FalkorDB" / "autopsy-memory.db"
 GLOBAL_MEMORY_SETTINGS_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "Config" / "memory-settings.json"
 UNIFIED_MEMORY_ROOT_DEFAULT = APP_SUPPORT_DIR_DEFAULT / "MemoryRoot"
@@ -76,12 +93,13 @@ SEARCHABLE_KINDS = {
     "summary",
     "timeline",
     "timeline_event",
+    "passage",
     "memory_note",
 }
 
 MEMORY_TYPE_KIND_MAP = {
     "semantic": ("decision", "open_question", "preference", "plan", "summary", "memory_note"),
-    "episodic": ("attempt", "timeline", "timeline_event"),
+    "episodic": ("attempt", "timeline", "timeline_event", "passage"),
     "procedural": ("procedure",),
     "observation": ("observation",),
 }
@@ -755,10 +773,15 @@ def reranker_config(config: dict[str, Any] | None) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+MODEL_PROVIDERS = {"sentence_transformers", "onnx"}
+
+
 def embedding_provider_available(config: dict[str, Any]) -> tuple[bool, str | None]:
     provider = str(config.get("provider") or "").strip().lower()
     if not config.get("enabled", True):
         return False, "disabled"
+    if provider == "onnx":
+        return onnx_models.available()
     if provider != "sentence_transformers":
         return False, f"unsupported provider: {provider}"
     try:
@@ -773,6 +796,8 @@ def reranker_provider_available(config: dict[str, Any] | None) -> tuple[bool, st
     if not reranker.get("enabled", False):
         return False, "disabled"
     provider = str(reranker.get("provider") or "").strip().lower()
+    if provider == "onnx":
+        return onnx_models.available()
     if provider != "sentence_transformers":
         return False, f"unsupported provider: {provider}"
     try:
@@ -782,24 +807,46 @@ def reranker_provider_available(config: dict[str, Any] | None) -> tuple[bool, st
     return True, None
 
 
-def load_sentence_transformer(model_name: str, device: str):
-    key = (model_name, device)
+def load_sentence_transformer(model_name: str, device: str, provider: str = "sentence_transformers",
+                              options: dict[str, Any] | None = None):
+    key = (model_name, device) if provider != "onnx" else (model_name, "onnx")
     model = _EMBEDDING_MODEL_CACHE.get(key)
     if model is None:
-        from sentence_transformers import SentenceTransformer
-        model = SentenceTransformer(model_name, device=device)
+        if provider == "onnx":
+            model = onnx_models.load("embedding", model_name, options)
+        else:
+            from sentence_transformers import SentenceTransformer
+            model = SentenceTransformer(model_name, device=device)
         _EMBEDDING_MODEL_CACHE[key] = model
     return model
 
 
-def load_cross_encoder(model_name: str, device: str):
-    key = (model_name, device)
+def load_cross_encoder(model_name: str, device: str, provider: str = "sentence_transformers",
+                       options: dict[str, Any] | None = None):
+    key = (model_name, device) if provider != "onnx" else (model_name, "onnx")
     model = _RERANKER_MODEL_CACHE.get(key)
     if model is None:
-        from sentence_transformers import CrossEncoder
-        model = CrossEncoder(model_name, device=device)
+        if provider == "onnx":
+            model = onnx_models.load("reranker", model_name, options)
+        else:
+            from sentence_transformers import CrossEncoder
+            model = CrossEncoder(model_name, device=device)
         _RERANKER_MODEL_CACHE[key] = model
     return model
+
+
+def load_embedder_for(config: dict[str, Any]):
+    model, device = str(config.get("model") or "").strip(), str(config.get("device") or "cpu")
+    if str(config.get("provider") or "").strip().lower() == "onnx":
+        return load_sentence_transformer(model, device, "onnx", config)
+    return load_sentence_transformer(model, device)
+
+
+def load_reranker_for(reranker: dict[str, Any]):
+    model, device = str(reranker.get("model") or "").strip(), str(reranker.get("device") or "cpu")
+    if str(reranker.get("provider") or "").strip().lower() == "onnx":
+        return load_cross_encoder(model, device, "onnx", reranker)
+    return load_cross_encoder(model, device)
 
 
 def model_warmup_log_path() -> Path:
@@ -892,11 +939,11 @@ def run_model_warmup(root_dir: Path | None = None) -> dict[str, Any]:
     embedding_device = str(config.get("device") or "cpu")
     if not config.get("enabled", True):
         append_model("embedding", embedding_model, embedding_device, True, skipped=True, error="disabled")
-    elif provider != "sentence_transformers" or not embedding_model:
+    elif provider not in MODEL_PROVIDERS or not embedding_model:
         append_model("embedding", embedding_model, embedding_device, False, error=f"unsupported provider or missing model: {provider}")
     else:
         try:
-            model = load_sentence_transformer(embedding_model, embedding_device)
+            model = load_embedder_for(config)
             model.encode(
                 ["Autopsy model warmup"],
                 batch_size=1,
@@ -914,11 +961,11 @@ def run_model_warmup(root_dir: Path | None = None) -> dict[str, Any]:
     reranker_device = str(reranker.get("device") or "cpu")
     if not reranker.get("enabled", False):
         append_model("reranker", reranker_model, reranker_device, True, skipped=True, error="disabled")
-    elif reranker_provider != "sentence_transformers" or not reranker_model:
+    elif reranker_provider not in MODEL_PROVIDERS or not reranker_model:
         append_model("reranker", reranker_model, reranker_device, False, error=f"unsupported provider or missing model: {reranker_provider}")
     else:
         try:
-            model = load_cross_encoder(reranker_model, reranker_device)
+            model = load_reranker_for(reranker)
             model.predict(
                 [["Autopsy model warmup", "Autopsy retrieval quality warmup document"]],
                 batch_size=1,
@@ -986,22 +1033,127 @@ def start_model_warmup_background(args: argparse.Namespace) -> dict[str, Any]:
     return payload
 
 
+# Interactive requests (recall, search) go before background work in a resident
+# worker: while one is running, background embedding passes pause between batches
+# instead of competing with it for the CPU.
+_PRIORITY_LOCAL = threading.local()
+_PRIORITY_COND = threading.Condition()
+_PRIORITY_ACTIVE = 0
+
+
+@contextlib.contextmanager
+def priority_request():
+    global _PRIORITY_ACTIVE
+    with _PRIORITY_COND:
+        _PRIORITY_ACTIVE += 1
+    _PRIORITY_LOCAL.on = True
+    try:
+        yield
+    finally:
+        _PRIORITY_LOCAL.on = False
+        with _PRIORITY_COND:
+            _PRIORITY_ACTIVE -= 1
+            _PRIORITY_COND.notify_all()
+
+
+def yield_to_priority(max_wait: float = 20.0) -> float:
+    """Background work calls this between batches; returns seconds waited."""
+    if getattr(_PRIORITY_LOCAL, "on", False):
+        return 0.0
+    started = time.monotonic()
+    with _PRIORITY_COND:
+        while _PRIORITY_ACTIVE > 0:
+            remaining = max_wait - (time.monotonic() - started)
+            if remaining <= 0:
+                break
+            _PRIORITY_COND.wait(remaining)
+    return time.monotonic() - started
+
+
 def embed_texts_with_provider(texts: list[str], config: dict[str, Any]) -> list[list[float]]:
     provider = str(config.get("provider") or "").strip().lower()
     model_name = str(config.get("model") or "").strip()
-    if provider != "sentence_transformers":
+    if provider not in MODEL_PROVIDERS:
         raise RuntimeError(f"Unsupported embeddings provider: {provider}")
     if not model_name:
         raise RuntimeError("Embeddings config missing model")
-    model = load_sentence_transformer(model_name, str(config.get("device") or "cpu"))
-    vectors = model.encode(
-        texts,
-        batch_size=max(1, int(config.get("batch_size", 16))),
-        show_progress_bar=False,
-        normalize_embeddings=True,
-        convert_to_numpy=True,
-    )
-    return [vector.tolist() for vector in vectors]
+    model = load_embedder_for(config)
+    batch_size = max(1, int(config.get("batch_size", 16)))
+    vectors: list[list[float]] = []
+    for start in range(0, len(texts), batch_size):
+        yield_to_priority()
+        batch = model.encode(
+            texts[start:start + batch_size],
+            batch_size=batch_size,
+            show_progress_bar=False,
+            normalize_embeddings=True,
+            convert_to_numpy=True,
+        )
+        vectors.extend(vector.tolist() for vector in batch)
+    return vectors
+
+
+EMBEDDING_TEXT_DETAIL_CHARS = 1600
+
+
+def embedding_text_for_item(label: str, summary: str, detail_content: str) -> str:
+    """What a memory's vector is computed from: its title, preview and the head of its body."""
+    detail = str(detail_content or "").strip()
+    summary = str(summary or "").strip()
+    if summary and detail.startswith(summary.rstrip("…. ")[:200]):
+        summary = ""  # the preview is just the start of the body
+    parts = [str(label or "").strip(), summary]
+    if detail:
+        parts.append(detail[:EMBEDDING_TEXT_DETAIL_CHARS])
+    return "\n".join(part for part in parts if part)
+
+
+def ensure_vector_index(graph, dimension: int) -> bool:
+    """Create the SemanticItem vector index (cosine) once embeddings exist."""
+    try:
+        graph.query(
+            f"CREATE VECTOR INDEX FOR (n:SemanticItem) ON (n.embedding) "
+            f"OPTIONS {{dimension: {int(dimension)}, similarityFunction: 'cosine'}}"
+        )
+        return True
+    except Exception as exc:
+        return "already indexed" in str(exc).lower()
+
+
+def embed_pending_items(graph, config: dict[str, Any], *, limit: int = 512) -> dict[str, Any]:
+    """Compute vectors for searchable memories that have none (new or changed).
+
+    Writes never embed inline (that would load the model in every short CLI
+    process); this pass runs after imports, on ``sync`` and from the worker, so
+    vector recall covers everything without slowing writes down.
+    """
+    started = time.perf_counter()
+    available, reason = embedding_provider_available(config)
+    if not available:
+        return {"embedded": 0, "pending": None, "skipped": reason}
+    rows = result_rows(graph.query(
+        """
+        MATCH (node:SemanticItem)
+        WHERE node.embedding IS NULL
+        RETURN node.entity_id, node.label, node.summary, node.detail_content
+        LIMIT $limit
+        """,
+        params={"limit": max(1, int(limit))},
+    ))
+    if not rows:
+        return {"embedded": 0, "pending": 0, "seconds": round(time.perf_counter() - started, 3)}
+    texts = [embedding_text_for_item(str(row[1] or ""), str(row[2] or ""), str(row[3] or "")) for row in rows]
+    vectors = embed_texts_with_provider(texts, config)
+    for row, vector in zip(rows, vectors):
+        graph.query(
+            "MATCH (node:MemoryNode {entity_id: $entity_id}) SET node.embedding = vecf32($vector)",
+            params={"entity_id": int(row[0]), "vector": [float(value) for value in vector]},
+        )
+    if vectors:
+        ensure_vector_index(graph, len(vectors[0]))
+    _GRAPH_VECTOR_AVAILABILITY.pop(getattr(graph, "name", "graph"), None)
+    remaining = int(scalar_query(graph, "MATCH (node:SemanticItem) WHERE node.embedding IS NULL RETURN count(node)") or 0)
+    return {"embedded": len(vectors), "pending": remaining, "seconds": round(time.perf_counter() - started, 3)}
 
 
 def rerank_candidates(query: str, candidates: list[dict[str, Any]], config: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -1028,7 +1180,7 @@ def rerank_candidates(query: str, candidates: list[dict[str, Any]], config: dict
         )
         for item in shortlist
     ]
-    model = load_cross_encoder(model_name, str(reranker.get("device") or "cpu"))
+    model = load_reranker_for(reranker)
     scores = model.predict(
         [[query, text] for text in texts],
         batch_size=max(1, int(reranker.get("batch_size", 8))),
@@ -3177,6 +3329,19 @@ def fetch_token_overlap_candidates(
     return filter_weak_lexical_hits(query, rerank_lexical_hits(query, items)), elapsed
 
 
+def graph_has_vectors(graph) -> bool:
+    graph_name = getattr(graph, "name", "graph")
+    cached = _GRAPH_VECTOR_AVAILABILITY.get(graph_name)
+    if cached and time.monotonic() - cached[1] < GRAPH_VECTOR_AVAILABILITY_TTL_SECONDS:
+        return bool(cached[0])
+    try:
+        rows = result_rows(graph.query("MATCH (node:SemanticItem) WHERE node.embedding IS NOT NULL RETURN 1 LIMIT 1"))
+    except Exception:
+        return False
+    _GRAPH_VECTOR_AVAILABILITY[graph_name] = (bool(rows), time.monotonic())
+    return bool(rows)
+
+
 def fetch_vector_candidates(graph, tool, query: str, config: dict[str, Any], *, limit: int) -> tuple[list[dict[str, Any]], float]:
     provider_ok, _ = tool.embedding_provider_available(config)
     if not provider_ok:
@@ -3261,7 +3426,8 @@ def fetch_vector_candidates(graph, tool, query: str, config: dict[str, Any], *, 
                 "activity_at": str(row[5] or ""),
                 "source_kind": source_kind,
                 "expired_at": str(row[7] or ""),
-                "embedding_score": float(row[8]),
+                # FalkorDB yields cosine *distance* (0 = identical); Autopsy ranks by similarity.
+                "embedding_score": max(0.0, 1.0 - float(row[8])),
                 "retrieval_reasons": ["embedding"],
                 "rank": rank,
             }
@@ -5299,6 +5465,15 @@ def update_memory_node(
     memory_tags = serialize_memory_tags(normalized_tags)
     memory_metadata = serialize_memory_metadata(normalized_metadata)
     search_text = memory_search_text(kind=kind, label=label, summary=summary, detail_content=detail_content, tags=normalized_tags, metadata=normalized_metadata)
+    # Changed content makes the stored vector stale; embed_pending_items refills it.
+    graph.query(
+        """
+        MATCH (node:MemoryNode {stable_key: $stable_key})
+        WHERE node.embedding IS NOT NULL AND coalesce(node.search_text, '') <> $search_text
+        SET node.embedding = null
+        """,
+        params={"stable_key": stable_key, "search_text": search_text},
+    )
     graph.query(
         """
         MATCH (node:MemoryNode {stable_key: $stable_key})
@@ -6003,6 +6178,16 @@ def build_import_session_payload(
     dry_run: bool = False,
     repository_root_path: str | None = None,
 ) -> dict[str, Any]:
+    if str(source or "").strip().lower() in claude_code_sessions.SOURCE_LABELS:
+        return build_import_claude_code_payload(
+            graph,
+            tool=tool,
+            workspace=workspace,
+            path=path,
+            title=title,
+            dry_run=dry_run,
+            repository_root_path=repository_root_path,
+        )
     source_path = Path(path).expanduser().resolve(strict=False)
     if not source_path.exists() or not source_path.is_file():
         fail(f"session transcript not found: {source_path}", 2)
@@ -6172,6 +6357,549 @@ def build_import_session_payload(
         "message": "Session transcript imported into episodic timeline memory.",
     }
     return payload
+
+
+def claude_code_timestamp(value: str) -> str:
+    """Claude Code writes ``2026-11-16T21:18:57.629Z``; Autopsy stores second precision."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    return parsed.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def write_claude_code_passages(
+    graph,
+    *,
+    exchange: dict[str, Any],
+    event_key: str,
+    label: str,
+    session_key: str,
+    session_id: str,
+    project: str,
+    started: str,
+    ended: str,
+    tags: list[str],
+    timestamp: str,
+    origin: str,
+    harness: str = "claude-code",
+) -> int:
+    """Store an exchange's passages as their own searchable, embeddable memories.
+
+    Passage keys are positional (``<exchange>/p<n>``): when a live exchange grows,
+    changed passages are rewritten (and re-embedded) and surplus ones removed.
+    """
+    passages = claude_code_sessions.split_passages(str(exchange.get("text") or ""))
+    total = len(passages)
+    for number, text in enumerate(passages, start=1):
+        passage_key = f"{event_key}/p{number}"
+        is_new = lookup_node_by_stable_key(graph, passage_key) is None
+        upsert_memory_node(
+            graph,
+            kind="passage",
+            stable_key=passage_key,
+            # no "of total" in the label: a growing exchange must not re-embed every passage
+            label=f"{label} ({number})" if total > 1 else label,
+            summary=summary_snippet(text, limit=280),
+            detail_content=text,
+            confidence=0.84,
+            source_kind=harness,
+            timestamp=ended,
+            origin=origin,
+            tags=tags + ["passage"],
+            metadata={"source": harness, "session_id": session_id, "project": project, "started": started},
+        )
+        graph.query(
+            """
+            MATCH (node:MemoryNode {stable_key: $stable_key})
+            SET node.parent_stable_key = $parent, node.session_stable_key = $session_key,
+                node.passage_index = $number, node.session_event_timestamp = $started
+            """ + (", node.created_at = $started" if is_new else ""),
+            params={"stable_key": passage_key, "parent": event_key, "session_key": session_key, "number": number, "started": started},
+        )
+        if is_new:
+            upsert_structural_edge(graph, from_stable_key=passage_key, to_stable_key=event_key, relation="part_of", timestamp=timestamp, origin=origin)
+    graph.query(
+        """
+        MATCH (node:MemoryNode)
+        WHERE node.parent_stable_key = $parent AND node.passage_index > $total
+        DETACH DELETE node
+        """,
+        params={"parent": event_key, "total": total},
+    )
+    return total
+
+
+def build_import_claude_code_payload(
+    graph,
+    *,
+    tool,
+    workspace: dict[str, Any],
+    path: str,
+    title: str = "",
+    dry_run: bool = False,
+    repository_root_path: str | None = None,
+) -> dict[str, Any]:
+    """Import (or refresh) one Claude Code session as conversation exchanges.
+
+    Idempotent and incremental: the session is keyed by its session id and each
+    exchange by its prompt uuid, so a live transcript can be re-imported as it
+    grows; only exchanges whose content changed are written.
+    """
+    source_path = Path(path).expanduser().resolve(strict=False)
+    if not source_path.exists() or not source_path.is_file():
+        fail(f"session transcript not found: {source_path}", 2)
+    parsed = claude_code_sessions.parse_transcript_file(source_path)
+    harness = str(parsed.get("harness") or "claude-code")
+    harness_name = {"codex": "Codex"}.get(harness, "Claude Code")
+    session_id = str(parsed.get("session_id") or source_path.stem)
+    session_key = claude_code_sessions.session_stable_key(session_id, harness)
+    exchanges = list(parsed.get("exchanges") or [])
+    session_title = str(title or "").strip() or str(parsed.get("title") or "") or f"{harness_name} session {session_id[:8]}"
+    cwd = str(parsed.get("cwd") or "")
+    repo_root = str(repository_root_path or "").strip()
+    if not repo_root and cwd and Path(cwd).exists():
+        inferred = infer_git_repository_root(cwd)
+        if inferred and (Path(inferred) / ".git").exists():
+            repo_root = inferred
+    project = Path(repo_root or cwd).name if (repo_root or cwd) else ""
+    started = claude_code_timestamp(str(parsed.get("started") or "")) or utc_now_iso()
+    ended = claude_code_timestamp(str(parsed.get("ended") or "")) or started
+
+    existing: dict[str, str] = {}
+    if graph is not None:
+        rows = result_rows(graph.query(
+            """
+            MATCH (node:MemoryNode)
+            WHERE node.session_stable_key = $session_key AND node.kind = 'timeline_event'
+            RETURN node.stable_key, coalesce(node.session_event_sha, '')
+            """,
+            params={"session_key": session_key},
+        ))
+        existing = {str(row[0]): str(row[1]) for row in rows if row and row[0]}
+
+    planned: list[dict[str, Any]] = []
+    for exchange in exchanges:
+        key = claude_code_sessions.exchange_stable_key(session_id, str(exchange["uuid"]), harness)
+        status = "unchanged" if existing.get(key) == exchange["sha"] else ("updated" if key in existing else "new")
+        planned.append({"stable_key": key, "status": status, "exchange": exchange})
+    changed = [item for item in planned if item["status"] != "unchanged"]
+
+    when = lambda stamp: stamp[:16].replace("T", " ") if stamp else ""
+    index_lines = [
+        f"{harness_name} conversation: {session_title}",
+        f"Project: {project or '-'} ({repo_root or cwd or 'no folder'})",
+        f"Session id: {session_id}",
+        f"From {when(started)} to {when(ended)} UTC, {len(exchanges)} exchanges.",
+        "",
+    ]
+    for exchange in exchanges:
+        label = claude_code_sessions.exchange_label(session_title, exchange)
+        index_lines.append(f"- {when(claude_code_timestamp(exchange.get('started') or ''))} {label}")
+    session_detail = "\n".join(index_lines)
+    session_summary = summary_snippet(
+        f"{harness_name} conversation in {project or 'no project'}: {session_title} ({len(exchanges)} exchanges, {when(started)}–{when(ended)} UTC)",
+        limit=280,
+    )
+
+    payload: dict[str, Any] = {
+        "workspace": tool.workspace_payload(workspace),
+        "dry_run": bool(dry_run),
+        "source": {"path": str(source_path), "kind": harness, "session_id": session_id},
+        "session": {
+            "stable_key": session_key,
+            "title": session_title,
+            "summary": session_summary,
+            "project": project,
+            "repository_root_path": repo_root,
+            "started": started,
+            "ended": ended,
+            "event_count": len(exchanges),
+            "parse_error_count": int(parsed.get("parse_errors") or 0),
+        },
+        "events": [
+            {
+                "stable_key": item["stable_key"],
+                "status": item["status"],
+                "index": item["exchange"]["index"],
+                "kind": item["exchange"]["kind"],
+                "label": claude_code_sessions.exchange_label(session_title, item["exchange"]),
+            }
+            for item in planned
+        ][-25:],
+        "changes": {
+            "new": sum(1 for item in planned if item["status"] == "new"),
+            "updated": sum(1 for item in planned if item["status"] == "updated"),
+            "unchanged": sum(1 for item in planned if item["status"] == "unchanged"),
+        },
+    }
+    if dry_run:
+        payload["workflow"] = {
+            "status": "dry_run",
+            "complete": True,
+            "next_step": "rerun_without_dry_run",
+            "message": f"{harness_name} session parsed without writing to Falkor.",
+        }
+        return payload
+
+    timestamp = utc_now_iso()
+    origin = "claude_code_import"
+    tags = [harness, "conversation"] + ([f"project:{project}"] if project else [])
+    workspace_key = ensure_workspace_node(graph, workspace, timestamp=timestamp, origin=origin)
+    repo_key = ""
+    if repo_root:
+        repo_key = ensure_repository_node(
+            graph, {"root_path": canonical_repository_stable_key(graph, repo_root) or repo_root}, timestamp=timestamp, origin=origin
+        )
+    session_is_new = lookup_node_by_stable_key(graph, session_key) is None
+    upsert_memory_node(
+        graph,
+        kind="timeline",
+        stable_key=session_key,
+        label=session_title,
+        summary=session_summary,
+        detail_content=session_detail,
+        confidence=0.9,
+        source_kind=harness,
+        timestamp=ended,
+        origin=origin,
+        tags=tags,
+        metadata={
+            "source": harness,
+            "session_id": session_id,
+            "project": project,
+            "cwd": cwd,
+            "branch": str(parsed.get("branch") or ""),
+            "started": started,
+            "ended": ended,
+            "exchanges": len(exchanges),
+            "transcript": str(source_path),
+        },
+    )
+    graph.query(
+        """
+        MATCH (node:MemoryNode {stable_key: $stable_key})
+        SET node.session_source_path = $source_path,
+            node.session_source_kind = $harness,
+            node.session_event_count = $event_count,
+            node.imported_at = $timestamp
+        """ + (", node.created_at = $started" if session_is_new else ""),
+        params={
+            "stable_key": session_key,
+            "source_path": str(source_path),
+            "harness": harness,
+            "event_count": len(exchanges),
+            "timestamp": timestamp,
+            "started": started,
+        },
+    )
+    upsert_structural_edge(graph, from_stable_key=session_key, to_stable_key=repo_key or workspace_key,
+                           relation="about" if repo_key else "belongs_to", timestamp=timestamp, origin=origin)
+
+    previous_key = ""
+    keys_in_order = [item["stable_key"] for item in planned]
+    for position, item in enumerate(planned):
+        if item["status"] == "unchanged":
+            continue
+        exchange = item["exchange"]
+        event_key = item["stable_key"]
+        exchange_started = claude_code_timestamp(exchange.get("started") or "") or started
+        exchange_ended = claude_code_timestamp(exchange.get("ended") or "") or exchange_started
+        label = claude_code_sessions.exchange_label(session_title, exchange)
+        reply_head = summary_snippet(str(exchange.get("reply") or ""), limit=160)
+        summary = summary_snippet(
+            f"{when(exchange_started)} · {project or harness_name} — {label}" + (f" → {reply_head}" if reply_head else ""),
+            limit=280,
+        )
+        upsert_memory_node(
+            graph,
+            kind="timeline_event",
+            stable_key=event_key,
+            label=label,
+            summary=summary,
+            detail_content=str(exchange.get("text") or ""),
+            confidence=0.86,
+            source_kind=harness,
+            timestamp=exchange_ended,
+            origin=origin,
+            tags=tags + (["recap"] if exchange.get("kind") == "summary" else []),
+            metadata={
+                "source": harness,
+                "session_id": session_id,
+                "session_title": session_title,
+                "project": project,
+                "cwd": str(exchange.get("cwd") or cwd),
+                "started": exchange_started,
+                "ended": exchange_ended,
+                "files": list(exchange.get("files") or []),
+                "tools": dict(exchange.get("tools") or {}),
+            },
+        )
+        graph.query(
+            """
+            MATCH (node:MemoryNode {stable_key: $stable_key})
+            SET node.session_stable_key = $session_key,
+                node.session_index = $session_index,
+                node.session_event_timestamp = $started,
+                node.session_role = $role,
+                node.session_event_type = $role,
+                node.session_source = $harness,
+                node.session_event_sha = $sha
+            """ + (", node.created_at = $started" if item["status"] == "new" else ""),
+            params={
+                "stable_key": event_key,
+                "session_key": session_key,
+                "session_index": int(exchange.get("index") or 0),
+                "started": exchange_started,
+                "role": "recap" if exchange.get("kind") == "summary" else "exchange",
+                "sha": str(exchange.get("sha") or ""),
+                "harness": harness,
+            },
+        )
+        write_claude_code_passages(
+            graph,
+            exchange=exchange,
+            event_key=event_key,
+            label=label,
+            session_key=session_key,
+            session_id=session_id,
+            project=project,
+            started=exchange_started,
+            ended=exchange_ended,
+            tags=tags,
+            timestamp=timestamp,
+            origin=origin,
+            harness=harness,
+        )
+        if item["status"] == "new":
+            upsert_structural_edge(graph, from_stable_key=event_key, to_stable_key=session_key, relation="part_of", timestamp=timestamp, origin=origin)
+            upsert_structural_edge(graph, from_stable_key=session_key, to_stable_key=event_key, relation="captures", timestamp=timestamp, origin=origin)
+            previous_key = keys_in_order[position - 1] if position > 0 else ""
+            if previous_key:
+                upsert_structural_edge(graph, from_stable_key=event_key, to_stable_key=previous_key, relation="follows", timestamp=timestamp, origin=origin)
+            upsert_structural_edge(graph, from_stable_key=event_key, to_stable_key=repo_key or workspace_key,
+                                   relation="about" if repo_key else "belongs_to", timestamp=timestamp, origin=origin)
+    invalidate_graph_caches(graph)
+    try:
+        payload["embeddings"] = embed_pending_items(graph, load_embeddings_config(Path(workspace["root_path"])))
+    except Exception as exc:  # vectors are an optimisation; never fail the import
+        payload["embeddings"] = {"embedded": 0, "error": str(exc)}
+    payload["imported"] = {
+        "session_node": session_key,
+        "event_nodes": len(changed),
+        "timestamp": timestamp,
+    }
+    payload["workflow"] = {
+        "status": "ok",
+        "complete": True,
+        "next_step": "done",
+        "message": f"{harness_name} session imported: {payload['changes']['new']} new, {payload['changes']['updated']} updated exchanges.",
+    }
+    return payload
+
+
+REMEMBER_MIN_SIMILARITY = 0.55
+REMEMBER_STOPWORDS = {
+    "the", "and", "for", "that", "this", "with", "what", "when", "where", "which", "who", "why", "how",
+    "did", "does", "was", "were", "are", "you", "your", "our", "about", "from", "into", "have", "had",
+    "has", "can", "could", "would", "should", "will", "there", "their", "they", "them", "then", "than",
+    "been", "being", "its", "it's", "not", "but", "all", "any", "some", "just", "like", "also", "said",
+    "say", "tell", "me", "we", "us", "i", "my", "remember", "recall", "talked", "spoke", "discussed",
+}
+
+
+def remember_fulltext_query(query: str) -> str:
+    tokens = [token.lower() for token in re.findall(r"[A-Za-z0-9_][A-Za-z0-9_.-]{2,}", query)]
+    tokens = [token.strip(".-") for token in tokens if token.lower() not in REMEMBER_STOPWORDS]
+    unique = list(dict.fromkeys(token for token in tokens if len(token) >= 3))[:12]
+    return "|".join(unique)
+
+
+def _cosine(left: list[float], right: list[float]) -> float:
+    if not left or not right or len(left) != len(right):
+        return 0.0
+    dot = sum(a * b for a, b in zip(left, right))
+    norm = math.sqrt(sum(a * a for a in left)) * math.sqrt(sum(b * b for b in right))
+    return dot / norm if norm else 0.0
+
+
+def build_remember_payload(
+    graph,
+    *,
+    tool,
+    workspace: dict[str, Any],
+    config: dict[str, Any],
+    query: str,
+    limit: int = 6,
+    project: str = "",
+    exclude_session: str = "",
+    min_similarity: float | None = None,
+) -> dict[str, Any]:
+    """Recall what was said or seen, by meaning, grouped into whole moments.
+
+    Built for "do you remember…" questions and automatic context: passages and
+    other memories are found by vector similarity (with a floor, so unrelated
+    questions recall nothing) and by keywords; passages are grouped under the
+    exchange they came from; a cross-encoder reorders the groups but never
+    vetoes them (it underrates paraphrased questions such as "what did we decide").
+    """
+    started = time.perf_counter()
+    query = str(query or "").strip()
+    if not query:
+        fail("remember needs a query", 2)
+    floor = float(min_similarity if min_similarity is not None else config.get("remember_min_similarity", REMEMBER_MIN_SIMILARITY))
+    limit = max(1, min(int(limit or 6), 20))
+    timings: dict[str, float] = {}
+    hits: dict[str, dict[str, Any]] = {}
+    fields = """node.stable_key, node.kind, node.label, node.summary, node.detail_content,
+                coalesce(node.parent_stable_key, ''), coalesce(node.session_stable_key, ''),
+                coalesce(node.memory_metadata, ''), coalesce(node.created_at, ''), coalesce(node.expired_at, '')"""
+
+    def take(row: list[Any], similarity: float, reason: str) -> None:
+        key = str(row[0] or "")
+        if not key or str(row[9] or ""):
+            return
+        if exclude_session and str(row[6] or "") == exclude_session:
+            return
+        hit = hits.get(key)
+        if hit is None:
+            hits[key] = hit = {
+                "stable_key": key, "kind": str(row[1] or ""), "label": str(row[2] or ""),
+                "summary": str(row[3] or ""), "text": str(row[4] or ""), "parent": str(row[5] or ""),
+                "session": str(row[6] or ""), "metadata": row[7], "created_at": str(row[8] or ""),
+                "similarity": similarity, "reasons": [],
+            }
+        hit["similarity"] = max(hit["similarity"], similarity)
+        if reason not in hit["reasons"]:
+            hit["reasons"].append(reason)
+
+    query_vector: list[float] = []
+    available, _reason = embedding_provider_available(config)
+    if available and graph_has_vectors(graph):
+        clock = time.perf_counter()
+        query_vector = embed_texts_with_provider([query], config)[0]
+        rows = result_rows(graph.query(
+            f"""
+            CALL db.idx.vector.queryNodes('SemanticItem', 'embedding', $k, {vec_literal(query_vector)})
+            YIELD node, score
+            RETURN {fields}, score
+            """,
+            params={"k": max(40, limit * 8)},
+        ))
+        for row in rows:
+            similarity = max(0.0, 1.0 - float(row[10]))
+            if similarity >= floor:
+                take(row, similarity, "meaning")
+        timings["vector_s"] = round(time.perf_counter() - clock, 3)
+
+    fulltext = remember_fulltext_query(query)
+    if fulltext:
+        clock = time.perf_counter()
+        try:
+            rows = result_rows(graph.query(
+                f"""
+                CALL db.idx.fulltext.queryNodes('SemanticItem', $q)
+                YIELD node, score
+                RETURN {fields}, node.embedding
+                LIMIT $k
+                """,
+                params={"q": fulltext, "k": max(30, limit * 6)},
+            ))
+        except Exception:
+            rows = []
+        for row in rows:
+            vector = row[10]
+            similarity = _cosine(query_vector, list(vector)) if query_vector and vector else floor
+            if similarity >= floor - 0.05:  # a keyword match earns a little slack, not a free pass
+                take(row, similarity, "words")
+        timings["lexical_s"] = round(time.perf_counter() - clock, 3)
+
+    # Group passages under their exchange; everything else stands alone.
+    groups: dict[str, dict[str, Any]] = {}
+    for hit in hits.values():
+        unit = hit["parent"] if hit["kind"] == "passage" and hit["parent"] else hit["stable_key"]
+        group = groups.setdefault(unit, {"stable_key": unit, "hits": [], "similarity": 0.0})
+        group["hits"].append(hit)
+        group["similarity"] = max(group["similarity"], hit["similarity"])
+    ranked = sorted(groups.values(), key=lambda group: -group["similarity"])[: limit * 2]
+
+    for group in ranked:
+        group["hits"].sort(key=lambda hit: -hit["similarity"])
+        passages = [hit for hit in group["hits"] if hit["kind"] == "passage"][:2]
+        group["evidence"] = passages or group["hits"][:1]
+
+    clock = time.perf_counter()
+    reranked = False
+    if ranked:
+        rerank_ok, _ = reranker_provider_available(config)
+        if rerank_ok:
+            reranker = reranker_config(config)
+            model = load_reranker_for(reranker)
+            pairs = [(query, "\n\n".join(hit["text"] or hit["summary"] for hit in group["evidence"])[:2000]) for group in ranked]
+            scores = model.predict(pairs, batch_size=max(1, int(reranker.get("batch_size", 8))), show_progress_bar=False)
+            for group, score in zip(ranked, scores):
+                group["rerank"] = float(score)
+            reranked = True
+    timings["rerank_s"] = round(time.perf_counter() - clock, 3)
+    for group in ranked:
+        group["score"] = group["similarity"] + 0.25 * float(group.get("rerank") or 0.0) + (
+            0.02 * (len(group["hits"]) - 1)
+        ) + (0.03 if any("words" in hit["reasons"] for hit in group["hits"]) else 0.0)
+    ranked.sort(key=lambda group: -group["score"])
+    ranked = ranked[:limit]
+
+    results = []
+    for group in ranked:
+        node = lookup_node_by_stable_key(graph, group["stable_key"]) or {}
+        metadata = normalize_memory_metadata(node.get("metadata") or {})
+        kind = str(node.get("kind") or group["hits"][0]["kind"])
+        if project and str(metadata.get("project") or "") != project:
+            continue
+        when = str(metadata.get("started") or node.get("created_at") or group["hits"][0]["created_at"] or "")
+        results.append({
+            "stable_key": group["stable_key"],
+            "kind": kind,
+            "title": str(node.get("label") or group["hits"][0]["label"]),
+            "when": when,
+            "source": str(metadata.get("source") or node.get("source_kind") or ""),
+            "project": str(metadata.get("project") or ""),
+            "session_title": str(metadata.get("session_title") or ""),
+            "session_id": str(metadata.get("session_id") or ""),
+            "files": list(metadata.get("files") or [])[:12],
+            "score": round(group["score"], 4),
+            "similarity": round(group["similarity"], 4),
+            "rerank": round(float(group.get("rerank") or 0.0), 4),
+            "passages": [hit["text"] or hit["summary"] for hit in group["evidence"]],
+            "matched": sorted({reason for hit in group["hits"] for reason in hit["reasons"]}),
+        })
+    return {
+        "query": query,
+        "workspace": tool.workspace_payload(workspace),
+        "results": results,
+        "considered": len(hits),
+        "reranked": reranked,
+        "min_similarity": floor,
+        "timings": {**timings, "total_s": round(time.perf_counter() - started, 3)},
+    }
+
+
+def cmd_remember(args: argparse.Namespace) -> None:
+    tool, workspace, config, graph = open_workspace_graph(args)
+    payload = build_remember_payload(
+        graph,
+        tool=tool,
+        workspace=workspace,
+        config=config,
+        query=str(getattr(args, "query", "") or ""),
+        limit=int(getattr(args, "limit", 6) or 6),
+        project=str(getattr(args, "project", "") or ""),
+        exclude_session=str(getattr(args, "exclude_session", "") or ""),
+        min_similarity=getattr(args, "min_similarity", None),
+    )
+    print(json.dumps(payload, indent=2))
 
 
 def normalized_session_event_content(event: dict[str, Any]) -> str:
@@ -7239,16 +7967,32 @@ def load_workspace_and_config(args: argparse.Namespace):
 
 
 def ensure_runtime_indexes(graph) -> None:
+    # Each index is tried in current FalkorDB syntax first, then the legacy
+    # ``ON :Label(...)`` form older servers expect. Newer FalkorDB rejects the
+    # legacy fulltext form, which silently left keyword search without an index.
+    # An "already indexed" error from the first form means the index exists.
     statements = [
-        "CREATE INDEX ON :MemoryNode(entity_id)",
-        "CREATE INDEX ON :MemoryNode(stable_key)",
-        "CREATE INDEX ON :MemoryNode(kind)",
-        "CREATE FULLTEXT INDEX ON :SemanticItem(label, summary, detail_content, search_text)",
-        "CREATE FULLTEXT INDEX ON :FACT_EDGE(fact_text, relation, predicate)",
+        ("CREATE INDEX FOR (n:MemoryNode) ON (n.entity_id)", "CREATE INDEX ON :MemoryNode(entity_id)"),
+        ("CREATE INDEX FOR (n:MemoryNode) ON (n.stable_key)", "CREATE INDEX ON :MemoryNode(stable_key)"),
+        ("CREATE INDEX FOR (n:MemoryNode) ON (n.kind)", "CREATE INDEX ON :MemoryNode(kind)"),
+        (
+            "CREATE FULLTEXT INDEX FOR (n:SemanticItem) ON (n.label, n.summary, n.detail_content, n.search_text)",
+            "CREATE FULLTEXT INDEX ON :SemanticItem(label, summary, detail_content, search_text)",
+        ),
+        (
+            "CREATE FULLTEXT INDEX FOR ()-[e:FACT_EDGE]-() ON (e.fact_text, e.relation, e.predicate)",
+            "CREATE FULLTEXT INDEX ON :FACT_EDGE(fact_text, relation, predicate)",
+        ),
     ]
-    for statement in statements:
+    for current, legacy in statements:
         try:
-            graph.query(statement)
+            graph.query(current)
+            continue
+        except Exception as exc:
+            if "already indexed" in str(exc).lower():
+                continue
+        try:
+            graph.query(legacy)
         except Exception:
             pass
 
@@ -7271,6 +8015,10 @@ def build_sync_payload(
     started = time.perf_counter()
     workspace_sync = sync_workspace_payload(graph, workspace=workspace)
     ensure_runtime_indexes(graph)
+    try:
+        embedding_pass = embed_pending_items(graph, config, limit=4096)
+    except Exception as exc:
+        embedding_pass = {"embedded": 0, "error": str(exc)}
     invalidate_graph_caches(graph)
     stats = build_graph_stats_payload(graph)
     vector_count = int(scalar_query(graph, "MATCH (node:SemanticItem) WHERE node.embedding IS NOT NULL RETURN count(node)") or 0)
@@ -7285,6 +8033,7 @@ def build_sync_payload(
             "edges": int(stats.get("edgeCount") or 0),
             "vectors": vector_count,
         },
+        "embeddings": embedding_pass,
         "stats": stats,
         "sync": workspace_sync,
         "indexes_ready": check_runtime_index_probe(graph),
@@ -9484,7 +10233,15 @@ def build_consult_payload(
             hybrid_skipped_reason = "lexical_fast_path"
         elif not lexical_items and query_has_unlikely_identifier(query):
             hybrid_skipped_reason = "no_lexical_anchor_for_identifier_query"
-        elif not lexical_items and not extract_entity_tokens(query) and not query_requests_relationship_context(query):
+        elif (
+            not lexical_items
+            and not extract_entity_tokens(query)
+            and not query_requests_relationship_context(query)
+            and not graph_has_vectors(graph)
+        ):
+            # Paraphrased questions share no words with what they recall; that is
+            # what vectors are for. Only skip when there are no vectors to search
+            # (the reranker's relevance floors still let a query recall nothing).
             hybrid_skipped_reason = "no_direct_anchor_for_semantic_query"
         else:
             vector_items, vector_elapsed = fetch_vector_candidates(graph, tool, query, config, limit=search_limit)
@@ -16752,6 +17509,9 @@ def cmd_backup(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+_LAST_AUTO_BACKUP_AT: float | None = None
+
+
 def auto_backup_after_write_enabled() -> bool:
     raw = str(os.environ.get("AUTOPSY_AUTO_BACKUP_AFTER_WRITE") or "").strip().lower()
     return raw not in {"0", "false", "no", "off", "disabled"}
@@ -16784,6 +17544,22 @@ def maybe_auto_backup_after_write(graph, workspace: dict[str, Any], *, reason: s
         }
     # A recent snapshot cannot cover a subsequent write. Snapshot this committed
     # state instead of rereading yesterday's full backup on every mutation.
+    # Hosts that write often from re-derivable sources (a transcript importer) can
+    # cap how often that happens with AUTOPSY_AUTO_BACKUP_MIN_INTERVAL_SECONDS.
+    global _LAST_AUTO_BACKUP_AT
+    try:
+        min_interval = float(os.environ.get("AUTOPSY_AUTO_BACKUP_MIN_INTERVAL_SECONDS") or 0)
+    except ValueError:
+        min_interval = 0.0
+    if min_interval > 0:
+        if _LAST_AUTO_BACKUP_AT is None:
+            newest = max((p.stat().st_mtime for p in (APP_SUPPORT_DIR_DEFAULT / "Backups").glob("autopsy-memory-*.json")),
+                         default=0.0)
+            _LAST_AUTO_BACKUP_AT = newest
+        age = time.time() - _LAST_AUTO_BACKUP_AT
+        if age < min_interval:
+            return {"enabled": True, "status": "skipped", "reason": "latest_backup_fresh",
+                    "validation": {"valid": True}, "next_in_s": round(min_interval - age)}
     output = default_backup_output_path()
     try:
         payload = export_memory_payload(
@@ -16794,6 +17570,8 @@ def maybe_auto_backup_after_write(graph, workspace: dict[str, Any], *, reason: s
         receipt = backup_storage.write_backup_snapshot(payload, app_support=APP_SUPPORT_DIR_DEFAULT, output=output)
         summary = restore_input_summary_or_error(str(output), include_operational=True)
         valid = bool(summary.get("valid"))
+        if valid:
+            _LAST_AUTO_BACKUP_AT = time.time()
         mirror = backup_storage.mirror_backup_to_icloud(output, app_support=APP_SUPPORT_DIR_DEFAULT) if valid else {"status": "not_attempted"}
         return {
             "enabled": True,
@@ -19610,6 +20388,7 @@ def build_parser() -> argparse.ArgumentParser:
             pin_item=cmd_pin_item,
             feedback=cmd_feedback,
             import_session=cmd_import_session,
+            remember=cmd_remember,
             consolidate_session=cmd_consolidate_session,
             observe=cmd_observe,
             item=cmd_item,

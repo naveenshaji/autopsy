@@ -27,7 +27,7 @@ WORKER_REPLAY_SAFE_PATHS = frozenset({
     "/embed", "/rerank", "/memory/consult", "/memory/status", "/memory/health",
     "/memory/diagnostics", "/memory/repair-embedded-snapshot/plan",
     "/memory/timeline", "/memory/history", "/memory/neighbors", "/memory/snapshot",
-    "/memory/graph/search", "/memory/graph/item",
+    "/memory/graph/search", "/memory/graph/item", "/memory/remember",
 })
 
 
@@ -49,7 +49,9 @@ def app_support_dir() -> Path:
     override = os.environ.get("AUTOPSY_APP_SUPPORT_DIR")
     if override:
         return Path(override).expanduser()
-    return Path.home() / "Library" / "Application Support" / "Autopsy"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "Autopsy"
+    return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "autopsy"
 
 
 DEFAULT_WORKSPACE_ROOT = str(app_support_dir() / "MemoryRoot")
@@ -1459,6 +1461,28 @@ TOOLS: dict[str, dict[str, Any]] = {
             "required": ["query"],
         },
     },
+    "autopsy_memory_remember": {
+        "description": (
+            "Recall what the user said, decided or worked on before, by meaning: past conversations "
+            "(Claude Code sessions, agent threads), passages and notes, grouped into moments with "
+            "when, project and files. Use it whenever the user refers to something earlier "
+            "(\"what we decided about…\", \"that file I was editing\", \"like last time\"). Returns "
+            "nothing when nothing relevant is remembered. Read a moment in full with autopsy_memory_item."
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "What to remember, in plain words."},
+                "limit": {"type": "integer", "default": 6},
+                "project": {"type": "string", "description": "Only moments from this project (folder name)."},
+                "exclude_session": {"type": "string", "description": "Skip this session's own memories (stable key)."},
+            },
+            "required": ["query"],
+        },
+        "handler": lambda arguments: worker_request("/memory/remember", request_payload(arguments, {
+            key: arguments[key] for key in ("query", "limit", "project", "exclude_session", "min_similarity") if key in arguments
+        })),
+    },
     "autopsy_memory_item": {
         "description": "Fetch one Autopsy memory item by stable key.",
         "handler": tool_item,
@@ -1762,6 +1786,11 @@ TOOLS: dict[str, dict[str, Any]] = {
 }
 
 
+def compact_response(payload: Any) -> str:
+    """Tool results go back to the model as compact JSON text."""
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
+
+
 def tool_definitions() -> list[dict[str, Any]]:
     return [
         {
@@ -1773,17 +1802,35 @@ def tool_definitions() -> list[dict[str, Any]]:
     ]
 
 
+# MCP's stdio transport is newline-delimited JSON (Claude Code, most clients); some
+# clients use LSP-style Content-Length framing. Detect from the first message and
+# answer in the same framing.
+_FRAMING: dict[str, str] = {"mode": ""}
+
+
 def read_message() -> dict[str, Any] | None:
-    headers: dict[str, str] = {}
     while True:
         line = sys.stdin.buffer.readline()
         if line == b"":
             return None
-        line = line.decode("utf-8").strip()
-        if line == "":
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith(b"{"):
+            _FRAMING["mode"] = "newline"
+            return json.loads(stripped.decode("utf-8"))
+        break
+    _FRAMING["mode"] = "content-length"
+    headers: dict[str, str] = {}
+    while True:
+        text = line.decode("utf-8").strip()
+        if text == "":
             break
-        key, _, value = line.partition(":")
+        key, _, value = text.partition(":")
         headers[key.lower()] = value.strip()
+        line = sys.stdin.buffer.readline()
+        if line == b"":
+            return None
     length = int(headers.get("content-length") or "0")
     if length <= 0:
         return None
@@ -1793,6 +1840,10 @@ def read_message() -> dict[str, Any] | None:
 
 def write_message(message: dict[str, Any]) -> None:
     data = json.dumps(message, separators=(",", ":")).encode("utf-8")
+    if _FRAMING["mode"] == "newline":
+        sys.stdout.buffer.write(data + b"\n")
+        sys.stdout.buffer.flush()
+        return
     sys.stdout.buffer.write(f"Content-Length: {len(data)}\r\n\r\n".encode("ascii"))
     sys.stdout.buffer.write(data)
     sys.stdout.buffer.flush()
