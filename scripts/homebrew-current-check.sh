@@ -65,6 +65,8 @@ trap cleanup EXIT INT TERM HUP
 
 mkdir -p "$TMP_DIR"
 brew tap-new "$TAP_NAME" >/dev/null
+# Newer Homebrew refuses formulae from untrusted taps; older releases have no trust command.
+brew trust "$TAP_NAME" >/dev/null 2>&1 || true
 
 "$PYTHON_BIN" - "$ROOT_DIR" "$TMP_DIR" "$FORMULA_PATH" <<'PY'
 import hashlib

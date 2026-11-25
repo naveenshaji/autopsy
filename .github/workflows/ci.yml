@@ -141,6 +141,8 @@ jobs:
       - name: Prepare local tap
         run: |
           brew tap-new local/autopsy
+          # Newer Homebrew refuses formulae from untrusted taps; older releases have no trust command.
+          brew trust local/autopsy || true
           cp Formula/autopsy-memory.rb "$(brew --repository)/Library/Taps/local/homebrew-autopsy/Formula/autopsy-memory.rb"
 
       - name: Audit formula
