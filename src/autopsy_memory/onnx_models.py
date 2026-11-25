@@ -17,7 +17,10 @@ import os
 from pathlib import Path
 from typing import Any
 
-import numpy as np
+try:
+    import numpy as np
+except ImportError:  # pragma: no cover - numpy ships with the ML runtime; keep the CLI importable without it
+    np = None  # type: ignore[assignment]
 
 MAX_TOKENS = 512
 
@@ -31,7 +34,11 @@ def available() -> tuple[bool, str | None]:
     return True, None
 
 
-def _snapshot(model_name: str) -> Path:
+def _onnx_file_name(name: str | None) -> str:
+    return name or os.environ.get("AUTOPSY_ONNX_FILE") or "onnx/model.onnx"
+
+
+def _snapshot(model_name: str, onnx_file: str = "onnx/model.onnx") -> Path:
     path = Path(model_name).expanduser()
     if path.is_dir():
         return path
@@ -39,13 +46,19 @@ def _snapshot(model_name: str) -> Path:
 
     offline = str(os.environ.get("HF_HUB_OFFLINE") or "").lower() in {"1", "true", "yes", "on"}
     try:
-        return Path(snapshot_download(model_name, local_files_only=True))
+        local = Path(snapshot_download(model_name, local_files_only=True))
     except Exception:
         if offline:
             raise
-        return Path(snapshot_download(model_name, allow_patterns=[
-            "*.json", "*.txt", "onnx/model.onnx", "1_Pooling/*", "tokenizer*", "vocab*", "special_tokens_map.json",
-        ]))
+    else:
+        # A model cached by sentence-transformers has its weights and tokenizer but
+        # usually not the ONNX export: fetch the missing files instead of failing.
+        if offline or ((local / onnx_file).exists() and (local / "tokenizer.json").exists()):
+            return local
+    return Path(snapshot_download(model_name, allow_patterns=[
+        "*.json", "*.txt", onnx_file, f"{onnx_file}_data", "1_Pooling/*", "tokenizer*", "vocab*",
+        "special_tokens_map.json",
+    ]))
 
 
 def _session(model_file: Path):
@@ -75,7 +88,7 @@ def _tokenizer(snapshot: Path, max_tokens: int):
 
 
 def _model_file(snapshot: Path, name: str | None) -> Path:
-    candidate = snapshot / (name or os.environ.get("AUTOPSY_ONNX_FILE") or "onnx/model.onnx")
+    candidate = snapshot / _onnx_file_name(name)
     if not candidate.exists():
         raise RuntimeError(f"no ONNX export at {candidate}")
     return candidate
@@ -104,7 +117,7 @@ def _length_batches(lengths: list[int], batch_size: int):
 
 class SentenceTransformer:
     def __init__(self, model_name: str, onnx_file: str | None = None, max_tokens: int = MAX_TOKENS):
-        snapshot = _snapshot(model_name)
+        snapshot = _snapshot(model_name, _onnx_file_name(onnx_file))
         self.session = _session(_model_file(snapshot, onnx_file))
         self.tokenizer = _tokenizer(snapshot, max_tokens)
         pooling = {}
@@ -137,17 +150,40 @@ class SentenceTransformer:
         return result[0] if single else result
 
 
+def _sentence_transformers_sigmoid(snapshot: Path) -> bool:
+    """Whether sentence-transformers' CrossEncoder.predict applies a sigmoid for this model.
+
+    Matching it keeps scores, and the reranker thresholds tuned on them, the same with
+    either provider: ms-marco cross-encoders declare Identity (raw logits), while
+    single-label models without a declaration, such as BAAI/bge-reranker-base, get Sigmoid.
+    """
+    try:
+        config = json.loads((snapshot / "config.json").read_text())
+    except Exception:
+        return False
+    declared = (config.get("sentence_transformers") or {}).get("activation_fn") or config.get("sbert_ce_default_activation_function")
+    if declared:
+        return str(declared).rsplit(".", 1)[-1] == "Sigmoid"
+    labels = config.get("id2label") or {}
+    return (len(labels) if labels else int(config.get("num_labels") or 2)) == 1
+
+
 class CrossEncoder:
     def __init__(self, model_name: str, onnx_file: str | None = None, max_tokens: int = MAX_TOKENS):
-        snapshot = _snapshot(model_name)
+        snapshot = _snapshot(model_name, _onnx_file_name(onnx_file))
         self.session = _session(_model_file(snapshot, onnx_file))
         self.tokenizer = _tokenizer(snapshot, max_tokens)
         # longest_first, like sentence-transformers' CrossEncoder (truncation=True): with a short
         # query only the passage is cut, as before; "only_second" raised "Sequence to truncate too
         # short" whenever the query alone filled the window (a long pasted prompt as the query).
         self.tokenizer.enable_truncation(self.tokenizer.truncation["max_length"], strategy="longest_first")
-        # raw logits, like sentence-transformers' CrossEncoder.predict for these models
-        self.sigmoid = str(os.environ.get("AUTOPSY_ONNX_RERANK_SIGMOID") or "").lower() in {"1", "true", "yes"}
+        override = str(os.environ.get("AUTOPSY_ONNX_RERANK_SIGMOID") or "").strip().lower()
+        if override in {"1", "true", "yes", "on"}:
+            self.sigmoid = True
+        elif override in {"0", "false", "no", "off"}:
+            self.sigmoid = False
+        else:
+            self.sigmoid = _sentence_transformers_sigmoid(snapshot)
 
     def predict(self, pairs, batch_size: int = 8, **_ignored):
         pairs = [(str(a), str(b)) for a, b in pairs]
