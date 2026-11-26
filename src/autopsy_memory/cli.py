@@ -3,6 +3,7 @@ import argparse
 import atexit
 import copy
 import contextlib
+import functools
 import hashlib
 import json
 import math
@@ -745,6 +746,15 @@ def load_global_memory_settings() -> dict[str, Any]:
     return raw if isinstance(raw, dict) else {}
 
 
+def coalesce_guard_saves(func):
+    """Decorator: run ``func(graph, ...)`` with the guard's saves coalesced (see GuardedFalkorGraph)."""
+    @functools.wraps(func)
+    def wrapper(graph, *args, **kwargs):
+        with coalesced_guard_saves(graph):
+            return func(graph, *args, **kwargs)
+    return wrapper
+
+
 def load_embeddings_config(root_dir: Path) -> dict[str, Any]:
     config_path = root_dir / "memory" / "config" / "autopsy_embeddings.json"
     config = copy.deepcopy(EMBEDDINGS_CONFIG_DEFAULT)
@@ -1121,6 +1131,7 @@ def ensure_vector_index(graph, dimension: int) -> bool:
         return "already indexed" in str(exc).lower()
 
 
+@coalesce_guard_saves
 def embed_pending_items(graph, config: dict[str, Any], *, limit: int = 512) -> dict[str, Any]:
     """Compute vectors for searchable memories that have none (new or changed).
 
@@ -2161,6 +2172,8 @@ def set_memory_database_guard_graph_generation(
 
 
 MEMORY_GUARD_SAVE_WAIT_SECONDS = 60.0
+# Inside a coalesced operation, a guarded write saves the database at most this often.
+MEMORY_GUARD_COALESCE_SECONDS = 1.0
 
 
 def persist_memory_database_guard_graph(graph) -> None:
@@ -2288,10 +2301,52 @@ def advance_memory_database_guard_generation(
 
 
 class GuardedFalkorGraph:
+    """Every write holds the guard lock, checks the generation, and then advances it and saves the
+    database (a synchronous SAVE of the whole file).
+
+    One save per write makes bulk work (a restore, a session import, a note with its episode and
+    edges) save the whole database hundreds of times. Inside ``coalesced_saves()`` each write still
+    takes the lock and checks the generation, but the advance and save run at most once per
+    ``MEMORY_GUARD_COALESCE_SECONDS`` and once more when the operation ends. The lock is never held
+    between writes, so other writers and slow work in between (embedding) are not blocked.
+    A write that is not yet saved is still in the server's memory, and any other writer's save
+    includes it.
+    """
+
     def __init__(self, graph, *, lite_path: str, graph_name: str):
         self._autopsy_guard_raw_graph = graph
         self._autopsy_guard_lite_path = lite_path
         self._autopsy_guard_graph_name = graph_name
+        self._autopsy_guard_coalesce = threading.local()
+
+    def _advance_generation_locked(self) -> None:
+        advance_memory_database_guard_generation(
+            self._autopsy_guard_raw_graph,
+            self._autopsy_guard_lite_path,
+            graph_name=self._autopsy_guard_graph_name,
+            lock_held=True,
+        )
+
+    @contextlib.contextmanager
+    def coalesced_saves(self, max_interval: float | None = None):
+        if getattr(self._autopsy_guard_coalesce, "state", None) is not None or not memory_database_guard_enabled():
+            yield self  # already coalescing on this thread (nested operation), or no guard
+            return
+        state = {
+            "dirty": False,
+            "last_save": time.monotonic(),
+            "max_interval": MEMORY_GUARD_COALESCE_SECONDS if max_interval is None else float(max_interval),
+            "saves": 0,
+            "writes": 0,
+        }
+        self._autopsy_guard_coalesce.state = state
+        try:
+            yield self
+        finally:
+            self._autopsy_guard_coalesce.state = None
+            if state["dirty"]:
+                with memory_database_guard_lock(self._autopsy_guard_lite_path):
+                    self._advance_generation_locked()
 
     def __getattr__(self, name: str):
         return getattr(self._autopsy_guard_raw_graph, name)
@@ -2304,6 +2359,7 @@ class GuardedFalkorGraph:
         if not memory_database_guard_enabled():
             return self._autopsy_guard_raw_graph.query(query, *args, **kwargs)
         if graph_query_looks_mutating(query):
+            state = getattr(self._autopsy_guard_coalesce, "state", None)
             with memory_database_guard_lock(self._autopsy_guard_lite_path):
                 assert_memory_database_guard_current(
                     self._autopsy_guard_raw_graph,
@@ -2312,12 +2368,15 @@ class GuardedFalkorGraph:
                     lock_held=True,
                 )
                 result = self._autopsy_guard_raw_graph.query(query, *args, **kwargs)
-                advance_memory_database_guard_generation(
-                    self._autopsy_guard_raw_graph,
-                    self._autopsy_guard_lite_path,
-                    graph_name=self._autopsy_guard_graph_name,
-                    lock_held=True,
-                )
+                if state is None:
+                    self._advance_generation_locked()
+                    return result
+                state["writes"] += 1
+                state["dirty"] = True
+                now = time.monotonic()
+                if now - state["last_save"] >= state["max_interval"]:
+                    self._advance_generation_locked()
+                    state.update(dirty=False, last_save=now, saves=state["saves"] + 1)
                 return result
         assert_memory_database_guard_current(
             self._autopsy_guard_raw_graph,
@@ -2325,6 +2384,13 @@ class GuardedFalkorGraph:
             graph_name=self._autopsy_guard_graph_name,
         )
         return self._autopsy_guard_raw_graph.query(query, *args, **kwargs)
+
+
+def coalesced_guard_saves(graph, max_interval: float | None = None):
+    """``graph.coalesced_saves()`` for guarded graphs; a no-op for any other graph."""
+    if isinstance(graph, GuardedFalkorGraph):
+        return graph.coalesced_saves(max_interval)
+    return contextlib.nullcontext(graph)
 
 
 def guarded_falkor_graph(graph, *, lite_path: str, graph_name: str):
@@ -2368,10 +2434,22 @@ def falkordb_lite_runtime_lock(lite_path: str | Path):
             handle.close()
 
 
+def configure_falkordb_lite_server_environment() -> None:
+    """Environment the embedded server inherits when this process starts it.
+
+    FalkorDB runs a pool of query threads (one per core by default). With glibc malloc each
+    thread gets its own arena, and memory freed there is rarely returned to the system: a
+    long-running server grew to over 5 GB resident for a 170 MB graph. Two arenas keep it flat
+    at the same throughput. Only child processes see this; set it yourself to override.
+    """
+    os.environ.setdefault("MALLOC_ARENA_MAX", "2")
+
+
 def ensure_graph(host: str, port: int, graph_name: str, lite_path: str | None = None):
     if lite_path:
         FalkorDBLite = load_falkordblite()
         configure_falkordblite_runtime()
+        configure_falkordb_lite_server_environment()
         register_falkordb_lite_shutdown()
         resolved_path = str(Path(lite_path).expanduser())
         Path(resolved_path).parent.mkdir(parents=True, exist_ok=True)
@@ -6294,6 +6372,7 @@ def session_event_detail(session_key: str, source_path: Path, event: dict[str, A
     return f"{json.dumps(metadata, sort_keys=True)}\n\n{str(event.get('text') or '').strip()}"
 
 
+@coalesce_guard_saves
 def build_import_session_payload(
     graph,
     *,
@@ -6561,6 +6640,7 @@ def write_claude_code_passages(
     return total
 
 
+@coalesce_guard_saves
 def build_import_claude_code_payload(
     graph,
     *,
@@ -7359,6 +7439,7 @@ def sync_worktrees_payload(graph, *, workspace: dict[str, Any], worktrees: list[
     return {"synced": True, "worktrees": count}
 
 
+@coalesce_guard_saves
 def create_graph_note_payload(
     graph,
     *,
@@ -7463,6 +7544,7 @@ def create_graph_note_payload(
     return payload
 
 
+@coalesce_guard_saves
 def update_graph_item_payload(
     graph,
     *,
@@ -18119,6 +18201,7 @@ def restore_graph_edge(
     return "created"
 
 
+@coalesce_guard_saves
 def restore_memory_payload(
     graph,
     *,
