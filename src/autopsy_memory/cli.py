@@ -5084,6 +5084,22 @@ def next_entity_id(graph) -> int:
     return int(current or 0) + 1
 
 
+def episode_stable_key(graph, episode_id: int) -> str:
+    """Stable key for a write's source episode: ``episode:<entity id>`` unless that key is taken.
+
+    Entity ids only count up from the graph's current maximum, so they are not unique
+    over a graph's history: a restored or migrated graph keeps its old ``episode:<n>``
+    keys while its entity ids are renumbered, and a new write can land on an existing
+    key. Two nodes with one stable key make lookups ambiguous and every later backup
+    fail restore validation, so a taken key gets a unique suffix instead.
+    """
+    key = f"episode:{int(episode_id)}"
+    if lookup_node_by_stable_key(graph, key) is None:
+        return key
+    digest = hashlib.sha1(f"{int(episode_id)}|{time.time_ns()}".encode("utf-8")).hexdigest()[:16]
+    return f"{key}-{digest}"
+
+
 def next_edge_id(graph) -> int:
     current = scalar_query(graph, "MATCH ()-[edge]->() RETURN coalesce(max(edge.edge_id), 0)")
     return int(current or 0) + 1
@@ -7250,7 +7266,7 @@ def create_graph_note_payload(
     stable_key = f"graph-note:{hashlib.sha1(f'{title}|{created_at}|{time.time_ns()}'.encode('utf-8')).hexdigest()[:32]}"
     note_id = next_entity_id(graph)
     episode_id = note_id + 1
-    episode_key = f"episode:{episode_id}"
+    episode_key = episode_stable_key(graph, episode_id)
     summary = summary_snippet(content)
     workspace_record = dict(workspace)
     workspace_key = str(workspace_record.get("root_path") or workspace_record.get("workspace_key") or "")
@@ -7406,7 +7422,7 @@ def update_graph_item_payload(
                 upsert_structural_edge(graph, from_stable_key=thread_key, to_stable_key=workspace_key, relation="belongs_to", timestamp=created_at, origin="falkor")
             upsert_structural_edge(graph, from_stable_key=stable_key, to_stable_key=thread_key, relation="about", timestamp=created_at, origin="falkor")
     episode_id = next_entity_id(graph)
-    episode_key = f"episode:{episode_id}"
+    episode_key = episode_stable_key(graph, episode_id)
     create_memory_node(
         graph,
         entity_id=episode_id,
