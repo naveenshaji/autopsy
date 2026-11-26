@@ -5741,17 +5741,56 @@ def upsert_structural_edge(
             },
         )
         return
-    src = lookup_node_by_stable_key(graph, from_stable_key)
-    dst = lookup_node_by_stable_key(graph, to_stable_key)
-    if src is None or dst is None:
-        return
-    create_structural_edge(
+    merge_structural_edge(
         graph,
-        from_entity_id=int(src["entity_id"]),
-        to_entity_id=int(dst["entity_id"]),
+        from_stable_key=from_stable_key,
+        to_stable_key=to_stable_key,
         relation=relation,
         timestamp=timestamp,
         origin=origin,
+    )
+
+
+def merge_structural_edge(
+    graph,
+    *,
+    from_stable_key: str,
+    to_stable_key: str,
+    relation: str,
+    timestamp: str,
+    origin: str,
+) -> None:
+    """Create the edge unless it exists, in one query.
+
+    Two importers of the same session can both find the edge missing. A write query runs as one
+    unit on the server, so MERGE makes the second one update the first one's edge instead of
+    adding a copy. Endpoints are matched by stable key, not entity id.
+    """
+    edge_label = structural_edge_label(relation)
+    edge_id = next_edge_id(graph)
+    graph.query(
+        f"""
+        MATCH (src:MemoryNode {{stable_key: $from_key}}), (dst:MemoryNode {{stable_key: $to_key}})
+        MERGE (src)-[edge:{edge_label}]->(dst)
+        ON CREATE SET edge.edge_id = $edge_id,
+                      edge.relation = $relation,
+                      edge.from_entity_id = src.entity_id,
+                      edge.to_entity_id = dst.entity_id,
+                      edge.created_at = $timestamp,
+                      edge.updated_at = $timestamp,
+                      edge.origin = $origin
+        ON MATCH SET edge.updated_at = $timestamp,
+                     edge.origin = $origin,
+                     edge.relation = $relation
+        """,
+        params={
+            "from_key": from_stable_key,
+            "to_key": to_stable_key,
+            "edge_id": edge_id,
+            "relation": relation,
+            "timestamp": timestamp,
+            "origin": origin,
+        },
     )
 
 
@@ -20328,22 +20367,28 @@ def cmd_install(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def _id_repair_plans(graph) -> tuple[dict[str, Any], dict[str, Any]]:
+    plan = id_repair.build_repair_plan(id_repair.load_duplicate_state(graph))
+    return plan, id_repair.build_edge_plan(id_repair.load_edge_state(graph), plan)
+
+
 def cmd_repair_ids(args: argparse.Namespace) -> None:
-    """Plan (default) or apply the repair of memory nodes that share an entity id."""
+    """Plan (default) or apply the repair of nodes sharing an entity id, edges sharing an edge id,
+    and structural edges written twice."""
     _tool, workspace, _config, graph = open_workspace_graph(args)
     if not getattr(args, "apply", False):
-        plan = id_repair.build_repair_plan(id_repair.load_duplicate_state(graph))
-        summary = id_repair.summarize_plan(plan)
-        needed = bool(plan["renumber"] or plan["delete"] or plan["reassign_edge_ids"])
+        plan, edge_plan = _id_repair_plans(graph)
+        needed = bool(plan["renumber"] or plan["delete"] or plan["reassign_edge_ids"]) or id_repair.edge_plan_needed(edge_plan)
         print(json.dumps({
             "mode": "plan",
             "workspace": workspace,
-            "plan": summary,
+            "plan": id_repair.summarize_plan(plan),
+            "edge_plan": id_repair.summarize_edge_plan(edge_plan),
             "workflow": {
                 "complete": not needed,
                 "next_step": "apply" if needed else "done",
                 "message": (
-                    "Nothing shares an entity id." if not needed else
+                    "Every entity id and edge id is unique, and no structural edge is stored twice." if not needed else
                     "Review the plan, then run autopsy repair-ids --apply (it takes a verified backup first)."
                 ),
             },
@@ -20359,10 +20404,12 @@ def cmd_repair_ids(args: argparse.Namespace) -> None:
     with lock:
         if guarded:
             assert_memory_database_guard_current(raw, lite_path, graph_name=graph_name, lock_held=True)
-        plan = id_repair.build_repair_plan(id_repair.load_duplicate_state(raw))
+        plan, edge_plan = _id_repair_plans(raw)
         backup: dict[str, Any] = {"status": "skipped", "reason": "nothing_to_repair"}
         applied: dict[str, Any] = {"deleted_relationships": 0, "renumbered_nodes": 0, "reassigned_edge_ids": 0, "renumbered": []}
-        if plan["renumber"] or plan["delete"] or plan["reassign_edge_ids"]:
+        edge_applied: dict[str, Any] = {"deleted_repeated_edges": 0, "reassigned_shared_edge_ids": 0}
+        entity_needed = bool(plan["renumber"] or plan["delete"] or plan["reassign_edge_ids"])
+        if entity_needed or id_repair.edge_plan_needed(edge_plan):
             backup = backup_storage.write_backup_snapshot(
                 export_memory_payload(raw, workspace=workspace, include_operational=True),
                 app_support=APP_SUPPORT_DIR_DEFAULT, output=None,
@@ -20372,35 +20419,49 @@ def cmd_repair_ids(args: argparse.Namespace) -> None:
                 current = int(scalar_query(raw, "MATCH (node:MemoryNode) RETURN coalesce(max(node.entity_id), 0)") or 0)
                 return reserve_graph_ids(raw, floor=current + id_repair.RENUMBER_MARGIN, count=count, prefix=ENTITY_ID_COUNTER_KEY_PREFIX)
 
-            applied = id_repair.apply_repair_plan(
-                raw, plan,
-                reserve_entity_ids=reserve_entity_ids,
-                reserve_edge_ids=lambda count: next_edge_id(raw, count=count),
-            )
+            if entity_needed:
+                applied = id_repair.apply_repair_plan(
+                    raw, plan,
+                    reserve_entity_ids=reserve_entity_ids,
+                    reserve_edge_ids=lambda count: next_edge_id(raw, count=count),
+                )
+                # Renumbering and the deletes above change what the edge plan saw: plan it again.
+                edge_plan = id_repair.build_edge_plan(id_repair.load_edge_state(raw))
+            edge_applied = id_repair.apply_edge_plan(raw, edge_plan, reserve_edge_ids=lambda count: next_edge_id(raw, count=count))
             if guarded:
                 advance_memory_database_guard_generation(raw, lite_path, graph_name=graph_name, lock_held=True)
         remaining = id_repair.load_duplicate_state(raw)
+        remaining_edges = id_repair.build_edge_plan(id_repair.load_edge_state(raw))
     invalidate_graph_caches(graph)
     report_path = None
-    if plan["renumber"] or plan["delete"]:
+    if plan["renumber"] or plan["delete"] or edge_plan["delete"]:
         report_path = APP_SUPPORT_DIR_DEFAULT / "Diagnostics" / f"id-repair-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.json"
         report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.write_text(json.dumps({"graph_name": graph_name, "plan": plan, "applied": applied, "backup": backup}, indent=2, default=str))
+        report_path.write_text(json.dumps({
+            "graph_name": graph_name, "plan": plan, "applied": applied,
+            "edge_plan": edge_plan, "edge_applied": edge_applied, "backup": backup,
+        }, indent=2, default=str))
     unresolved = len(plan["unresolved"])
+    edges_left = len(remaining_edges["delete"]) + len(remaining_edges["reassign_edge_ids"])
+    clean = not remaining["groups"] and not unresolved and not edges_left
     print(json.dumps({
         "mode": "apply",
         "workspace": workspace,
         "plan": id_repair.summarize_plan(plan),
+        "edge_plan": id_repair.summarize_edge_plan(edge_plan),
         "backup": {key: backup.get(key) for key in ("status", "written", "verified", "sha256") if key in backup},
         "applied": {key: value for key, value in applied.items() if key != "renumbered"},
+        "edge_applied": edge_applied,
         "remaining_duplicate_entity_ids": len(remaining["groups"]),
+        "remaining_edge_repairs": edges_left,
         "report": str(report_path) if report_path else None,
         "workflow": {
-            "complete": not remaining["groups"] and not unresolved,
-            "next_step": "done" if not remaining["groups"] and not unresolved else "inspect_report",
+            "complete": clean,
+            "next_step": "done" if clean else "inspect_report",
             "message": (
-                "Every entity id is unique again." if not remaining["groups"] and not unresolved else
-                f"{len(remaining['groups'])} ids are still shared and {unresolved} writes were left for review; see the report."
+                "Every entity id and edge id is unique again, and no structural edge is stored twice." if clean else
+                f"{len(remaining['groups'])} entity ids are still shared, {edges_left} edge repairs remain and "
+                f"{unresolved} writes were left for review; see the report."
             ),
         },
     }, indent=2))

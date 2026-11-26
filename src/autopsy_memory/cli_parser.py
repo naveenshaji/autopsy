@@ -484,7 +484,7 @@ def build_parser(
 
     repair_ids_parser = subparsers.add_parser(
         "repair-ids", parents=[common],
-        help="Find memory nodes that share an entity id (from concurrent writes before 0.1.36) and plan or apply their repair.",
+        help="Find memory nodes that share an entity id, edges that share an edge id (from concurrent writes before 0.1.36) and structural edges stored twice, and plan or apply their repair.",
     )
     repair_ids_parser.add_argument("--apply", action="store_true", help="Write the repair (takes a verified backup first). Without it, only print the plan.")
     repair_ids_parser.set_defaults(func=handlers.repair_ids)

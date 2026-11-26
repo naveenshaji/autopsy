@@ -19,6 +19,13 @@ The repair:
 4. gives the extra relationships kept from one group their own edge ids.
 
 Groups no rule can settle are left untouched and reported as unresolved.
+
+Edge ids were allocated the same racy way, so two separate writes could also give different edges
+the same ``edge_id``. And two importers of one session could both find a structural edge missing
+and both create it. ``load_edge_state`` and ``build_edge_plan`` cover both: every edge id but the
+earliest edge's is reassigned, and of a structural edge written more than once between the same two
+nodes only the earliest is kept. Parallel ``FACT_EDGE`` relations are left alone: each is a separate
+fact someone wrote, and restore deliberately keeps them.
 """
 
 from __future__ import annotations
@@ -264,6 +271,110 @@ def build_repair_plan(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+PARALLEL_EDGE_TYPES = {"FACT_EDGE"}
+
+
+def _edge_rows_to_relationships(rows: list[list[Any]]) -> dict[int, dict[str, Any]]:
+    return {
+        int(row[0]): {
+            "id": int(row[0]), "type": _text(row[1]), "edge_id": row[2], "relation": _text(row[3]),
+            "origin": _text(row[4]), "created_at": _text(row[5]), "from_id": int(row[6]), "to_id": int(row[7]),
+            "from": {"key": row[8]}, "to": {"key": row[9]},
+        }
+        for row in rows
+    }
+
+
+def load_edge_state(graph) -> dict[str, Any]:
+    """Relationships that share an edge id, and structural relationships repeated between two nodes."""
+    shared = [
+        sorted(int(rel_id) for rel_id in row[1])
+        for row in _rows(graph.query(
+            """
+            MATCH ()-[r]->()
+            WHERE r.edge_id IS NOT NULL
+            WITH r.edge_id AS edge_id, collect(id(r)) AS ids
+            WHERE size(ids) > 1
+            RETURN edge_id, ids
+            """
+        ))
+    ]
+    repeated = [
+        sorted(int(rel_id) for rel_id in row[0])
+        for row in _rows(graph.query(
+            """
+            MATCH (a:MemoryNode)-[r]->(b:MemoryNode)
+            WHERE NOT type(r) IN $parallel
+            WITH id(a) AS a, id(b) AS b, type(r) AS rel_type, r.relation AS relation, collect(id(r)) AS ids
+            WHERE size(ids) > 1
+            RETURN ids
+            """,
+            params={"parallel": sorted(PARALLEL_EDGE_TYPES)},
+        ))
+    ]
+    rel_ids = sorted({rel_id for ids in shared + repeated for rel_id in ids})
+    relationships: dict[int, dict[str, Any]] = {}
+    if rel_ids:
+        relationships = _edge_rows_to_relationships(_rows(graph.query(
+            """
+            MATCH (a)-[r]->(b)
+            WHERE id(r) IN $ids
+            RETURN id(r), type(r), r.edge_id, r.relation, r.origin, r.created_at, id(a), id(b), a.stable_key, b.stable_key
+            """,
+            params={"ids": rel_ids},
+        )))
+    return {"shared_edge_ids": shared, "repeated_edges": repeated, "relationships": relationships}
+
+
+def _earliest_first(rel: dict[str, Any]) -> tuple:
+    return (rel["created_at"] or "~", rel["id"])
+
+
+def build_edge_plan(state: dict[str, Any], entity_plan: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Which repeated structural edges to delete and which edges get a new edge id.
+
+    Relationships the entity-id plan already deletes or re-ids are left to it.
+    """
+    entity_plan = entity_plan or {}
+    gone = {item["relationship_id"] for item in entity_plan.get("delete", [])}
+    reidentified = {item["relationship_id"] for item in entity_plan.get("reassign_edge_ids", [])}
+    rels = state["relationships"]
+    delete: list[dict[str, Any]] = []
+    for ids in state["repeated_edges"]:
+        alive = sorted((rels[rel_id] for rel_id in ids if rel_id in rels and rel_id not in gone), key=_earliest_first)
+        for extra in alive[1:]:
+            delete.append(_describe(extra, "repeated_structural_edge"))
+            gone.add(extra["id"])
+    reassign: list[dict[str, Any]] = []
+    for ids in state["shared_edge_ids"]:
+        holders = sorted(
+            (rels[rel_id] for rel_id in ids if rel_id in rels and rel_id not in gone and rel_id not in reidentified),
+            key=_earliest_first,
+        )
+        reassign.extend(_describe(extra, "shared_edge_id") for extra in holders[1:])
+    return {
+        "shared_edge_ids": len(state["shared_edge_ids"]),
+        "repeated_structural_edges": len(state["repeated_edges"]),
+        "delete": delete,
+        "reassign_edge_ids": reassign,
+    }
+
+
+def edge_plan_needed(plan: dict[str, Any]) -> bool:
+    return bool(plan["delete"] or plan["reassign_edge_ids"])
+
+
+def summarize_edge_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "shared_edge_ids": plan["shared_edge_ids"],
+        "edge_ids_to_reassign": len(plan["reassign_edge_ids"]),
+        "repeated_structural_edges": plan["repeated_structural_edges"],
+        "repeated_edges_to_delete": len(plan["delete"]),
+        "delete_examples": plan["delete"][:EXAMPLE_LIMIT],
+        "reassign_examples": plan["reassign_edge_ids"][:EXAMPLE_LIMIT],
+    }
+
+
 def summarize_plan(plan: dict[str, Any]) -> dict[str, Any]:
     reasons: dict[str, int] = defaultdict(int)
     for item in plan["delete"]:
@@ -292,18 +403,7 @@ def apply_repair_plan(
     reserve_edge_ids: Callable[[int], int],
 ) -> dict[str, Any]:
     """Write the plan. Every write re-checks the element it targets, so a stale plan does nothing."""
-    deleted = 0
-    for item in plan["delete"]:
-        result = graph.query(
-            """
-            MATCH (a) WHERE id(a) = $from_id
-            MATCH (a)-[r]->(b) WHERE id(r) = $rel_id AND id(b) = $to_id AND type(r) = $type
-            DELETE r
-            RETURN count(r)
-            """,
-            params={"from_id": item["from_node_id"], "to_id": item["to_node_id"], "rel_id": item["relationship_id"], "type": item["type"]},
-        )
-        deleted += int((_rows(result) or [[0]])[0][0] or 0)
+    deleted = _delete_relationships(graph, plan["delete"])
     renumbered: list[dict[str, Any]] = []
     if plan["renumber"]:
         first = reserve_entity_ids(len(plan["renumber"]))
@@ -323,18 +423,49 @@ def apply_repair_plan(
                     params={"node_id": item["node_id"], "new": new_id},
                 )
                 renumbered.append({**item, "new_entity_id": new_id})
-    reassigned = 0
-    if plan["reassign_edge_ids"]:
-        first = reserve_edge_ids(len(plan["reassign_edge_ids"]))
-        for offset, item in enumerate(plan["reassign_edge_ids"]):
-            result = graph.query(
-                """
-                MATCH (a) WHERE id(a) = $from_id
-                MATCH (a)-[r]->() WHERE id(r) = $rel_id
-                SET r.edge_id = $new
-                RETURN count(r)
-                """,
-                params={"from_id": item["from_node_id"], "rel_id": item["relationship_id"], "new": first + offset},
-            )
-            reassigned += int((_rows(result) or [[0]])[0][0] or 0)
+    reassigned = _reassign_edge_ids(graph, plan["reassign_edge_ids"], reserve_edge_ids)
     return {"deleted_relationships": deleted, "renumbered_nodes": len(renumbered), "reassigned_edge_ids": reassigned, "renumbered": renumbered}
+
+
+def apply_edge_plan(graph, plan: dict[str, Any], *, reserve_edge_ids: Callable[[int], int]) -> dict[str, Any]:
+    """Delete repeated structural edges, then give the edges that still share an id new ones."""
+    return {
+        "deleted_repeated_edges": _delete_relationships(graph, plan["delete"]),
+        "reassigned_shared_edge_ids": _reassign_edge_ids(graph, plan["reassign_edge_ids"], reserve_edge_ids),
+    }
+
+
+def _delete_relationships(graph, items: list[dict[str, Any]]) -> int:
+    deleted = 0
+    for item in items:
+        result = graph.query(
+            """
+            MATCH (a) WHERE id(a) = $from_id
+            MATCH (a)-[r]->(b) WHERE id(r) = $rel_id AND id(b) = $to_id AND type(r) = $type
+            DELETE r
+            RETURN count(r)
+            """,
+            params={"from_id": item["from_node_id"], "to_id": item["to_node_id"], "rel_id": item["relationship_id"], "type": item["type"]},
+        )
+        deleted += int((_rows(result) or [[0]])[0][0] or 0)
+    return deleted
+
+
+def _reassign_edge_ids(graph, items: list[dict[str, Any]], reserve_edge_ids: Callable[[int], int]) -> int:
+    if not items:
+        return 0
+    reassigned = 0
+    first = reserve_edge_ids(len(items))
+    for offset, item in enumerate(items):
+        result = graph.query(
+            """
+            MATCH (a) WHERE id(a) = $from_id
+            MATCH (a)-[r]->(b) WHERE id(r) = $rel_id AND id(b) = $to_id AND type(r) = $type AND r.edge_id = $old
+            SET r.edge_id = $new
+            RETURN count(r)
+            """,
+            params={"from_id": item["from_node_id"], "to_id": item["to_node_id"], "rel_id": item["relationship_id"],
+                    "type": item["type"], "old": item["edge_id"], "new": first + offset},
+        )
+        reassigned += int((_rows(result) or [[0]])[0][0] or 0)
+    return reassigned

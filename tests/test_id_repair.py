@@ -183,8 +183,9 @@ class RepairRoundTripTests(unittest.TestCase):
             graph.query("MATCH (n:MemoryNode {stable_key: $key}) SET n += $properties", params={"key": key, "properties": properties})
 
     def edges(self, graph, key, rel_type):
+        # Returning id(r) keeps parallel edges apart; without it Falkor folds them into one row.
         return sorted(row[0] for row in graph.query(
-            f"MATCH (a:MemoryNode {{stable_key: $key}})-[r:{rel_type}]->(b) RETURN b.stable_key", params={"key": key}).result_set)
+            f"MATCH (a:MemoryNode {{stable_key: $key}})-[r:{rel_type}]->(b) RETURN b.stable_key, id(r)", params={"key": key}).result_set)
 
     def test_repair_keeps_intended_edges_renumbers_and_is_idempotent(self):
         graph = self.client.select_graph("collision")
@@ -237,6 +238,80 @@ class RepairRoundTripTests(unittest.TestCase):
         self.assertEqual(mismatched, 0)
         again = id_repair.build_repair_plan(id_repair.load_duplicate_state(graph))
         self.assertEqual((again["duplicate_entity_ids"], again["delete"], again["renumber"]), (0, [], []))
+        # The fan-out repair already gave kept copies their own edge ids: nothing is left for the edge pass.
+        edges = id_repair.build_edge_plan(id_repair.load_edge_state(graph))
+        self.assertEqual((edges["delete"], edges["reassign_edge_ids"]), ([], []))
+
+    def edge_ids(self, graph):
+        return [row[0] for row in graph.query("MATCH ()-[r]->() RETURN r.edge_id").result_set]
+
+    def test_shared_edge_ids_and_repeated_structural_edges(self):
+        graph = self.client.select_graph("edges")
+        for entity_id, key, kind in ((1, "claude-session:s1", "timeline"), (2, "claude-session:s1#e1", "timeline_event"),
+                                     (3, "claude-session:s1#e1/p1", "passage"), (4, "graph-note:a", "decision"),
+                                     (5, "graph-note:b", "observation"), (6, "/tmp/repo", "repository")):
+            self.add(graph, entity_id, key, kind)
+
+        def edge(source, target, label, edge_id, created, **extra):
+            graph.query(
+                f"MATCH (a:MemoryNode {{entity_id: $a}}), (b:MemoryNode {{entity_id: $b}}) "
+                f"CREATE (a)-[r:{label}]->(b) SET r += $properties",
+                params={"a": source, "b": target, "properties": {
+                    "edge_id": edge_id, "relation": label.lower(), "created_at": created, "updated_at": created,
+                    "from_entity_id": source, "to_entity_id": target, "origin": "claude_code_import", **extra}},
+            )
+
+        # Two separate writes took edge id 7 for different edges.
+        edge(2, 1, "PART_OF", 7, "2026-11-26T00:02:00Z")
+        edge(1, 2, "CAPTURES", 7, "2026-11-26T00:03:00Z")
+        # Two importers both found this edge missing: written twice, with the same and with different ids.
+        edge(3, 2, "PART_OF", 9, "2026-11-26T00:04:08Z")
+        edge(3, 2, "PART_OF", 9, "2026-11-26T00:02:49Z")
+        edge(2, 6, "ABOUT", 10, "2026-11-26T00:02:49Z")
+        edge(2, 6, "ABOUT", 11, "2026-11-26T00:04:08Z")
+        # Parallel facts are separate writes someone made: kept.
+        for edge_id in (12, 13):
+            edge(4, 5, "FACT_EDGE", edge_id, "2026-09-01T00:00:00Z", relation="refines", fact_text="graph-note:a refines graph-note:b")
+
+        plan = id_repair.build_edge_plan(id_repair.load_edge_state(graph))
+        self.assertEqual((plan["shared_edge_ids"], plan["repeated_structural_edges"]), (2, 2))
+        self.assertEqual(sorted(item["created_at"] for item in plan["delete"]), ["2026-11-26T00:04:08Z"] * 2)
+        self.assertEqual([(item["type"], item["edge_id"]) for item in plan["reassign_edge_ids"]], [("CAPTURES", 7)])
+
+        result = id_repair.apply_edge_plan(graph, plan, reserve_edge_ids=lambda count: cli.next_edge_id(graph, count=count))
+        self.assertEqual(result, {"deleted_repeated_edges": 2, "reassigned_shared_edge_ids": 1})
+        self.assertEqual(self.edges(graph, "claude-session:s1#e1/p1", "PART_OF"), ["claude-session:s1#e1"])
+        self.assertEqual(self.edges(graph, "claude-session:s1#e1", "ABOUT"), ["/tmp/repo"])
+        self.assertEqual(self.edges(graph, "claude-session:s1#e1", "PART_OF"), ["claude-session:s1"])
+        self.assertEqual(self.edges(graph, "claude-session:s1", "CAPTURES"), ["claude-session:s1#e1"])
+        self.assertEqual(self.edges(graph, "graph-note:a", "FACT_EDGE"), ["graph-note:b", "graph-note:b"])
+        kept = graph.query("MATCH (:MemoryNode {stable_key: 'claude-session:s1#e1/p1'})-[r:PART_OF]->() RETURN r.created_at").result_set
+        self.assertEqual(kept, [["2026-11-26T00:02:49Z"]])
+        ids = self.edge_ids(graph)
+        self.assertEqual(len(ids), len(set(ids)))
+        again = id_repair.build_edge_plan(id_repair.load_edge_state(graph))
+        self.assertEqual((again["delete"], again["reassign_edge_ids"]), ([], []))
+        self.assertEqual(id_repair.apply_edge_plan(graph, plan, reserve_edge_ids=lambda count: cli.next_edge_id(graph, count=count)),
+                         {"deleted_repeated_edges": 0, "reassigned_shared_edge_ids": 0})  # a stale plan does nothing
+
+    def test_structural_edge_written_once_even_when_both_importers_miss_it(self):
+        graph = self.client.select_graph("merge")
+        self.add(graph, 1, "claude-session:s9", "timeline")
+        self.add(graph, 2, "claude-session:s9#e1", "timeline_event")
+        # Both importers passed the existence check before either wrote: each goes on to the write.
+        for timestamp in ("2026-11-26T00:02:49Z", "2026-11-26T00:04:08Z"):
+            cli.merge_structural_edge(graph, from_stable_key="claude-session:s9#e1", to_stable_key="claude-session:s9",
+                                      relation="part_of", timestamp=timestamp, origin="claude_code_import")
+        cli.upsert_structural_edge(graph, from_stable_key="claude-session:s9#e1", to_stable_key="claude-session:s9",
+                                   relation="part_of", timestamp="2026-11-26T00:05:00Z", origin="claude_code_import")
+        rows = graph.query(
+            "MATCH (a:MemoryNode)-[r:PART_OF]->(b:MemoryNode) "
+            "RETURN r.relation, r.created_at, r.updated_at, r.from_entity_id, r.to_entity_id, r.edge_id IS NOT NULL"
+        ).result_set
+        self.assertEqual(rows, [["part_of", "2026-11-26T00:02:49Z", "2026-11-26T00:05:00Z", 2, 1, True]])
+        cli.merge_structural_edge(graph, from_stable_key="claude-session:s9#e1", to_stable_key="missing",
+                                  relation="part_of", timestamp="2026-11-26T00:06:00Z", origin="claude_code_import")
+        self.assertEqual(self.edges(graph, "claude-session:s9#e1", "PART_OF"), ["claude-session:s9"])
 
 
 if __name__ == "__main__":
