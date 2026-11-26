@@ -254,7 +254,14 @@ class AutopsyMemory < Formula
     formula_opt_bin("python@3.12")/"python3.12"
   end
 
-  def validate_autopsy_python!
+  def autopsy_resource_target
+    wheel = Dir["*.whl"].first
+    return Pathname.pwd/wheel if wheel
+
+    Pathname.pwd
+  end
+
+  def install
     odie "python@3.12 executable was not found at #{autopsy_python}" unless autopsy_python.exist?
 
     version = Utils.safe_popen_read(
@@ -264,30 +271,16 @@ class AutopsyMemory < Formula
     ).strip
     message = "Autopsy requires Homebrew python@3.12, but #{autopsy_python} reports Python #{version}"
     odie message if version != "3.12"
-  end
 
-  def autopsy_pip_install(target)
-    system autopsy_python, "-m", "pip",
-           "--python=#{libexec}/bin/python", "install",
-           "--verbose", "--no-deps", "--ignore-installed", "--no-compile",
-           target
-  end
-
-  def autopsy_resource_target
-    wheel = Dir["*.whl"].first
-    return Pathname.pwd/wheel if wheel
-
-    Pathname.pwd
-  end
-
-  def install
-    validate_autopsy_python!
     venv = virtualenv_create(libexec, autopsy_python, system_site_packages: true, without_pip: true)
     resources.each do |resource|
       next if resource.name == "falkordb-macos-arm64v8"
 
       resource.stage do
-        autopsy_pip_install autopsy_resource_target
+        system autopsy_python, "-m", "pip",
+               "--python=#{libexec}/bin/python", "install",
+               "--verbose", "--no-deps", "--ignore-installed", "--no-compile",
+               autopsy_resource_target
       end
     end
     venv.pip_install_and_link buildpath
