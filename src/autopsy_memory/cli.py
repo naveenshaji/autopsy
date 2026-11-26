@@ -32,6 +32,7 @@ from . import backups as backup_storage
 from . import claude_code as claude_code_sessions
 from . import onnx_models
 from . import context_state
+from . import id_repair
 from .doctor import import_check, installed_autopsy_command_check, python_version_check
 from .init import build_init_payload, cmd_init, instruction_targets, smoke_tests, target_status
 from .metadata import PACKAGE_NAME, cmd_instructions, cmd_version, package_version
@@ -2159,16 +2160,32 @@ def set_memory_database_guard_graph_generation(
     )
 
 
+MEMORY_GUARD_SAVE_WAIT_SECONDS = 60.0
+
+
 def persist_memory_database_guard_graph(graph) -> None:
     raw_graph = memory_guard_raw_graph(graph)
     client = getattr(raw_graph, "client", None)
     save = getattr(client, "save", None)
-    if callable(save):
-        save()
-        return
     execute_command = getattr(client, "execute_command", None)
-    if callable(execute_command):
-        execute_command("SAVE")
+    if callable(save):
+        run = save
+    elif callable(execute_command):
+        def run():
+            return execute_command("SAVE")
+    else:
+        return
+    # The server refuses SAVE while its own background save runs (it starts one after a burst of
+    # writes). The write is already applied, so wait for that save and then record this one.
+    deadline = time.monotonic() + MEMORY_GUARD_SAVE_WAIT_SECONDS
+    while True:
+        try:
+            run()
+            return
+        except Exception as exc:
+            if "background save already in progress" not in str(exc).lower() or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.2)
 
 
 def memory_database_guard_state(
@@ -5079,9 +5096,64 @@ def graph_memory_node_count(graph) -> int:
     return int(scalar_query(graph, "MATCH (node:MemoryNode) RETURN count(node)") or 0)
 
 
-def next_entity_id(graph) -> int:
+ENTITY_ID_COUNTER_KEY_PREFIX = "autopsy:entity-id-counter:"
+EDGE_ID_COUNTER_KEY_PREFIX = "autopsy:edge-id-counter:"
+# Atomic in the database server, so every process and thread sharing the graph gets distinct
+# ids: raise the counter to the graph's current maximum (writes made without the counter, e.g. by
+# older Autopsy versions, stay below it), then take the next `count` ids.
+_ID_COUNTER_SCRIPT = """
+local floor = tonumber(ARGV[1])
+local current = tonumber(redis.call('GET', KEYS[1]) or '0')
+if current < floor then
+  redis.call('SET', KEYS[1], floor)
+end
+return redis.call('INCRBY', KEYS[1], tonumber(ARGV[2]))
+"""
+
+
+def graph_id_counter_key(prefix: str, graph) -> str:
+    return f"{prefix}{getattr(graph, 'name', '') or 'graph'}"
+
+
+def reserve_graph_ids(graph, *, floor: int, count: int = 1, prefix: str = ENTITY_ID_COUNTER_KEY_PREFIX) -> int:
+    """Reserve ``count`` consecutive ids above ``floor`` and return the first.
+
+    Ids used to be ``max + 1`` read and written in separate queries, so concurrent writers (an
+    import next to a restore, two worker threads) could take the same id; edges are created by
+    matching ids, so such a collision also fans edges out to both nodes. Reservation goes through
+    a counter in the database server instead. Graph objects without a server connection (test
+    doubles) keep the old ``floor + 1``.
+    """
+    count = max(1, int(count))
+    execute = getattr(graph, "execute_command", None)
+    if callable(execute):
+        try:
+            last = execute("EVAL", _ID_COUNTER_SCRIPT, 1, graph_id_counter_key(prefix, graph), int(floor), count)
+        except Exception:
+            last = None
+        reserved = _counter_reply_int(last)
+        if reserved is not None:
+            return reserved - count + 1
+    return int(floor) + 1
+
+
+def _counter_reply_int(value: Any) -> int | None:
+    """An integer reply from the server; anything else (errors, test doubles) is None."""
+    if isinstance(value, bytes):
+        value = value.decode("ascii", "replace")
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
+def next_entity_id(graph, count: int = 1) -> int:
+    """First of ``count`` newly reserved entity ids."""
     current = scalar_query(graph, "MATCH (node:MemoryNode) RETURN coalesce(max(node.entity_id), 0)")
-    return int(current or 0) + 1
+    return reserve_graph_ids(graph, floor=int(current or 0), count=count, prefix=ENTITY_ID_COUNTER_KEY_PREFIX)
 
 
 def episode_stable_key(graph, episode_id: int) -> str:
@@ -5100,9 +5172,10 @@ def episode_stable_key(graph, episode_id: int) -> str:
     return f"{key}-{digest}"
 
 
-def next_edge_id(graph) -> int:
+def next_edge_id(graph, count: int = 1) -> int:
+    """First of ``count`` newly reserved edge ids."""
     current = scalar_query(graph, "MATCH ()-[edge]->() RETURN coalesce(max(edge.edge_id), 0)")
-    return int(current or 0) + 1
+    return reserve_graph_ids(graph, floor=int(current or 0), count=count, prefix=EDGE_ID_COUNTER_KEY_PREFIX)
 
 
 def lookup_node_by_stable_key(graph, stable_key: str) -> dict[str, Any] | None:
@@ -7264,7 +7337,7 @@ def create_graph_note_payload(
 ) -> dict[str, Any]:
     created_at = utc_now_iso()
     stable_key = f"graph-note:{hashlib.sha1(f'{title}|{created_at}|{time.time_ns()}'.encode('utf-8')).hexdigest()[:32]}"
-    note_id = next_entity_id(graph)
+    note_id = next_entity_id(graph, count=2)  # the note and its source episode
     episode_id = note_id + 1
     episode_key = episode_stable_key(graph, episode_id)
     summary = summary_snippet(content)
@@ -20255,6 +20328,84 @@ def cmd_install(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def cmd_repair_ids(args: argparse.Namespace) -> None:
+    """Plan (default) or apply the repair of memory nodes that share an entity id."""
+    _tool, workspace, _config, graph = open_workspace_graph(args)
+    if not getattr(args, "apply", False):
+        plan = id_repair.build_repair_plan(id_repair.load_duplicate_state(graph))
+        summary = id_repair.summarize_plan(plan)
+        needed = bool(plan["renumber"] or plan["delete"] or plan["reassign_edge_ids"])
+        print(json.dumps({
+            "mode": "plan",
+            "workspace": workspace,
+            "plan": summary,
+            "workflow": {
+                "complete": not needed,
+                "next_step": "apply" if needed else "done",
+                "message": (
+                    "Nothing shares an entity id." if not needed else
+                    "Review the plan, then run autopsy repair-ids --apply (it takes a verified backup first)."
+                ),
+            },
+        }, indent=2))
+        return
+    raw = getattr(graph, "_autopsy_guard_raw_graph", graph)
+    lite_path = getattr(graph, "_autopsy_guard_lite_path", None)
+    graph_name = str(getattr(graph, "_autopsy_guard_graph_name", "") or getattr(graph, "name", ""))
+    guarded = bool(lite_path) and memory_database_guard_enabled()
+    # Holding the guard lock makes every other writer wait, so the plan stays current while it is
+    # written; all reads and writes inside go to the raw graph (the lock is not reentrant).
+    lock = memory_database_guard_lock(lite_path) if guarded else contextlib.nullcontext()
+    with lock:
+        if guarded:
+            assert_memory_database_guard_current(raw, lite_path, graph_name=graph_name, lock_held=True)
+        plan = id_repair.build_repair_plan(id_repair.load_duplicate_state(raw))
+        backup: dict[str, Any] = {"status": "skipped", "reason": "nothing_to_repair"}
+        applied: dict[str, Any] = {"deleted_relationships": 0, "renumbered_nodes": 0, "reassigned_edge_ids": 0, "renumbered": []}
+        if plan["renumber"] or plan["delete"] or plan["reassign_edge_ids"]:
+            backup = backup_storage.write_backup_snapshot(
+                export_memory_payload(raw, workspace=workspace, include_operational=True),
+                app_support=APP_SUPPORT_DIR_DEFAULT, output=None,
+            )
+
+            def reserve_entity_ids(count: int) -> int:
+                current = int(scalar_query(raw, "MATCH (node:MemoryNode) RETURN coalesce(max(node.entity_id), 0)") or 0)
+                return reserve_graph_ids(raw, floor=current + id_repair.RENUMBER_MARGIN, count=count, prefix=ENTITY_ID_COUNTER_KEY_PREFIX)
+
+            applied = id_repair.apply_repair_plan(
+                raw, plan,
+                reserve_entity_ids=reserve_entity_ids,
+                reserve_edge_ids=lambda count: next_edge_id(raw, count=count),
+            )
+            if guarded:
+                advance_memory_database_guard_generation(raw, lite_path, graph_name=graph_name, lock_held=True)
+        remaining = id_repair.load_duplicate_state(raw)
+    invalidate_graph_caches(graph)
+    report_path = None
+    if plan["renumber"] or plan["delete"]:
+        report_path = APP_SUPPORT_DIR_DEFAULT / "Diagnostics" / f"id-repair-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.json"
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps({"graph_name": graph_name, "plan": plan, "applied": applied, "backup": backup}, indent=2, default=str))
+    unresolved = len(plan["unresolved"])
+    print(json.dumps({
+        "mode": "apply",
+        "workspace": workspace,
+        "plan": id_repair.summarize_plan(plan),
+        "backup": {key: backup.get(key) for key in ("status", "written", "verified", "sha256") if key in backup},
+        "applied": {key: value for key, value in applied.items() if key != "renumbered"},
+        "remaining_duplicate_entity_ids": len(remaining["groups"]),
+        "report": str(report_path) if report_path else None,
+        "workflow": {
+            "complete": not remaining["groups"] and not unresolved,
+            "next_step": "done" if not remaining["groups"] and not unresolved else "inspect_report",
+            "message": (
+                "Every entity id is unique again." if not remaining["groups"] and not unresolved else
+                f"{len(remaining['groups'])} ids are still shared and {unresolved} writes were left for review; see the report."
+            ),
+        },
+    }, indent=2))
+
+
 def cmd_model_warmup(args: argparse.Namespace) -> None:
     payload = run_model_warmup(Path(args.root).expanduser() if getattr(args, "root", None) else None)
     print(json.dumps(payload, indent=2))
@@ -20405,6 +20556,7 @@ def build_parser() -> argparse.ArgumentParser:
             feedback=cmd_feedback,
             import_session=cmd_import_session,
             remember=cmd_remember,
+            repair_ids=cmd_repair_ids,
             consolidate_session=cmd_consolidate_session,
             observe=cmd_observe,
             item=cmd_item,

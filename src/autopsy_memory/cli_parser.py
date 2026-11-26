@@ -47,6 +47,7 @@ class CommandHandlers:
     feedback: CommandHandler
     import_session: CommandHandler
     remember: CommandHandler
+    repair_ids: CommandHandler
     consolidate_session: CommandHandler
     observe: CommandHandler
     item: CommandHandler
@@ -480,6 +481,13 @@ def build_parser(
     remember_parser.add_argument("--exclude-session", default="", help="Skip one session's own memories (its stable key).")
     remember_parser.add_argument("--min-similarity", type=float, default=None, help="Similarity floor (default 0.55).")
     remember_parser.set_defaults(func=handlers.remember)
+
+    repair_ids_parser = subparsers.add_parser(
+        "repair-ids", parents=[common],
+        help="Find memory nodes that share an entity id (from concurrent writes before 0.1.36) and plan or apply their repair.",
+    )
+    repair_ids_parser.add_argument("--apply", action="store_true", help="Write the repair (takes a verified backup first). Without it, only print the plan.")
+    repair_ids_parser.set_defaults(func=handlers.repair_ids)
 
     consolidate_session_parser = subparsers.add_parser("consolidate-session", parents=[common], help="Draft or write semantic memory from an imported session timeline.")
     consolidate_session_parser.add_argument("stable_key", help="Imported session stable key, for example session-import:<sha>.")
